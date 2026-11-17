@@ -191,7 +191,7 @@ export const MESSAGES: Record<Locale, Messages> = {
       image: "图片",
     },
     topbar: {
-      searchPlaceholder: "按编号、名称或用途搜索可用工具…",
+      searchPlaceholder: "搜索可用工具…",
       searchShortcutHint: "Ctrl+K",
       runningTasksCount: (count) => `${count} 个任务运行中`,
       themeToggleLabel: "切换明暗主题",
@@ -378,7 +378,7 @@ export const MESSAGES: Record<Locale, Messages> = {
       image: "Images",
     },
     topbar: {
-      searchPlaceholder: "Search available tools by ID, name, or keyword…",
+      searchPlaceholder: "Search tools…",
       searchShortcutHint: "Ctrl+K",
       runningTasksCount: (count) => `${count} task${count === 1 ? "" : "s"} running`,
       themeToggleLabel: "Switch light/dark theme",

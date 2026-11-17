@@ -1,20 +1,38 @@
 # WinKit 验证记录 (VERIFICATION.md)
 
-本文档按实际执行情况记录阶段 0 与阶段 1 的自动化测试、构建检查、真实桌面运行与安装包验证结果（随里程碑持续更新）。
+本文档如实记录阶段 0–1 实际执行过的本地命令检查、JSDOM 组件测试、真实 Windows 11 Tauri 桌面窗口验证、NSIS 安装包核验以及尚未自动覆盖的手工验收项。
 
-## 阶段 0 环境与基线核验
+## 1. 测试运行环境
 
-- 操作系统：Windows 11 x64（PowerShell `5.1.26100.9818`）
-- 工具链：
-  - Git `2.52.0.windows.1`
-  - Node.js `v24.11.1` / npm `11.6.2`
-  - Rust `rustc 1.98.1` / `cargo 1.98.1` (`stable-x86_64-pc-windows-msvc`)，`rustfmt 1.9.0`，`clippy 0.1.98`
-  - Visual Studio 2022 BuildTools（含 VC x86/x64 工具集）+ Windows SDK `10.0.22621.0` / `10.0.26100.0`
-  - Microsoft Edge WebView2 Runtime `157.0.4341.46`
-- 本地规则加载验证：`D:\Projects\WinKit\AGENTS.md` 已通过 `.git/info/exclude` 排除版本控制，并经实测确认可被当前安装环境自动识别注入 `<user_rules>`。
-- 工程构建与桌面启动记录：见下表（随阶段 0 / 阶段 1 验证更新）。
+- **操作系统**：Windows 11 x64（系统显示缩放实测：`150%` / `144 DPI`）
+- **终端**：Windows PowerShell `5.1.26100.9818`
+- **工具链**：Git `2.52.0.windows.1`、Node.js `v24.11.1`、npm `11.6.2`、`rustc 1.98.1` (`x86_64-pc-windows-msvc`)、VS 2022 BuildTools、Windows SDK `10.0.26100.0`、WebView2 Runtime `157.0.4341.46`
 
-| 类别       | 检查项 / 命令                                            | 结果 | 备注                                              |
-| :--------- | :------------------------------------------------------- | :--- | :------------------------------------------------ |
-| 本地工具链 | `rustc --target x86_64-pc-windows-msvc` 最小编译链接测试 | 通过 | 输出 `msvc-x64-ok`                                |
-| 规则加载   | `AGENTS.md` 自动发现与 `.git/info/exclude` 排除检查      | 通过 | `git status --ignored` 确认忽略，会话实测自动加载 |
+## 2. 分层验证汇总表
+
+| 验证层级                  | 执行命令或实际操作                                                                                                                                                                                                                                                                        | 结果                     | 说明与证据                                                                                                                                                                                       |
+| :------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **本地静态检查**          | `npm run format:check`                                                                                                                                                                                                                                                                    | 通过                     | Prettier 校验全部源码与文档通过                                                                                                                                                                  |
+| **本地静态检查**          | `npm run typecheck`                                                                                                                                                                                                                                                                       | 通过                     | TypeScript `strict` + `noUncheckedIndexedAccess` 零错误                                                                                                                                          |
+| **本地静态检查**          | `npm run lint`                                                                                                                                                                                                                                                                            | 通过                     | ESLint 10 + `typescript-eslint`（含 `no-eval`）零错误零警告                                                                                                                                      |
+| **本地静态检查**          | `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`                                                                                                                                                                                                                         | 通过                     | Rust 代码格式一致                                                                                                                                                                                |
+| **本地静态检查**          | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`                                                                                                                                                                                                          | 通过                     | Clippy 零警告通过                                                                                                                                                                                |
+| **本地单元测试（Rust）**  | `cargo test --manifest-path src-tauri/Cargo.toml`                                                                                                                                                                                                                                         | 通过（9/9）              | 覆盖中文/空格路径、防覆盖源文件、同名防静默覆盖、空输入与 NIST 1MB 多分块 SHA-256 向量、中途流式取消、横图/竖图/透明 PNG 合成重解码与超限拦截                                                    |
+| **浏览器/JSDOM 测试**     | `npm test`（Vitest + Testing Library）                                                                                                                                                                                                                                                    | 通过（8 文件 / 19 用例） | 覆盖壳层搜索/收藏/最近使用/深浅色与中英文切换、会话态不落盘、D01 大整数无损与行列定位、D03 摘要归一化与取消清零、I03 比例换算与导出错误提示（注：归类为 JSDOM 模拟环境测试，不替代原生窗口验证） |
+| **本地前端与桌面构建**    | `npm run build` 及 `npm run tauri build -- --bundles nsis`                                                                                                                                                                                                                                | 通过                     | Release 二进制与 NSIS 安装包构建成功                                                                                                                                                             |
+| **真实 Windows 桌面窗口** | 启动 `src-tauri\target\release\winkit.exe`，通过 Win32 + Windows UI Automation 实测 `1200×800` 与 `1000×700`（系统 150% DPI 下物理尺寸 `1804×1247` 与 `1504×1097`）、浅色/深色主题切换、`zh-CN`/`en-US` 切换                                                                              | 通过                     | 已采集真实窗口 `PrintWindow` 截图（含原生标题栏与最大化/最小化/关闭按钮）                                                                                                                        |
+| **真实 Windows 桌面窗口** | 真实窗口下通过原生 Win32 `#32770` 打开/保存文件对话框执行 `D01`（读取 `.json`、无损保留 `9007199254740993`、写入系统剪贴板）、`D03`（本地文件流式 SHA-256 并与 `Get-FileHash` 比对一致）、`I03`（导入合成测试 PNG、切换 `#DDE5F0` 与 `16:9` 实时预览、导出 `988×556` PNG 并重新解码校验） | 通过                     | 剪贴板实测一致、SHA-256 完全匹配、导出 PNG 物理像素尺寸与预览公式完全一致                                                                                                                        |
+| **NSIS 安装与安装后启动** | 执行 `WinKit_0.1.0_x64-setup.exe /S` 完成 `currentUser` 安装至 `%LOCALAPPDATA%\WinKit`，随后直接启动安装目录内的 `winkit.exe`                                                                                                                                                             | 通过                     | 注册表卸载项（Publisher=`Livio`，Version=`0.1.0`）写入正常，安装后进程正常创建原生窗口 `HWND`                                                                                                    |
+
+## 3. 本地安装包产物记录（未纳入 Git 版本库）
+
+- **安装包路径**：`D:\Projects\WinKit\src-tauri\target\release\bundle\nsis\WinKit_0.1.0_x64-setup.exe`
+- **文件大小**：`2,364,695` 字节（`2.26 MiB`）
+- **SHA-256**：`9a2d6ea254dd177e13ee7edf09bd52568f27c7363156ab29e8da408584d3f0bf`
+- **数字签名状态**：`NotSigned`（未配置 Windows Authenticode 代码签名证书；系统首次运行安装器可能显示 SmartScreen 未知发布者提示，未关闭系统防护亦未伪造证书）
+
+## 4. 未自动覆盖、留待用户手工检查的项目
+
+1. **资源管理器鼠标物理拖放**：后端已接线 `onDragDropEvent` 真实路径监听，但未劫持宿主物理鼠标从资源管理器跨窗口拖拽，建议手工拖入一个 `.json` 或 `.png` 文件确认手感。
+2. **超大文件运行中点击窗口右上角 `×` 拦截弹窗**：代码已接线 `onCloseRequested` + `get_running_task_count` 确认框，建议用数 GB 大文件计算 SHA-256 期间手点一次关闭按钮确认提示交互。
+3. **100% / 125% 缩放与交互式卸载/重装向导**：当前宿主实测环境为 `150%` 系统缩放；已验证安装与安装后启动，未自动执行卸载程序（`%LOCALAPPDATA%\WinKit\uninstall.exe`）与覆盖重装向导，留待验收确认。
