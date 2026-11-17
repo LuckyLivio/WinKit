@@ -43,6 +43,33 @@ export interface FileHashResult {
   digestHex: string;
 }
 
+export interface SourceImageInspection {
+  path: string;
+  fileName: string;
+  width: number;
+  height: number;
+  hasAlpha: boolean;
+  previewDataUrl: string;
+}
+
+export interface BeautifyExportParams {
+  inputPath: string;
+  outputPath: string;
+  backgroundHex: string;
+  padding: number;
+  cornerRadius: number;
+  shadowStrength: number;
+  aspectRatio: "original" | "1:1" | "16:9";
+  overwrite: boolean;
+}
+
+export interface BeautifyExportResult {
+  outputPath: string;
+  outputWidth: number;
+  outputHeight: number;
+  byteLength: number;
+}
+
 export interface TaskProgressPayload {
   taskId: string;
   toolId: string;
@@ -201,6 +228,16 @@ export async function computeTextSha256(text: string): Promise<TextHashResult> {
 
 export async function computeFileSha256(taskId: string, path: string): Promise<FileHashResult> {
   return invoke<FileHashResult>("hash_file_sha256", { taskId, path });
+}
+
+export async function inspectBeautifierSourceImage(path: string): Promise<SourceImageInspection> {
+  return invoke<SourceImageInspection>("inspect_beautifier_image", { path });
+}
+
+export async function exportBeautifiedImage(
+  params: BeautifyExportParams,
+): Promise<BeautifyExportResult> {
+  return invoke<BeautifyExportResult>("export_beautified_png", { params });
 }
 
 export async function subscribeTaskProgress(

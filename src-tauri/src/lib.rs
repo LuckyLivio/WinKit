@@ -1,8 +1,13 @@
+pub mod beautifier;
 pub mod error;
 pub mod fs_guard;
 pub mod hasher;
 pub mod tasks;
 
+use crate::beautifier::{
+    export_beautified_png_sync, inspect_source_image, BeautifyExportParams, BeautifyExportResult,
+    SourceImageInspection,
+};
 use crate::error::AppError;
 use crate::fs_guard::{
     read_utf8_text_file_bounded, suggest_safe_output_path, validate_user_path,
@@ -93,6 +98,22 @@ async fn hash_file_sha256<R: Runtime>(
 }
 
 #[tauri::command]
+async fn inspect_beautifier_image(path: String) -> Result<SourceImageInspection, AppError> {
+    tauri::async_runtime::spawn_blocking(move || inspect_source_image(&path))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background image inspector failed."))?
+}
+
+#[tauri::command]
+async fn export_beautified_png(
+    params: BeautifyExportParams,
+) -> Result<BeautifyExportResult, AppError> {
+    tauri::async_runtime::spawn_blocking(move || export_beautified_png_sync(&params))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background PNG exporter failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -114,6 +135,8 @@ pub fn run() {
             suggest_output_path,
             hash_text_sha256,
             hash_file_sha256,
+            inspect_beautifier_image,
+            export_beautified_png,
             cancel_task,
             get_running_task_count
         ])

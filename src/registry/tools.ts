@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import type { Locale } from "../i18n/messages";
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
+import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
 
 export type ToolCategory = "developer" | "image";
 export type ToolImplementationStatus = "full" | "partial";
@@ -78,6 +79,37 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "shield-check",
     implementationStatus: "partial",
     component: HashGeneratorWorkspace,
+  },
+  {
+    id: "I03",
+    category: "image",
+    name: {
+      "zh-CN": "截图美化",
+      "en-US": "Beautify Screenshot",
+    },
+    summary: {
+      "zh-CN":
+        "为 PNG/JPEG 图片添加纯色背景、留白、圆角与柔和投影，按原始/1:1/16:9 导出原分辨率 PNG",
+      "en-US":
+        "Frame PNG/JPEG screenshots on solid backgrounds with padding, rounded corners, and soft drop shadows at full native resolution",
+    },
+    keywords: [
+      "screenshot",
+      "beautify",
+      "frame",
+      "mockup",
+      "shadow",
+      "rounded",
+      "png",
+      "截图",
+      "美化",
+      "装裱",
+      "圆角",
+      "阴影",
+    ],
+    icon: "frame",
+    implementationStatus: "partial",
+    component: ScreenshotBeautifierWorkspace,
   },
 ];
 
