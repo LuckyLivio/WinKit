@@ -28,6 +28,21 @@ export interface SavedFileInfo {
   byteLength: number;
 }
 
+export interface TextHashResult {
+  algorithm: string;
+  byteLength: number;
+  digestHex: string;
+}
+
+export interface FileHashResult {
+  taskId: string;
+  algorithm: string;
+  path: string;
+  fileName: string;
+  byteLength: number;
+  digestHex: string;
+}
+
 export interface TaskProgressPayload {
   taskId: string;
   toolId: string;
@@ -166,6 +181,26 @@ export async function cancelBackendTask(taskId: string): Promise<boolean> {
     return false;
   }
   return invoke<boolean>("cancel_task", { taskId });
+}
+
+export async function computeTextSha256(text: string): Promise<TextHashResult> {
+  if (!isTauriDesktop()) {
+    const bytes = new TextEncoder().encode(text);
+    const buf = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+    const digestHex = Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    return {
+      algorithm: "SHA-256",
+      byteLength: bytes.byteLength,
+      digestHex,
+    };
+  }
+  return invoke<TextHashResult>("hash_text_sha256", { text });
+}
+
+export async function computeFileSha256(taskId: string, path: string): Promise<FileHashResult> {
+  return invoke<FileHashResult>("hash_file_sha256", { taskId, path });
 }
 
 export async function subscribeTaskProgress(

@@ -2,7 +2,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
 
 pub const TASK_PROGRESS_EVENT: &str = "winkit://task-progress";
 
@@ -85,12 +84,6 @@ impl TaskTokenGuard {
 impl Drop for TaskTokenGuard {
     fn drop(&mut self) {
         self.registry.remove(&self.task_id);
-    }
-}
-
-pub fn emit_task_progress(app: Option<&AppHandle>, payload: &TaskProgressPayload) {
-    if let Some(handle) = app {
-        let _ = handle.emit(TASK_PROGRESS_EVENT, payload);
     }
 }
 

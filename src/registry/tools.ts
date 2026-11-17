@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { Locale } from "../i18n/messages";
+import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
 
 export type ToolCategory = "developer" | "image";
@@ -49,6 +50,34 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "braces",
     implementationStatus: "full",
     component: JsonFormatterWorkspace,
+  },
+  {
+    id: "D03",
+    category: "developer",
+    name: {
+      "zh-CN": "哈希校验工具",
+      "en-US": "Hash Generator (SHA-256)",
+    },
+    summary: {
+      "zh-CN":
+        "计算 UTF-8 文本与任意大小本地文件的流式 SHA-256 摘要，支持实时进度、取消与期望值比对",
+      "en-US":
+        "Compute exact UTF-8 text and streaming local-file SHA-256 checksums with real progress, cancellation, and digest comparison",
+    },
+    keywords: [
+      "hash",
+      "sha256",
+      "sha-256",
+      "checksum",
+      "digest",
+      "shasum",
+      "哈希",
+      "校验和",
+      "摘要",
+    ],
+    icon: "shield-check",
+    implementationStatus: "partial",
+    component: HashGeneratorWorkspace,
   },
 ];
 

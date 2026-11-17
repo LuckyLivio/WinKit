@@ -1,5 +1,6 @@
 pub mod error;
 pub mod fs_guard;
+pub mod hasher;
 pub mod tasks;
 
 use crate::error::AppError;
@@ -7,9 +8,10 @@ use crate::fs_guard::{
     read_utf8_text_file_bounded, suggest_safe_output_path, validate_user_path,
     write_output_bytes_safely, SavedFileInfo, TextFilePayload,
 };
-use crate::tasks::TaskRegistry;
+use crate::hasher::{compute_text_sha256, execute_file_hash_task, FileHashResult, TextHashResult};
+use crate::tasks::{TaskRegistry, TASK_PROGRESS_EVENT};
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppRuntimeInfo {
@@ -69,6 +71,28 @@ fn suggest_output_path(
 }
 
 #[tauri::command]
+fn hash_text_sha256(text: String) -> TextHashResult {
+    compute_text_sha256(&text)
+}
+
+#[tauri::command]
+async fn hash_file_sha256<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    path: String,
+) -> Result<FileHashResult, AppError> {
+    let reg = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_file_hash_task(&reg, &task_id, &path, |payload| {
+            let _ = app.emit(TASK_PROGRESS_EVENT, payload);
+        })
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background hash worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -88,6 +112,8 @@ pub fn run() {
             read_text_file,
             save_text_file,
             suggest_output_path,
+            hash_text_sha256,
+            hash_file_sha256,
             cancel_task,
             get_running_task_count
         ])
