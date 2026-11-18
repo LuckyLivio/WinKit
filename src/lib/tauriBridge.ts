@@ -234,6 +234,28 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   return invoke<AppRuntimeInfo>("get_runtime_info");
 }
 
+export async function readSystemClipboardText(): Promise<string> {
+  assertFrontendNotShuttingDown();
+  if (!isTauriDesktop()) {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+      return navigator.clipboard.readText();
+    }
+    return "";
+  }
+  return invoke<string>("read_clipboard_text");
+}
+
+export async function writeSystemClipboardText(text: string): Promise<void> {
+  assertFrontendNotShuttingDown();
+  if (!isTauriDesktop()) {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    }
+    return;
+  }
+  await invoke<void>("write_clipboard_text", { text });
+}
+
 export async function pickSingleFile(options: {
   title?: string;
   filters?: DialogFilter[];

@@ -114,6 +114,10 @@ export interface UnicodeSessionState {
   sanitizeOptions: UnicodeSanitizeOptions;
 }
 
+export interface CleanLinksSessionState {
+  inputText: string;
+}
+
 export interface WordCounterSessionState {
   textInput: string;
 }
@@ -164,6 +168,7 @@ export interface SessionWorkspaces {
   diff: DiffSessionState;
   regex: RegexSessionState;
   unicode: UnicodeSessionState;
+  cleanLinks: CleanLinksSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
@@ -258,6 +263,9 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     attentionOnly: false,
     sanitizeOptions: { ...DEFAULT_UNICODE_SANITIZE_OPTIONS },
   },
+  cleanLinks: {
+    inputText: "",
+  },
   wordCounter: {
     textInput: "",
   },
@@ -292,6 +300,7 @@ interface SessionStoreContextValue {
   updateDiffSession: (patch: Partial<DiffSessionState>) => void;
   updateRegexSession: (patch: Partial<RegexSessionState>) => void;
   updateUnicodeSession: (patch: Partial<UnicodeSessionState>) => void;
+  updateCleanLinksSession: (patch: Partial<CleanLinksSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
@@ -339,6 +348,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, unicode: { ...prev.unicode, ...patch } }));
   };
 
+  const updateCleanLinksSession = (patch: Partial<CleanLinksSessionState>) => {
+    setSession((prev) => ({ ...prev, cleanLinks: { ...prev.cleanLinks, ...patch } }));
+  };
+
   const updateWordCounterSession = (patch: Partial<WordCounterSessionState>) => {
     setSession((prev) => ({ ...prev, wordCounter: { ...prev.wordCounter, ...patch } }));
   };
@@ -364,6 +377,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateDiffSession,
         updateRegexSession,
         updateUnicodeSession,
+        updateCleanLinksSession,
         updateWordCounterSession,
         updateCaseConverterSession,
         updateBeautifierSession,

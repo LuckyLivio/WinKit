@@ -295,6 +295,39 @@ fn get_runtime_info() -> AppRuntimeInfo {
 }
 
 #[tauri::command]
+fn read_clipboard_text(registry: State<'_, TaskRegistry>) -> Result<String, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let mut clipboard = arboard::Clipboard::new().map_err(|_| {
+        AppError::new(
+            "CLIPBOARD_UNAVAILABLE",
+            "Unable to access system clipboard.",
+        )
+    })?;
+    match clipboard.get_text() {
+        Ok(text) => Ok(text),
+        Err(arboard::Error::ContentNotAvailable) => Ok(String::new()),
+        Err(_) => Err(AppError::new(
+            "CLIPBOARD_READ_FAILED",
+            "Clipboard does not contain readable plain text.",
+        )),
+    }
+}
+
+#[tauri::command]
+fn write_clipboard_text(registry: State<'_, TaskRegistry>, text: String) -> Result<(), AppError> {
+    registry.ensure_not_shutting_down()?;
+    let mut clipboard = arboard::Clipboard::new().map_err(|_| {
+        AppError::new(
+            "CLIPBOARD_UNAVAILABLE",
+            "Unable to access system clipboard.",
+        )
+    })?;
+    clipboard
+        .set_text(text)
+        .map_err(|_| AppError::new("CLIPBOARD_WRITE_FAILED", "Unable to update clipboard text."))
+}
+
+#[tauri::command]
 async fn read_text_file(
     registry: State<'_, TaskRegistry>,
     path: String,
@@ -585,6 +618,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
+            read_clipboard_text,
+            write_clipboard_text,
             read_text_file,
             read_diff_text_file,
             save_text_file,

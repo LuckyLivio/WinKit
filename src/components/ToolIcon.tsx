@@ -8,6 +8,7 @@ import {
   Frame,
   GitCompareArrows,
   KeyRound,
+  Link2,
   Regex,
   ScanText,
   ShieldCheck,
@@ -32,6 +33,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <GitCompareArrows size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "regex":
       return <Regex size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "link":
+      return <Link2 size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "scan-text":
       return <ScanText size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "file-text":

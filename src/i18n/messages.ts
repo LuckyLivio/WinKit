@@ -554,6 +554,62 @@ export interface Messages {
     cancel: string;
     emptyHint: string;
   };
+  cleanLinksTool: {
+    scopeNote: (ruleVersion: string) => string;
+    inputLabel: string;
+    inputPlaceholder: string;
+    readClipboardBtn: string;
+    replaceClipboardBtn: string;
+    sampleBtn: string;
+    clearBtn: string;
+    copyAllBtn: (count: number) => string;
+    copySingleBtn: string;
+    copiedBadge: string;
+    rulesSummaryTitle: string;
+    rulesSummaryBody: string;
+    clipboardReadEmpty: string;
+    clipboardLoadedPreview: string;
+    clipboardReplacedOk: (changed: number, total: number) => string;
+    clipboardKeptNonLinks: string;
+    clipboardLimitExceeded: string;
+    statusEmpty: string;
+    statusLimitBytes: (actual: number, limit: number) => string;
+    statusLimitLines: (actual: number, limit: number) => string;
+    statusSummary: (
+      valid: number,
+      changed: number,
+      removedParams: number,
+      unwrapped: number,
+      invalid: number,
+    ) => string;
+    resultsPaneTitle: string;
+    cleanedOutputPaneTitle: string;
+    linePrefix: (n: number) => string;
+    badgeCleaned: string;
+    badgeUnchanged: string;
+    badgePresignedSkipped: (key: string) => string;
+    badgeInvalid: string;
+    removedParamsLabel: string;
+    scopeUniversal: string;
+    scopeSite: string;
+    unwrappedChainLabel: string;
+    unwrapStoppedNote: {
+      missing_target_param: (provider: string) => string;
+      ambiguous_target_param: (provider: string) => string;
+      malformed_target_encoding: (provider: string) => string;
+      non_http_or_invalid_target: (provider: string) => string;
+      target_too_long: (provider: string) => string;
+      cycle_detected: (provider: string) => string;
+      max_depth_reached: (depth: number) => string;
+    };
+    invalidReasons: {
+      not_http_url: string;
+      contains_whitespace_or_control: string;
+      url_too_long: string;
+      malformed_url: string;
+    };
+    malformedKeyPreservedNote: (count: number) => string;
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -1187,6 +1243,71 @@ export const MESSAGES: Record<Locale, Messages> = {
       overwriteConfirmAccept: "确认覆盖",
       cancel: "取消",
       emptyHint: "输入或打开文本后在此逐码点展示 Unicode 名称、UTF-8 字节序列与清理差异预览。",
+    },
+    cleanLinksTool: {
+      scopeNote: (ruleVersion) =>
+        `本地规则库 (${ruleVersion})：离线剥离已知通用与站点专属跟踪参数，解包 Google / Facebook / Instagram / Outlook Safe Links / LinkedIn 跳转包装（最多 5 层，绝不联网访问目标）；保留其余查询原始编码与疑似签名链接。上限 1 MiB / 5,000 行。`,
+      inputLabel: "待清理链接（每行一条 HTTP / HTTPS 网址）",
+      inputPlaceholder:
+        "粘贴单条或多条带跟踪参数的网址（每行一条；非网址行将就地提示原因，不会清空其他有效链接）…",
+      readClipboardBtn: "读取剪贴板预览",
+      replaceClipboardBtn: "一步净化并写回剪贴板（仅纯链接时替换）",
+      sampleBtn: "填入合成示例",
+      clearBtn: "清空",
+      copyAllBtn: (count) => `复制全部有效结果 (${count})`,
+      copySingleBtn: "复制",
+      copiedBadge: "已复制",
+      rulesSummaryTitle: "规则与保留边界说明",
+      rulesSummaryBody:
+        "通用规则：utm_*、hsa_*、mtm_*、fbclid、gclid、msclkid、mc_cid/mc_eid、_hsenc/_hsmi、mkt_tok、_ga/_gl 等。站点专属：YouTube/Spotify (si 等)、Instagram (igsh/igshid)、TikTok (_t/_r/share_* 等)、Amazon (pd_rd_*/pf_rd_*/qid/sr/ref_ 等)、X 状态页 (s/t)、LinkedIn、Reddit。id、token、ref、source、q、page 等通用参数默认保留；命中 sig / X-Amz-Signature 等疑似签名特征时整条原样保留。不启动后台剪贴板持续监听。",
+      clipboardReadEmpty: "当前系统剪贴板为空或不含可读纯文本。",
+      clipboardLoadedPreview: "已读取剪贴板内容至输入区，请核对右侧清理预览后按需复制。",
+      clipboardReplacedOk: (changed, total) =>
+        `已一步净化并写回剪贴板（共 ${total} 条有效链接，其中 ${changed} 条发生净化变更）。`,
+      clipboardKeptNonLinks:
+        "剪贴板包含非 HTTP/HTTPS 链接文本，已保持系统剪贴板原样不变（内容已载入供逐行查看）。",
+      clipboardLimitExceeded: "剪贴板文本超出单次处理上限（1 MiB / 5,000 行），剪贴板保持不变。",
+      statusEmpty: "输入或读取链接后查看参数剥离明细与跳转解包过程。",
+      statusLimitBytes: (actual, limit) =>
+        `输入体积（${actual.toLocaleString()} 字节）超过 ${limit.toLocaleString()} 字节（1 MiB）上限。`,
+      statusLimitLines: (actual, limit) =>
+        `输入行数（${actual.toLocaleString()} 行）超过 ${limit.toLocaleString()} 行上限。`,
+      statusSummary: (valid, changed, removedParams, unwrapped, invalid) =>
+        `有效链接 ${valid} 条（已净化 ${changed} 条 · 移除参数 ${removedParams} 项 · 解包跳转 ${unwrapped} 条）${invalid > 0 ? ` · 无效行 ${invalid} 条` : ""}`,
+      resultsPaneTitle: "逐行清理与解包明细",
+      cleanedOutputPaneTitle: "有效清理结果汇总",
+      linePrefix: (n) => `第 ${n} 行`,
+      badgeCleaned: "已净化",
+      badgeUnchanged: "无需修改",
+      badgePresignedSkipped: (key) => `疑似签名链接 (${key}) · 已原样跳过`,
+      badgeInvalid: "无效行",
+      removedParamsLabel: "已移除参数：",
+      scopeUniversal: "通用",
+      scopeSite: "站点专属",
+      unwrappedChainLabel: "已解包包装：",
+      unwrapStoppedNote: {
+        missing_target_param: (provider) =>
+          `检测到 ${provider} 域名路径，但缺少目标跳转参数，已保留原链接。`,
+        ambiguous_target_param: (provider) =>
+          `${provider} 含多个不一致的目标跳转参数，为防误判已保留原链接。`,
+        malformed_target_encoding: (provider) =>
+          `${provider} 目标参数百分号编码不合法，已保留原包装链接。`,
+        non_http_or_invalid_target: (provider) =>
+          `${provider} 单层解码后目标并非合法 HTTP/HTTPS 网址，已停止解包并保留当前链接。`,
+        target_too_long: (provider) => `${provider} 解包目标超出长度上限，已停止解包。`,
+        cycle_detected: (provider) => `检测到 ${provider} 循环嵌套跳转，已停止继续解包。`,
+        max_depth_reached: (depth) => `已达最大解包层数上限（${depth} 层），停止继续解包。`,
+      },
+      invalidReasons: {
+        not_http_url:
+          "仅支持以 http:// 或 https:// 开头的明确网址（不自动转换普通句子或其它协议）。",
+        contains_whitespace_or_control:
+          "网址内部包含空格或控制字符，请检查是否多条链接粘连在同一行。",
+        url_too_long: "单条链接超过 16,384 UTF-16 代码单元安全上限。",
+        malformed_url: "URL 语法或主机名无效。",
+      },
+      malformedKeyPreservedNote: (count) =>
+        `注：有 ${count} 个参数名含非常规百分号序列，已按原始字节保守保留。`,
     },
   },
   "en-US": {
@@ -1837,6 +1958,74 @@ export const MESSAGES: Record<Locale, Messages> = {
       cancel: "Cancel",
       emptyHint:
         "Enter or open text above to inspect Unicode names, UTF-8 byte sequences, and previewable sanitization.",
+    },
+    cleanLinksTool: {
+      scopeNote: (ruleVersion) =>
+        `Local rule catalog (${ruleVersion}): strips known universal & site-specific tracking parameters and unwraps Google / Facebook / Instagram / Outlook Safe Links / LinkedIn redirects offline (max 5 layers, zero network fetches) while preserving raw query encoding and presigned URLs. Cap: 1 MiB / 5,000 lines.`,
+      inputLabel: "Input URLs (One HTTP / HTTPS URL per line)",
+      inputPlaceholder:
+        "Paste one or more URLs (one per line; invalid lines are explained in place without clearing valid URLs)…",
+      readClipboardBtn: "Read Clipboard & Preview",
+      replaceClipboardBtn: "Clean & Replace Clipboard (All-Links Only)",
+      sampleBtn: "Load Synthetic Sample",
+      clearBtn: "Clear",
+      copyAllBtn: (count) => `Copy All Valid (${count})`,
+      copySingleBtn: "Copy",
+      copiedBadge: "Copied",
+      rulesSummaryTitle: "Rule Coverage & Preservation Boundaries",
+      rulesSummaryBody:
+        "Universal: utm_*, hsa_*, mtm_*, fbclid, gclid, msclkid, mc_cid/mc_eid, _hsenc/_hsmi, mkt_tok, _ga/_gl, etc. Site-specific: YouTube/Spotify (si, etc.), Instagram (igsh/igshid), TikTok (_t/_r/share_*), Amazon (pd_rd_*/pf_rd_*/qid/sr/ref_), X status URLs (s/t), LinkedIn, Reddit. Generic names (id, token, ref, source, q, page) are preserved; presigned URLs (sig, X-Amz-Signature, etc.) are kept intact. No background clipboard monitoring.",
+      clipboardReadEmpty: "Clipboard is empty or contains no plain text.",
+      clipboardLoadedPreview:
+        "Loaded clipboard text into editor; review the cleaned preview before copying.",
+      clipboardReplacedOk: (changed, total) =>
+        `Cleaned and updated clipboard (${total} valid link${total === 1 ? "" : "s"}, ${changed} modified).`,
+      clipboardKeptNonLinks:
+        "Clipboard contains non-HTTP(S) text — system clipboard was left untouched (loaded below for inspection).",
+      clipboardLimitExceeded:
+        "Clipboard text exceeds the 1 MiB / 5,000-line limit; clipboard left untouched.",
+      statusEmpty:
+        "Paste URLs or read clipboard to inspect removed trackers and unwrapped redirects.",
+      statusLimitBytes: (actual, limit) =>
+        `Input size (${actual.toLocaleString()} bytes) exceeds the ${limit.toLocaleString()}-byte (1 MiB) limit.`,
+      statusLimitLines: (actual, limit) =>
+        `Line count (${actual.toLocaleString()}) exceeds the ${limit.toLocaleString()}-line limit.`,
+      statusSummary: (valid, changed, removedParams, unwrapped, invalid) =>
+        `${valid} valid URL${valid === 1 ? "" : "s"} (${changed} cleaned · ${removedParams} param${removedParams === 1 ? "" : "s"} removed · ${unwrapped} unwrapped)${invalid > 0 ? ` · ${invalid} invalid line${invalid === 1 ? "" : "s"}` : ""}`,
+      resultsPaneTitle: "Per-Line Cleaning & Unwrap Breakdown",
+      cleanedOutputPaneTitle: "Cleaned Valid URLs",
+      linePrefix: (n) => `Line ${n}`,
+      badgeCleaned: "Cleaned",
+      badgeUnchanged: "Unchanged",
+      badgePresignedSkipped: (key) => `Presigned URL (${key}) · Skipped`,
+      badgeInvalid: "Invalid",
+      removedParamsLabel: "Removed params:",
+      scopeUniversal: "Universal",
+      scopeSite: "Site",
+      unwrappedChainLabel: "Unwrapped via:",
+      unwrapStoppedNote: {
+        missing_target_param: (provider) =>
+          `Matched ${provider} path, but target query parameter was missing; kept wrapper URL.`,
+        ambiguous_target_param: (provider) =>
+          `${provider} contained conflicting target parameters; kept original URL.`,
+        malformed_target_encoding: (provider) =>
+          `${provider} target parameter had malformed percent-encoding; kept original URL.`,
+        non_http_or_invalid_target: (provider) =>
+          `${provider} single-pass decoded target was not a valid HTTP/HTTPS URL; stopped unwrapping.`,
+        target_too_long: (provider) =>
+          `${provider} target exceeded length limit; stopped unwrapping.`,
+        cycle_detected: (provider) => `Redirect cycle detected in ${provider}; stopped unwrapping.`,
+        max_depth_reached: (depth) => `Stopped after maximum unwrap depth (${depth} layers).`,
+      },
+      invalidReasons: {
+        not_http_url:
+          "Only explicit http:// or https:// URLs are accepted (plain text and other schemes are not converted).",
+        contains_whitespace_or_control: "URL contains internal spaces or control characters.",
+        url_too_long: "Single URL exceeds the 16,384 UTF-16 code-unit limit.",
+        malformed_url: "Malformed URL syntax or missing hostname.",
+      },
+      malformedKeyPreservedNote: (count) =>
+        `Note: ${count} parameter name(s) had non-standard percent sequences and were conservatively preserved verbatim.`,
     },
   },
 };

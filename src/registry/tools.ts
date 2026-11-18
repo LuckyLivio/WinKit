@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import type { Locale } from "../i18n/messages";
 import { CaseConverterWorkspace } from "../tools/case-converter/CaseConverterWorkspace";
+import { CleanLinksWorkspace } from "../tools/clean-links/CleanLinksWorkspace";
 import { CodecWorkspace } from "../tools/codec/CodecWorkspace";
 import { DiffCheckerWorkspace } from "../tools/diff-checker/DiffCheckerWorkspace";
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
@@ -24,6 +25,7 @@ export type ToolIconName =
   | "clock"
   | "git-compare"
   | "regex"
+  | "link"
   | "scan-text"
   | "file-text"
   | "case-sensitive"
@@ -277,6 +279,41 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "regex",
     implementationStatus: "partial",
     component: RegexTesterWorkspace,
+  },
+  {
+    id: "D09",
+    category: "developer",
+    name: {
+      "zh-CN": "链接跟踪参数清理",
+      "en-US": "Clean Links & Unwrap Redirects",
+    },
+    summary: {
+      "zh-CN":
+        "离线剥离 utm_*、fbclid、gclid 与站点专属跟踪参数，解包 Google / Facebook / Outlook 等跳转包装并原样保留其余查询编码",
+      "en-US":
+        "Strip utm_*, fbclid, gclid, and site-specific trackers and unwrap Google, Facebook, and Outlook redirects offline while preserving raw query encoding",
+    },
+    keywords: [
+      "url",
+      "link",
+      "clean",
+      "utm",
+      "fbclid",
+      "gclid",
+      "msclkid",
+      "tracking",
+      "unwrap",
+      "redirect",
+      "safelinks",
+      "链接",
+      "去跟踪",
+      "净化",
+      "短链",
+      "重定向",
+    ],
+    icon: "link",
+    implementationStatus: "partial",
+    component: CleanLinksWorkspace,
   },
   {
     id: "D11",
