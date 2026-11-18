@@ -688,33 +688,6 @@ export interface Messages {
     errNoCharset: string;
     errImpossibleConstraints: string;
   };
-  csvJsonTool: {
-    scopeNote: string;
-    directionLabel: string;
-    dirCsvToJson: string;
-    dirJsonToCsv: string;
-    dirCsvToMd: string;
-    dirJsonToMd: string;
-    delimiterLabel: string;
-    delimAuto: string;
-    delimComma: string;
-    delimSemicolon: string;
-    delimTab: string;
-    firstRowHeaders: string;
-    detectTypes: string;
-    formulaProtection: string;
-    convertBtn: string;
-    copyBtn: string;
-    copiedBadge: string;
-    downloadBtn: string;
-    clearBtn: string;
-    inputPaneTitle: string;
-    outputPaneTitle: string;
-    csvPlaceholder: string;
-    jsonPlaceholder: string;
-    statusOk: (rows: number, cols: number) => string;
-    statusErrorAt: (msg: string, line: number, col: number) => string;
-  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -1503,35 +1476,6 @@ export const MESSAGES: Record<Locale, Messages> = {
       errInvalidBatchCount: (min, max) => `每批生成条数须为 ${min} 至 ${max} 之间的整数。`,
       errNoCharset: "请至少勾选一种字符类别（大写、小写、数字或符号）。",
       errImpossibleConstraints: "当前密码长度小于所选必含字符类别数量，无法满足约束。",
-    },
-    csvJsonTool: {
-      scopeNote:
-        "CSV ↔ JSON 互转及 CSV / JSON → Markdown 表格导出；支持引号转义、字段内换行、自动/手动分隔符、大整数与前导零保真、嵌套对象路径展开及可选电子表格公式保护。输入上限 4 MiB。",
-      directionLabel: "转换方向",
-      dirCsvToJson: "CSV → JSON",
-      dirJsonToCsv: "JSON → CSV",
-      dirCsvToMd: "CSV → Markdown",
-      dirJsonToMd: "JSON → Markdown",
-      delimiterLabel: "分隔符",
-      delimAuto: "自动检测",
-      delimComma: "逗号 (,)",
-      delimSemicolon: "分号 (;)",
-      delimTab: "制表符 (Tab)",
-      firstRowHeaders: "首行为表头",
-      detectTypes: "检测数值与布尔类型",
-      formulaProtection: "电子表格公式保护",
-      convertBtn: "转换",
-      copyBtn: "复制结果",
-      copiedBadge: "已复制",
-      downloadBtn: "下载",
-      clearBtn: "清空",
-      inputPaneTitle: "输入",
-      outputPaneTitle: "输出",
-      csvPlaceholder: "在此粘贴或输入 CSV 数据（支持逗号、分号或 Tab 分隔）",
-      jsonPlaceholder: "在此粘贴或输入 JSON 数组（如 [{...}, {...}]）",
-      statusOk: (rows, cols) =>
-        `转换成功：${rows.toLocaleString()} 行 × ${cols.toLocaleString()} 列`,
-      statusErrorAt: (msg, line, col) => `错误（第 ${line} 行，第 ${col} 列）：${msg}`,
     },
   },
   "en-US": {
@@ -2345,35 +2289,6 @@ export const MESSAGES: Record<Locale, Messages> = {
       errNoCharset: "Enable at least one character category (A–Z, a–z, 0–9, or symbols).",
       errImpossibleConstraints:
         "Password length is shorter than the number of required character categories.",
-    },
-    csvJsonTool: {
-      scopeNote:
-        "Bidirectional CSV ↔ JSON conversion and CSV / JSON → Markdown table export; supports RFC 4180 quoting, auto/manual delimiters, lossless large-integer and leading-zero preservation, nested object path flattening, and optional spreadsheet formula protection. Input limit: 4 MiB.",
-      directionLabel: "Direction",
-      dirCsvToJson: "CSV → JSON",
-      dirJsonToCsv: "JSON → CSV",
-      dirCsvToMd: "CSV → Markdown",
-      dirJsonToMd: "JSON → Markdown",
-      delimiterLabel: "Delimiter",
-      delimAuto: "Auto-detect",
-      delimComma: "Comma (,)",
-      delimSemicolon: "Semicolon (;)",
-      delimTab: "Tab",
-      firstRowHeaders: "First row as headers",
-      detectTypes: "Detect numbers and booleans",
-      formulaProtection: "Spreadsheet formula protection",
-      convertBtn: "Convert",
-      copyBtn: "Copy Output",
-      copiedBadge: "Copied",
-      downloadBtn: "Download",
-      clearBtn: "Clear",
-      inputPaneTitle: "Input",
-      outputPaneTitle: "Output",
-      csvPlaceholder: "Paste or type CSV data here (comma, semicolon, or tab delimited)",
-      jsonPlaceholder: "Paste or type a JSON array here (e.g. [{...}, {...}])",
-      statusOk: (rows, cols) =>
-        `Converted: ${rows.toLocaleString()} row${rows === 1 ? "" : "s"} × ${cols.toLocaleString()} column${cols === 1 ? "" : "s"}`,
-      statusErrorAt: (msg, line, col) => `Error (line ${line}, column ${col}): ${msg}`,
     },
   },
 };

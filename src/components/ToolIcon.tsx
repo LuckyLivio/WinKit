@@ -13,7 +13,6 @@ import {
   Regex,
   ScanText,
   ShieldCheck,
-  Table2,
   TextQuote,
 } from "lucide-react";
 import type { ToolIconName } from "../registry/tools";
@@ -50,7 +49,5 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <CaseSensitive size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "frame":
       return <Frame size={size} strokeWidth={1.75} aria-hidden="true" />;
-    case "table-2":
-      return <Table2 size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

@@ -3,7 +3,6 @@ import type { Locale } from "../i18n/messages";
 import { CaseConverterWorkspace } from "../tools/case-converter/CaseConverterWorkspace";
 import { CleanLinksWorkspace } from "../tools/clean-links/CleanLinksWorkspace";
 import { CodecWorkspace } from "../tools/codec/CodecWorkspace";
-import { CsvJsonWorkspace } from "../tools/csv-json/CsvJsonWorkspace";
 import { DiffCheckerWorkspace } from "../tools/diff-checker/DiffCheckerWorkspace";
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
@@ -32,7 +31,6 @@ export type ToolIconName =
   | "scan-text"
   | "text-quote"
   | "lock-keyhole"
-  | "table-2"
   | "file-text"
   | "case-sensitive"
   | "frame";
@@ -419,39 +417,6 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "lock-keyhole",
     implementationStatus: "full",
     component: PasswordGeneratorWorkspace,
-  },
-  {
-    id: "D14",
-    category: "developer",
-    name: {
-      "zh-CN": "CSV ↔ JSON 与 Markdown 表格转换",
-      "en-US": "CSV ↔ JSON & Markdown Table Converter",
-    },
-    summary: {
-      "zh-CN":
-        "支持引号转义、字段内换行、自动/手动分隔符、大整数与前导零保真、嵌套对象路径展开及可选电子表格公式保护的 CSV ↔ JSON 互转及 Markdown 表格导出",
-      "en-US":
-        "Bidirectional CSV ↔ JSON conversion and Markdown table export with RFC 4180 quoting, lossless numbers, nested-path flattening, and formula protection",
-    },
-    keywords: [
-      "csv",
-      "json",
-      "markdown",
-      "table",
-      "convert",
-      "delimiter",
-      "comma",
-      "semicolon",
-      "tab",
-      "flatten",
-      "表格",
-      "转换",
-      "逗号",
-      "分隔符",
-    ],
-    icon: "table-2",
-    implementationStatus: "full",
-    component: CsvJsonWorkspace,
   },
   {
     id: "T08",
