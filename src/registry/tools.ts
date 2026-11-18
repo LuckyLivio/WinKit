@@ -1,11 +1,13 @@
 import type { ComponentType } from "react";
 import type { Locale } from "../i18n/messages";
+import { CaseConverterWorkspace } from "../tools/case-converter/CaseConverterWorkspace";
 import { CodecWorkspace } from "../tools/codec/CodecWorkspace";
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
 import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
 import { TimestampConverterWorkspace } from "../tools/timestamp-converter/TimestampConverterWorkspace";
 import { UuidGeneratorWorkspace } from "../tools/uuid-generator/UuidGeneratorWorkspace";
+import { WordCounterWorkspace } from "../tools/word-counter/WordCounterWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image";
 export type ToolImplementationStatus = "full" | "partial";
@@ -175,6 +177,69 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "clock",
     implementationStatus: "partial",
     component: TimestampConverterWorkspace,
+  },
+  {
+    id: "T08",
+    category: "text",
+    name: {
+      "zh-CN": "字数与阅读统计",
+      "en-US": "Word & Reading Counter",
+    },
+    summary: {
+      "zh-CN":
+        "按 Unicode 字素簇与 Intl.Segmenter 统计中英文词数、字符、句段、行数、UTF-8 字节、预计阅读时长与高频词",
+      "en-US":
+        "Count Unicode grapheme characters, CJK/Latin words, sentences, paragraphs, lines, UTF-8 bytes, reading time, and top words",
+    },
+    keywords: [
+      "word",
+      "count",
+      "character",
+      "grapheme",
+      "utf8",
+      "bytes",
+      "reading",
+      "paragraph",
+      "字数",
+      "字符",
+      "统计",
+      "阅读时长",
+    ],
+    icon: "file-text",
+    implementationStatus: "full",
+    component: WordCounterWorkspace,
+  },
+  {
+    id: "T09",
+    category: "text",
+    name: {
+      "zh-CN": "大小写与命名转换",
+      "en-US": "Case & Naming Converter",
+    },
+    summary: {
+      "zh-CN":
+        "支持 UPPER、lower、Title、Sentence、camel、Pascal、snake、CONSTANT、kebab、dot、交替与反转共 12 种样式按行转换",
+      "en-US":
+        "Convert text and identifier lists line by line across 12 styles including camelCase, snake_case, kebab-case, and Title Case",
+    },
+    keywords: [
+      "case",
+      "camel",
+      "snake",
+      "kebab",
+      "pascal",
+      "constant",
+      "title",
+      "uppercase",
+      "lowercase",
+      "大小写",
+      "驼峰",
+      "下划线",
+      "命名",
+    ],
+    icon: "case-sensitive",
+    implementationStatus: "full",
+    component: CaseConverterWorkspace,
   },
   {
     id: "I03",
