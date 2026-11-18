@@ -28,6 +28,7 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 | `unicode_names2`                                                                                                  | (MIT OR Apache-2.0) AND Unicode-DFS-2016 | Official Unicode 16.0.0 character & CJK/Hangul name tables                                                |
 | `unicode-general-category`, `unicode-script`, `unicode-security`, `unicode-segmentation`, `unicode-normalization` | MIT OR Apache-2.0                        | Unicode 16.0.0 UAX #44 category, UAX #24 script, UAX #29 grapheme, and UTS #39 confusable skeleton tables |
 | `uuid`                                                                                                            | Apache-2.0 OR MIT                        | RFC 9562 UUID v4 and time-ordered v7 generation via OS CSPRNG                                             |
+| `rand`                                                                                                            | MIT OR Apache-2.0                        | Operating-system CSPRNG (`OsRng`) interface for password and passphrase generation                        |
 | `image`                                                                                                           | Apache-2.0 OR MIT                        | Pure-Rust PNG and JPEG decoding and encoding                                                              |
 | `base64`                                                                                                          | Apache-2.0 OR MIT                        | RFC 4648 Standard and URL-safe Base64 encoding and decoding                                               |
 | `thiserror`                                                                                                       | Apache-2.0 OR MIT                        | Structured error derivation                                                                               |
@@ -41,6 +42,12 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 - `jsdom`, `@testing-library/react`, `@testing-library/jest-dom`, `@testing-library/user-event` — MIT
 - `@tauri-apps/cli` — Apache-2.0 OR MIT
 - `tempfile` (Rust dev-dependency) — Apache-2.0 OR MIT
+
+## Embedded Wordlist Data (`D13` Passphrase Generator)
+
+- **Source**: EFF Long Wordlist (`eff_large_wordlist.txt`, 2016, SHA-256 `addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e`), © Electronic Frontier Foundation (`https://www.eff.org/dice`).
+- **License**: Creative Commons Attribution 3.0 United States (`CC-BY-3.0-US`, `https://creativecommons.org/licenses/by/3.0/us/`).
+- **Modifications**: Dice roll prefixes were removed, entries were normalized to lowercase ASCII and verified for case-insensitive uniqueness, and the 4 hyphenated entries (`drop-down`, `felt-tip`, `t-shirt`, `yo-yo`) were excluded so all `7,772` retained words (`eff_wordlist_7772.txt`) match `^[a-z]+$` and remain collision-free under `-`, `_`, `.`, and space separators.
 
 ## Application Icons & Visual Assets
 

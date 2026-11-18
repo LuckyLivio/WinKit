@@ -8,6 +8,7 @@ import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWor
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
 import { JwtDecoderWorkspace } from "../tools/jwt-decoder/JwtDecoderWorkspace";
 import { LoremIpsumWorkspace } from "../tools/lorem-ipsum/LoremIpsumWorkspace";
+import { PasswordGeneratorWorkspace } from "../tools/password-generator/PasswordGeneratorWorkspace";
 import { RegexTesterWorkspace } from "../tools/regex-tester/RegexTesterWorkspace";
 import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
 import { TimestampConverterWorkspace } from "../tools/timestamp-converter/TimestampConverterWorkspace";
@@ -29,6 +30,7 @@ export type ToolIconName =
   | "link"
   | "scan-text"
   | "text-quote"
+  | "lock-keyhole"
   | "file-text"
   | "case-sensitive"
   | "frame";
@@ -383,6 +385,38 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "text-quote",
     implementationStatus: "full",
     component: LoremIpsumWorkspace,
+  },
+  {
+    id: "D13",
+    category: "developer",
+    name: {
+      "zh-CN": "随机密码与口令短语生成",
+      "en-US": "Password & Passphrase Generator",
+    },
+    summary: {
+      "zh-CN":
+        "使用操作系统密码学安全随机源无偏抽样生成随机密码与英文口令短语，支持排除易混字符与按生成模型估算的熵/强度展示",
+      "en-US":
+        "Generate random passwords and English passphrases via OS CSPRNG with look-alike exclusion and model-estimated entropy & strength",
+    },
+    keywords: [
+      "password",
+      "passphrase",
+      "random",
+      "csprng",
+      "entropy",
+      "secret",
+      "diceware",
+      "eff",
+      "密码",
+      "口令",
+      "口令短语",
+      "随机密码",
+      "强度",
+    ],
+    icon: "lock-keyhole",
+    implementationStatus: "full",
+    component: PasswordGeneratorWorkspace,
   },
   {
     id: "T08",

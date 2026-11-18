@@ -4787,6 +4787,7 @@ dependencies = [
  "hmac",
  "image",
  "md-5",
+ "rand",
  "serde",
  "serde_json",
  "sha1",

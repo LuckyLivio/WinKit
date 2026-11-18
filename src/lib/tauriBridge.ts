@@ -34,6 +34,11 @@ import {
   type UnicodeInspectionResponse,
   type UnicodeSanitizeOptions,
 } from "../tools/unicode-inspector/unicodeEngine";
+import {
+  generateSecretsClientFallback,
+  type SecretGenRequest,
+  type SecretGenResponse,
+} from "../tools/password-generator/passwordEngine";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -500,6 +505,14 @@ export async function inspectUuidString(input: string): Promise<UuidInspectResul
     return inspectUuidClientFallback(input);
   }
   return invoke<UuidInspectResult>("inspect_uuid", { input });
+}
+
+export async function generateSecretsBatch(req: SecretGenRequest): Promise<SecretGenResponse> {
+  assertFrontendNotShuttingDown();
+  if (!isTauriDesktop()) {
+    return generateSecretsClientFallback(req);
+  }
+  return invoke<SecretGenResponse>("generate_secrets", { req });
 }
 
 export async function verifyJwtHmac(req: JwtHmacVerifyRequest): Promise<JwtHmacVerifyResponse> {

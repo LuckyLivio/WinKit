@@ -633,6 +633,61 @@ export interface Messages {
     errOutOfRange: (min: number, max: number) => string;
     errBudgetExceeded: (maxChars: number) => string;
   };
+  passwordTool: {
+    scopeNote: string;
+    modePassword: string;
+    modePassphrase: string;
+    batchCountLabel: string;
+    passwordLengthLabel: string;
+    wordCountLabel: string;
+    charClassesTitle: string;
+    optUppercase: string;
+    optLowercase: string;
+    optDigits: string;
+    optSymbols: string;
+    optExcludeLookAlikes: string;
+    optRequireEachClass: string;
+    passphraseOptionsTitle: string;
+    separatorLabel: string;
+    sepHyphen: string;
+    sepSpace: string;
+    sepDot: string;
+    sepUnderscore: string;
+    sepNone: string;
+    optCapitalize: string;
+    optIncludeNumber: string;
+    generateBtn: string;
+    regenerateBtn: string;
+    revealBtn: string;
+    hideBtn: string;
+    copyBatchBtn: (count: number) => string;
+    copySingleBtn: string;
+    copiedBadge: string;
+    clearBtn: string;
+    strengthTitle: string;
+    tierLabels: {
+      weak: string;
+      fair: string;
+      strong: string;
+      very_strong: string;
+    };
+    bitsExactLabel: (bits: number) => string;
+    bitsUpperBoundLabel: (bits: number) => string;
+    modelAssumptions: {
+      independent_uniform_chars: (poolSize: number) => string;
+      constrained_all_selected_classes: (poolSize: number, upperBits: number) => string;
+      independent_words_with_replacement: (dictSize: number, isUpperBound: boolean) => string;
+    };
+    memoryPrivacyNote: string;
+    staleBanner: string;
+    emptyPrompt: string;
+    resultsPaneTitle: (count: number, masked: boolean) => string;
+    errInvalidLength: (min: number, max: number) => string;
+    errInvalidWordCount: (min: number, max: number) => string;
+    errInvalidBatchCount: (min: number, max: number) => string;
+    errNoCharset: string;
+    errImpossibleConstraints: string;
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -1357,6 +1412,70 @@ export const MESSAGES: Record<Locale, Messages> = {
       errOutOfRange: (min, max) => `当前粒度数量须在 ${min} 至 ${max.toLocaleString()} 之间。`,
       errBudgetExceeded: (maxChars) =>
         `生成结果超出 ${maxChars.toLocaleString()} 字符安全上限，请调小数量。`,
+    },
+    passwordTool: {
+      scopeNote:
+        "普通登录密码与英文词表口令短语（Passphrase）本地生成工具（不含钱包 BIP39 助记词）。全程采用操作系统密码学安全随机源（OS CSPRNG）无偏拒绝采样，默认掩码展示，仅在主动点击复制时写入剪贴板。",
+      modePassword: "随机密码 (Password)",
+      modePassphrase: "口令短语 (Passphrase)",
+      batchCountLabel: "每批条数 (1–50)",
+      passwordLengthLabel: "密码长度 (8–128)",
+      wordCountLabel: "词数 (3–12)",
+      charClassesTitle: "字符类别与约束",
+      optUppercase: "大写字母 (A–Z)",
+      optLowercase: "小写字母 (a–z)",
+      optDigits: "数字 (0–9)",
+      optSymbols: "符号 (!@#$%^&*()-_=+[]{};:,.<>?/|~)",
+      optExcludeLookAlikes: "排除易混字符 (0, O, o, 1, l, I, |)",
+      optRequireEachClass: "每类所选字符至少包含 1 个（有界拒绝采样）",
+      passphraseOptionsTitle: "口令短语格式（EFF 7,772 词表，独立有放回抽样）",
+      separatorLabel: "词间分隔符",
+      sepHyphen: "连字符 (-)",
+      sepSpace: "空格 ( )",
+      sepDot: "点号 (.)",
+      sepUnderscore: "下划线 (_)",
+      sepNone: "无分隔符（空）",
+      optCapitalize: "词首字母大写",
+      optIncludeNumber: "末尾附加两位随机数字 (00–99)",
+      generateBtn: "生成",
+      regenerateBtn: "重新生成",
+      revealBtn: "显示明文",
+      hideBtn: "隐藏明文",
+      copyBatchBtn: (count) => `复制本批 (${count})`,
+      copySingleBtn: "复制",
+      copiedBadge: "已复制",
+      clearBtn: "清空",
+      strengthTitle: "按生成模型估算的熵 / 强度",
+      tierLabels: {
+        weak: "偏弱 (< 50 bits)",
+        fair: "一般 (50–69 bits)",
+        strong: "强 (70–99 bits)",
+        very_strong: "极强 (≥ 100 bits)",
+      },
+      bitsExactLabel: (bits) => `约 ${bits.toFixed(2)} bits（生成模型估算）`,
+      bitsUpperBoundLabel: (bits) => `生成选择上界：≤ ${bits.toFixed(2)} bits`,
+      modelAssumptions: {
+        independent_uniform_chars: (poolSize) =>
+          `假设说明：从去重后的 ${poolSize} 个有效字符中独立均匀有放回抽取，估算值 = L × log2(${poolSize})。不展示无条件依据的“破解耗时”。`,
+        constrained_all_selected_classes: (poolSize, upperBits) =>
+          `假设说明：在 ${poolSize} 字符全集上执行均匀有界拒绝采样，仅接受覆盖全部已选类别的候选；已按容斥原理精确扣除缺类组合（无约束上界为 ${upperBits.toFixed(2)} bits）。`,
+        independent_words_with_replacement: (dictSize, isUpperBound) =>
+          isUpperBound
+            ? `假设说明：从 ${dictSize.toLocaleString()} 个纯小写英文词中独立均匀有放回选词（允许自然重复）；因当前为空分隔符且未开启首字母大写，不同复合词序列可能合并为同一字符串，故仅标为生成选择上界。`
+            : `假设说明：从 ${dictSize.toLocaleString()} 个纯字母词（EFF Long Wordlist 去连字符子集，CC-BY-3.0）中独立均匀有放回选词（允许自然重复）；固定分隔符与确定性大写不增加随机性，末尾随机数字仅计入 100 种等概选择（+6.64 bits）。`,
+      },
+      memoryPrivacyNote:
+        "内存说明：结果仅保存在当前会话内存中，切换工具保持掩码，清空/重新生成立即替换引用，不写入磁盘或历史（注：受运行时管理内存限制，不宣称已完成物理内存安全擦除）。",
+      staleBanner:
+        "配置已变更，下方列表为旧配置生成结果（已禁用复制以防误用）；请点击“重新生成”获取符合当前配置的结果。",
+      emptyPrompt: "设置上方规则后点击“生成”以使用系统安全随机源创建密码或口令短语。",
+      resultsPaneTitle: (count, masked) =>
+        `本批生成结果（共 ${count} 条 · ${masked ? "已掩码保护" : "明文显示中"}）`,
+      errInvalidLength: (min, max) => `密码长度须为 ${min} 至 ${max} 之间的整数。`,
+      errInvalidWordCount: (min, max) => `口令短语词数须为 ${min} 至 ${max} 之间的整数。`,
+      errInvalidBatchCount: (min, max) => `每批生成条数须为 ${min} 至 ${max} 之间的整数。`,
+      errNoCharset: "请至少勾选一种字符类别（大写、小写、数字或符号）。",
+      errImpossibleConstraints: "当前密码长度小于所选必含字符类别数量，无法满足约束。",
     },
   },
   "en-US": {
@@ -2104,6 +2223,71 @@ export const MESSAGES: Record<Locale, Messages> = {
         `Count for this unit must be between ${min} and ${max.toLocaleString()}.`,
       errBudgetExceeded: (maxChars) =>
         `Estimated output exceeds the ${maxChars.toLocaleString()}-character safety budget; reduce the count.`,
+    },
+    passwordTool: {
+      scopeNote:
+        "Local password & English passphrase generator (not a crypto-wallet BIP39 seed tool). Uses OS CSPRNG with unbiased rejection sampling, masks results by default, and writes to clipboard only when you click Copy.",
+      modePassword: "Password",
+      modePassphrase: "Passphrase",
+      batchCountLabel: "Batch Size (1–50)",
+      passwordLengthLabel: "Length (8–128)",
+      wordCountLabel: "Words (3–12)",
+      charClassesTitle: "Character Categories & Rules",
+      optUppercase: "Uppercase (A–Z)",
+      optLowercase: "Lowercase (a–z)",
+      optDigits: "Digits (0–9)",
+      optSymbols: "Symbols (!@#$%^&*()-_=+[]{};:,.<>?/|~)",
+      optExcludeLookAlikes: "No look-alikes (0, O, o, 1, l, I, |)",
+      optRequireEachClass: "Require ≥ 1 char from each selected class (bounded rejection)",
+      passphraseOptionsTitle: "Passphrase Format (EFF 7,772-word list, uniform with replacement)",
+      separatorLabel: "Separator",
+      sepHyphen: "Hyphen (-)",
+      sepSpace: "Space ( )",
+      sepDot: "Period (.)",
+      sepUnderscore: "Underscore (_)",
+      sepNone: "None (empty)",
+      optCapitalize: "Capitalize words",
+      optIncludeNumber: "Append 2-digit random number (00–99)",
+      generateBtn: "Generate",
+      regenerateBtn: "Regenerate",
+      revealBtn: "Reveal",
+      hideBtn: "Mask",
+      copyBatchBtn: (count) => `Copy Batch (${count})`,
+      copySingleBtn: "Copy",
+      copiedBadge: "Copied",
+      clearBtn: "Clear",
+      strengthTitle: "Model-Estimated Entropy & Strength",
+      tierLabels: {
+        weak: "Weak (< 50 bits)",
+        fair: "Fair (50–69 bits)",
+        strong: "Strong (70–99 bits)",
+        very_strong: "Very Strong (≥ 100 bits)",
+      },
+      bitsExactLabel: (bits) => `~${bits.toFixed(2)} bits (generator model estimate)`,
+      bitsUpperBoundLabel: (bits) => `Selection Upper Bound: ≤ ${bits.toFixed(2)} bits`,
+      modelAssumptions: {
+        independent_uniform_chars: (poolSize) =>
+          `Model assumption: independent uniform draws over ${poolSize} deduplicated characters (L × log2(${poolSize})). Arbitrary crack-time guesses are omitted.`,
+        constrained_all_selected_classes: (poolSize, upperBits) =>
+          `Model assumption: uniform bounded rejection sampling over ${poolSize} characters requiring every selected class; exact inclusion-exclusion count applied (unconstrained upper bound: ${upperBits.toFixed(2)} bits).`,
+        independent_words_with_replacement: (dictSize, isUpperBound) =>
+          isUpperBound
+            ? `Model assumption: independent uniform draws with replacement over ${dictSize.toLocaleString()} lowercase words; with an empty separator and lowercase words, distinct compound sequences can collide, so this figure is marked strictly as a selection upper bound.`
+            : `Model assumption: independent uniform draws with replacement over ${dictSize.toLocaleString()} pure-alpha words (EFF Long Wordlist hyphen-free subset, CC-BY-3.0); fixed separators and deterministic capitalization add 0 bits, and the optional 00–99 suffix adds log2(100) ≈ 6.64 bits.`,
+      },
+      memoryPrivacyNote:
+        "Memory note: Results live only in current session memory, re-mask on tool switch, and drop references on Clear/Regenerate without writing to disk (managed JS/OS memory cannot guarantee cryptographic RAM zeroization).",
+      staleBanner:
+        "Settings changed since the batch below was generated (copying stale results is disabled); click Regenerate to produce items matching the current settings.",
+      emptyPrompt: "Configure options above and click Generate to draw passwords or passphrases from the OS CSPRNG.",
+      resultsPaneTitle: (count, masked) =>
+        `Generated Batch (${count} item${count === 1 ? "" : "s"} · ${masked ? "Masked" : "Revealed"})`,
+      errInvalidLength: (min, max) => `Password length must be an integer from ${min} to ${max}.`,
+      errInvalidWordCount: (min, max) => `Word count must be an integer from ${min} to ${max}.`,
+      errInvalidBatchCount: (min, max) => `Batch count must be an integer from ${min} to ${max}.`,
+      errNoCharset: "Enable at least one character category (A–Z, a–z, 0–9, or symbols).",
+      errImpossibleConstraints:
+        "Password length is shorter than the number of required character categories.",
     },
   },
 };

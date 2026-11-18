@@ -4,6 +4,7 @@ pub mod error;
 pub mod fs_guard;
 pub mod hasher;
 pub mod jwt;
+pub mod password_gen;
 pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
@@ -27,6 +28,7 @@ use crate::hasher::{
     MultiFileHashResult, MultiTextHashResult,
 };
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
+use crate::password_gen::{generate_secrets_with_os_rng, SecretGenRequest, SecretGenResponse};
 use crate::tasks::{
     CloseRequestDecision, ShutdownDrainResult, TaskProgressPayload, TaskRegistry,
     TaskRegistrySnapshot, TaskTokenGuard, TASK_PROGRESS_EVENT,
@@ -521,6 +523,15 @@ fn inspect_uuid(input: String) -> Result<UuidInspectResult, AppError> {
 }
 
 #[tauri::command]
+fn generate_secrets(
+    registry: State<'_, TaskRegistry>,
+    req: SecretGenRequest,
+) -> Result<SecretGenResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    generate_secrets_with_os_rng(&req)
+}
+
+#[tauri::command]
 fn verify_jwt_hmac(
     registry: State<'_, TaskRegistry>,
     req: JwtHmacVerifyRequest,
@@ -632,6 +643,7 @@ pub fn run() {
             codec_save_output,
             generate_uuids,
             inspect_uuid,
+            generate_secrets,
             verify_jwt_hmac,
             inspect_unicode_text,
             inspect_beautifier_image,

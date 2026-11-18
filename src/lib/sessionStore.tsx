@@ -12,6 +12,10 @@ import {
   type UnicodeSanitizeOptions,
 } from "../tools/unicode-inspector/unicodeEngine";
 import type { LoremFormat, LoremUnit } from "../tools/lorem-ipsum/loremEngine";
+import type {
+  PassphraseSeparator,
+  SecretStrengthEstimate,
+} from "../tools/password-generator/passwordEngine";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -127,6 +131,25 @@ export interface LoremIpsumSessionState {
   seed: number;
 }
 
+export interface PasswordGeneratorSessionState {
+  mode: "password" | "passphrase";
+  rawLength: string;
+  rawWordCount: string;
+  rawBatchCount: string;
+  uppercase: boolean;
+  lowercase: boolean;
+  digits: boolean;
+  symbols: boolean;
+  excludeLookAlikes: boolean;
+  requireEachSelectedClass: boolean;
+  separator: PassphraseSeparator;
+  capitalizeWords: boolean;
+  includeNumber: boolean;
+  generatedItems: string[];
+  generatedStrength: SecretStrengthEstimate | null;
+  isStale: boolean;
+}
+
 export interface WordCounterSessionState {
   textInput: string;
 }
@@ -179,6 +202,7 @@ export interface SessionWorkspaces {
   unicode: UnicodeSessionState;
   cleanLinks: CleanLinksSessionState;
   loremIpsum: LoremIpsumSessionState;
+  passwordGenerator: PasswordGeneratorSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
@@ -283,6 +307,24 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     startWithClassic: true,
     seed: 0x20261118,
   },
+  passwordGenerator: {
+    mode: "password",
+    rawLength: "16",
+    rawWordCount: "6",
+    rawBatchCount: "5",
+    uppercase: true,
+    lowercase: true,
+    digits: true,
+    symbols: true,
+    excludeLookAlikes: true,
+    requireEachSelectedClass: true,
+    separator: "-",
+    capitalizeWords: false,
+    includeNumber: false,
+    generatedItems: [],
+    generatedStrength: null,
+    isStale: false,
+  },
   wordCounter: {
     textInput: "",
   },
@@ -319,6 +361,7 @@ interface SessionStoreContextValue {
   updateUnicodeSession: (patch: Partial<UnicodeSessionState>) => void;
   updateCleanLinksSession: (patch: Partial<CleanLinksSessionState>) => void;
   updateLoremIpsumSession: (patch: Partial<LoremIpsumSessionState>) => void;
+  updatePasswordGeneratorSession: (patch: Partial<PasswordGeneratorSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
@@ -374,6 +417,13 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, loremIpsum: { ...prev.loremIpsum, ...patch } }));
   };
 
+  const updatePasswordGeneratorSession = (patch: Partial<PasswordGeneratorSessionState>) => {
+    setSession((prev) => ({
+      ...prev,
+      passwordGenerator: { ...prev.passwordGenerator, ...patch },
+    }));
+  };
+
   const updateWordCounterSession = (patch: Partial<WordCounterSessionState>) => {
     setSession((prev) => ({ ...prev, wordCounter: { ...prev.wordCounter, ...patch } }));
   };
@@ -401,6 +451,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateUnicodeSession,
         updateCleanLinksSession,
         updateLoremIpsumSession,
+        updatePasswordGeneratorSession,
         updateWordCounterSession,
         updateCaseConverterSession,
         updateBeautifierSession,

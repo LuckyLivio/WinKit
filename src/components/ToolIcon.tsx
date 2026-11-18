@@ -9,6 +9,7 @@ import {
   GitCompareArrows,
   KeyRound,
   Link2,
+  LockKeyhole,
   Regex,
   ScanText,
   ShieldCheck,
@@ -40,6 +41,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <ScanText size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "text-quote":
       return <TextQuote size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "lock-keyhole":
+      return <LockKeyhole size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "file-text":
       return <FileText size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "case-sensitive":
