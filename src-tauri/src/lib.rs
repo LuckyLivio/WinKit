@@ -3,6 +3,7 @@ pub mod codec;
 pub mod error;
 pub mod fs_guard;
 pub mod hasher;
+pub mod jwt;
 pub mod tasks;
 pub mod uuid_tool;
 
@@ -23,6 +24,7 @@ use crate::hasher::{
     compute_text_hashes, execute_file_hash_with_guard, prepare_file_hash_task, HashAlgorithm,
     MultiFileHashResult, MultiTextHashResult,
 };
+use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
 use crate::tasks::{
     CloseRequestDecision, ShutdownDrainResult, TaskProgressPayload, TaskRegistry,
     TaskRegistrySnapshot, TaskTokenGuard, TASK_PROGRESS_EVENT,
@@ -425,6 +427,15 @@ fn inspect_uuid(input: String) -> Result<UuidInspectResult, AppError> {
 }
 
 #[tauri::command]
+fn verify_jwt_hmac(
+    registry: State<'_, TaskRegistry>,
+    req: JwtHmacVerifyRequest,
+) -> Result<JwtHmacVerifyResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    verify_jwt_hmac_token(&req)
+}
+
+#[tauri::command]
 async fn inspect_beautifier_image(
     registry: State<'_, TaskRegistry>,
     path: String,
@@ -507,6 +518,7 @@ pub fn run() {
             codec_save_output,
             generate_uuids,
             inspect_uuid,
+            verify_jwt_hmac,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,

@@ -505,6 +505,55 @@ function serializeAst(
   }
 }
 
+export type LosslessJsonAstParseResult =
+  | {
+      status: "valid";
+      ast: JsonAstNode;
+      formatted: string;
+      hasPrecisionSensitiveNumbers: boolean;
+      duplicateKeyCount: number;
+    }
+  | {
+      status: "invalid";
+      error: JsonSyntaxErrorInfo;
+    };
+
+export function parseLosslessJsonAst(input: string, indentUnit = "  "): LosslessJsonAstParseResult {
+  try {
+    const parser = new LosslessJsonParser(input);
+    const ast = parser.parseRoot();
+    return {
+      status: "valid",
+      ast,
+      formatted: serializeAst(ast, indentUnit, false),
+      hasPrecisionSensitiveNumbers: parser.hasPrecisionSensitiveNumbers,
+      duplicateKeyCount: parser.duplicateKeyCount,
+    };
+  } catch (err) {
+    if (err instanceof JsonSyntaxException) {
+      const { line, column } = computeLineAndColumn(input, err.offset);
+      return {
+        status: "invalid",
+        error: {
+          message: err.message,
+          offset: err.offset,
+          line,
+          column,
+        },
+      };
+    }
+    return {
+      status: "invalid",
+      error: {
+        message: err instanceof Error ? err.message : "Invalid JSON",
+        offset: 0,
+        line: 1,
+        column: 1,
+      },
+    };
+  }
+}
+
 export function processJsonText(input: string, options: JsonFormatOptions): JsonProcessResult {
   if (input.trim().length === 0) {
     return { status: "empty" };

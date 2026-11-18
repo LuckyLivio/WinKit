@@ -4,6 +4,7 @@ import { CaseConverterWorkspace } from "../tools/case-converter/CaseConverterWor
 import { CodecWorkspace } from "../tools/codec/CodecWorkspace";
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
+import { JwtDecoderWorkspace } from "../tools/jwt-decoder/JwtDecoderWorkspace";
 import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
 import { TimestampConverterWorkspace } from "../tools/timestamp-converter/TimestampConverterWorkspace";
 import { UuidGeneratorWorkspace } from "../tools/uuid-generator/UuidGeneratorWorkspace";
@@ -16,7 +17,11 @@ export type ToolIconName =
   | "binary"
   | "shield-check"
   | "fingerprint"
+  | "key-round"
   | "clock"
+  | "git-compare"
+  | "regex"
+  | "scan-text"
   | "file-text"
   | "case-sensitive"
   | "frame";
@@ -146,6 +151,38 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "fingerprint",
     implementationStatus: "full",
     component: UuidGeneratorWorkspace,
+  },
+  {
+    id: "D05",
+    category: "developer",
+    name: {
+      "zh-CN": "JWT 本地解码与验签",
+      "en-US": "JWT Decoder & HMAC Verifier",
+    },
+    summary: {
+      "zh-CN":
+        "离线解析 JWS/JWT 头部、载荷（大整数无损保真）与时间声明，支持原始片段 HS256 / HS384 / HS512 本地密钥验签",
+      "en-US":
+        "Offline JWS/JWT header, lossless claims, and NumericDate inspector with local HS256, HS384, and HS512 HMAC verification",
+    },
+    keywords: [
+      "jwt",
+      "jws",
+      "jwe",
+      "token",
+      "bearer",
+      "hmac",
+      "hs256",
+      "hs384",
+      "hs512",
+      "claims",
+      "令牌",
+      "解码",
+      "验签",
+    ],
+    icon: "key-round",
+    implementationStatus: "partial",
+    component: JwtDecoderWorkspace,
   },
   {
     id: "D06",

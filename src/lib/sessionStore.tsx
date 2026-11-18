@@ -6,6 +6,7 @@ import type {
   CodecTransformResponse,
 } from "../tools/codec/codecEngine";
 import type { AlgorithmDigestEntry, HashAlgorithm } from "../tools/hash-generator/hashUtils";
+import type { JwtExpectedAlgChoice, JwtSecretEncoding } from "../tools/jwt-decoder/jwtEngine";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -58,6 +59,13 @@ export interface UuidSessionState {
   hyphens: boolean;
   generatedList: string[];
   inspectInput: string;
+}
+
+export interface JwtSessionState {
+  tokenInput: string;
+  secretInput: string;
+  secretEncoding: JwtSecretEncoding;
+  expectedAlgorithm: JwtExpectedAlgChoice;
 }
 
 export type TimestampUnit = "s" | "ms" | "us" | "ns";
@@ -116,6 +124,7 @@ export interface SessionWorkspaces {
   hash: HashSessionState;
   codec: CodecSessionState;
   uuid: UuidSessionState;
+  jwt: JwtSessionState;
   timestamp: TimestampSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
@@ -169,6 +178,12 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     generatedList: [],
     inspectInput: "",
   },
+  jwt: {
+    tokenInput: "",
+    secretInput: "",
+    secretEncoding: "utf8",
+    expectedAlgorithm: "auto",
+  },
   timestamp: {
     mode: "to_date",
     timestampInput: "",
@@ -206,6 +221,7 @@ interface SessionStoreContextValue {
   updateHashSession: (patch: Partial<HashSessionState>) => void;
   updateCodecSession: (patch: Partial<CodecSessionState>) => void;
   updateUuidSession: (patch: Partial<UuidSessionState>) => void;
+  updateJwtSession: (patch: Partial<JwtSessionState>) => void;
   updateTimestampSession: (patch: Partial<TimestampSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
@@ -234,6 +250,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, uuid: { ...prev.uuid, ...patch } }));
   };
 
+  const updateJwtSession = (patch: Partial<JwtSessionState>) => {
+    setSession((prev) => ({ ...prev, jwt: { ...prev.jwt, ...patch } }));
+  };
+
   const updateTimestampSession = (patch: Partial<TimestampSessionState>) => {
     setSession((prev) => ({ ...prev, timestamp: { ...prev.timestamp, ...patch } }));
   };
@@ -258,6 +278,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateHashSession,
         updateCodecSession,
         updateUuidSession,
+        updateJwtSession,
         updateTimestampSession,
         updateWordCounterSession,
         updateCaseConverterSession,

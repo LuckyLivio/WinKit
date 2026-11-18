@@ -23,6 +23,7 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 | `md-5`                 | MIT OR Apache-2.0 | Pure-Rust RFC 1321 MD5 compatibility checksums                |
 | `sha1`                 | MIT OR Apache-2.0 | Pure-Rust SHA-1 compatibility checksums                       |
 | `sha2`                 | Apache-2.0 OR MIT | Pure-Rust SHA-256, SHA-384, and SHA-512 cryptographic digests |
+| `hmac`, `subtle`       | MIT OR Apache-2.0 | Constant-time RFC 2104 HMAC-SHA256/384/512 verification       |
 | `uuid`                 | Apache-2.0 OR MIT | RFC 9562 UUID v4 and time-ordered v7 generation via OS CSPRNG |
 | `image`                | Apache-2.0 OR MIT | Pure-Rust PNG and JPEG decoding and encoding                  |
 | `base64`               | Apache-2.0 OR MIT | RFC 4648 Standard and URL-safe Base64 encoding and decoding   |

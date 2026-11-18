@@ -24,6 +24,11 @@ import {
   type UuidGenVersion,
   type UuidInspectResult,
 } from "../tools/uuid-generator/uuidEngine";
+import {
+  verifyJwtHmacClientFallback,
+  type JwtHmacVerifyRequest,
+  type JwtHmacVerifyResponse,
+} from "../tools/jwt-decoder/jwtEngine";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -451,6 +456,14 @@ export async function inspectUuidString(input: string): Promise<UuidInspectResul
     return inspectUuidClientFallback(input);
   }
   return invoke<UuidInspectResult>("inspect_uuid", { input });
+}
+
+export async function verifyJwtHmac(req: JwtHmacVerifyRequest): Promise<JwtHmacVerifyResponse> {
+  assertFrontendNotShuttingDown();
+  if (!isTauriDesktop()) {
+    return verifyJwtHmacClientFallback(req);
+  }
+  return invoke<JwtHmacVerifyResponse>("verify_jwt_hmac", { req });
 }
 
 export async function inspectBeautifierSourceImage(path: string): Promise<SourceImageInspection> {

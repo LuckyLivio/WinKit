@@ -342,6 +342,76 @@ export interface Messages {
     overwriteConfirmAccept: string;
     cancel: string;
   };
+  jwtTool: {
+    scopeNote: string;
+    tokenInputLabel: string;
+    tokenPlaceholder: string;
+    sampleHs256Btn: string;
+    clearBtn: string;
+    envelopeStrippedNote: (bearer: boolean, quotes: boolean) => string;
+    statusSectionLabel: string;
+    dimStructureLabel: string;
+    dimSignatureLabel: string;
+    dimTimeLabel: string;
+    structEmpty: string;
+    structValidJws: (alg: string) => string;
+    structJweEncrypted: string;
+    structInvalid: string;
+    jweUnsupportedBody: string;
+    sigUnverified: string;
+    sigVerifying: string;
+    sigValid: (alg: string, keyBytes: number) => string;
+    sigInvalid: string;
+    sigAlgMismatch: (headerAlg: string, expectedAlg: string) => string;
+    sigUnsignedNone: string;
+    sigUnsupportedAlg: (alg: string) => string;
+    sigUnsupportedCrit: (crit: string) => string;
+    sigInvalidBase64Key: string;
+    nonAuthDisclaimer: string;
+    remoteKeyHintWarning: string;
+    unsecuredNonEmptySigWarning: string;
+    precisionNote: string;
+    verifierSectionTitle: string;
+    expectedAlgLabel: string;
+    expectedAlgAuto: string;
+    secretModeLabel: string;
+    secretModeUtf8: string;
+    secretModeBase64: string;
+    secretInputLabel: string;
+    secretPlaceholderUtf8: string;
+    secretPlaceholderBase64: string;
+    showSecretBtn: string;
+    hideSecretBtn: string;
+    timeActive: string;
+    timeExpired: string;
+    timeNotYetValid: string;
+    timeNoWindow: string;
+    timeInvalidClaim: string;
+    evaluatedAtLabel: string;
+    headerSectionTitle: string;
+    payloadSectionTitle: string;
+    rawSegmentsSectionTitle: string;
+    registeredClaimsTitle: string;
+    copyHeaderJsonBtn: string;
+    copyPayloadJsonBtn: string;
+    copyRawHeaderBtn: string;
+    copyRawPayloadBtn: string;
+    copyRawSigBtn: string;
+    copiedBadge: string;
+    claimMissing: string;
+    claimInvalidType: (raw: string) => string;
+    claimOutOfRange: (raw: string) => string;
+    claimZeroEpochBadge: string;
+    claimNames: {
+      iss: string;
+      sub: string;
+      aud: string;
+      jti: string;
+      exp: string;
+      nbf: string;
+      iat: string;
+    };
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -734,6 +804,84 @@ export const MESSAGES: Record<Locale, Messages> = {
         `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖原图）？`,
       overwriteConfirmAccept: "确认覆盖",
       cancel: "取消",
+    },
+    jwtTool: {
+      scopeNote:
+        "离线解析三段式 JWS/JWT（大整数零损保真）与五段式 JWE 保护头；支持本地 HS256 / HS384 / HS512 原始片段 HMAC 验签（非对称算法 RS*/ES*/PS*/EdDSA 与 JWE 解密不在本轮支持范围）。",
+      tokenInputLabel: "JWT / JWS 令牌输入",
+      tokenPlaceholder:
+        "粘贴三段式 JWT（支持自动识别外层成对引号与 Bearer 前缀，绝不上传或写入历史）",
+      sampleHs256Btn: "填入 RFC 示例",
+      clearBtn: "清空令牌与密钥",
+      envelopeStrippedNote: (bearer, quotes) =>
+        `已自动剥离外层包装（${[bearer ? "Bearer 前缀" : "", quotes ? "成对引号" : ""].filter(Boolean).join("、")}），未改动令牌内部字符。`,
+      statusSectionLabel: "三项独立核验状态",
+      dimStructureLabel: "1. 结构与解码",
+      dimSignatureLabel: "2. 签名校验",
+      dimTimeLabel: "3. 时间声明核对",
+      structEmpty: "等待输入令牌",
+      structValidJws: (alg) => `三段式 JWS 解码成功（alg: ${alg}）`,
+      structJweEncrypted: "五段式加密 JWE（仅解析保护头，本轮不解密）",
+      structInvalid: "令牌结构或编码无效",
+      jweUnsupportedBody:
+        "检测到 5 段式 JWE 加密结构（Protected Header · Encrypted Key · IV · Ciphertext · Tag）。当前版本仅离线展示可读保护头，不支持本地密钥解密。",
+      sigUnverified: "签名未验证（输入密钥后校验）",
+      sigVerifying: "正在校验 HMAC…",
+      sigValid: (alg, keyBytes) => `签名有效（${alg}，密钥 ${keyBytes} 字节）`,
+      sigInvalid: "签名无效（HMAC 不匹配）",
+      sigAlgMismatch: (headerAlg, expectedAlg) =>
+        `算法不匹配（头部 ${headerAlg} ≠ 期望 ${expectedAlg}）`,
+      sigUnsignedNone: "未签名令牌（alg=none，无密码学签名）",
+      sigUnsupportedAlg: (alg) => `本轮不支持验签（alg: ${alg}）`,
+      sigUnsupportedCrit: (crit) => `拒绝验签：含未支持的关键扩展头 crit=${crit}`,
+      sigInvalidBase64Key: "密钥 Base64 / Base64url 格式无效",
+      nonAuthDisclaimer:
+        "说明：HMAC 签名匹配仅证明持有相同共享密钥且原始片段未被篡改，不代表业务权限有效或发行方受信任。",
+      remoteKeyHintWarning:
+        "安全提示：令牌头部包含 jku / x5u 远程密钥字段；WinKit 严格按离线文本展示，绝不发起任何网络请求。",
+      unsecuredNonEmptySigWarning:
+        "结构警告：头部声明 alg=none，但第 3 段非空（RFC 7515 要求无签名 JWS 第 3 段必须为空）。",
+      precisionNote: "检测到超出 IEEE 754 安全整数范围的数值声明，已按原始字面量无损展示。",
+      verifierSectionTitle: "本地 HMAC 验签（原始 header.payload 字节）",
+      expectedAlgLabel: "期望验签算法",
+      expectedAlgAuto: "按允许列表匹配头部（HS256/384/512）",
+      secretModeLabel: "密钥编码模式",
+      secretModeUtf8: "UTF-8 原始文本",
+      secretModeBase64: "Base64 / Base64url 字节",
+      secretInputLabel: "共享密钥（默认遮挡）",
+      secretPlaceholderUtf8: "输入 UTF-8 共享密钥以本地校验 HMAC 签名",
+      secretPlaceholderBase64: "输入 Base64 或 Base64url 编码密钥",
+      showSecretBtn: "显示密钥",
+      hideSecretBtn: "隐藏密钥",
+      timeActive: "当前处于有效时间窗口内",
+      timeExpired: "已过期（当前时刻 ≥ exp）",
+      timeNotYetValid: "尚未生效（当前时刻 < nbf）",
+      timeNoWindow: "未提供 exp / nbf 有效期边界",
+      timeInvalidClaim: "存在非法或越界的时间声明字段",
+      evaluatedAtLabel: "核对基准时刻",
+      headerSectionTitle: "Header（JOSE 头部 JSON）",
+      payloadSectionTitle: "Payload（Claims 载荷 JSON）",
+      rawSegmentsSectionTitle: "原始编码片段（验签输入基准）",
+      registeredClaimsTitle: "标准注册声明（RFC 7519）",
+      copyHeaderJsonBtn: "复制 Header",
+      copyPayloadJsonBtn: "复制 Payload",
+      copyRawHeaderBtn: "复制原始 Header 段",
+      copyRawPayloadBtn: "复制原始 Payload 段",
+      copyRawSigBtn: "复制原始签名段",
+      copiedBadge: "已复制",
+      claimMissing: "未提供该声明",
+      claimInvalidType: (raw) => `字段类型不合法（需为 NumericDate 秒数，实际：${raw}）`,
+      claimOutOfRange: (raw) => `超出可表示日期范围（原始值：${raw}）`,
+      claimZeroEpochBadge: "Unix 纪元零点 (0)",
+      claimNames: {
+        iss: "iss · 签发方 (Issuer)",
+        sub: "sub · 主体 (Subject)",
+        aud: "aud · 受众 (Audience)",
+        jti: "jti · 令牌 ID (JWT ID)",
+        exp: "exp · 过期时间 (Expiration)",
+        nbf: "nbf · 生效时间 (Not Before)",
+        iat: "iat · 签发时间 (Issued At)",
+      },
     },
   },
   "en-US": {
@@ -1135,6 +1283,85 @@ export const MESSAGES: Record<Locale, Messages> = {
         `"${path}" already exists. Replace this output file (original image will never be overwritten)?`,
       overwriteConfirmAccept: "Replace File",
       cancel: "Cancel",
+    },
+    jwtTool: {
+      scopeNote:
+        "Offline 3-part JWS/JWT decoder (lossless 64-bit numbers) and 5-part JWE header inspector with local HS256 / HS384 / HS512 HMAC verification over raw segments (asymmetric RS*/ES*/PS*/EdDSA and JWE decryption are out of scope in this phase).",
+      tokenInputLabel: "JWT / JWS Token Input",
+      tokenPlaceholder:
+        "Paste a 3-part JWT (outer quotes and 'Bearer ' prefix are recognized automatically; never uploaded or saved to history)",
+      sampleHs256Btn: "Load RFC Sample",
+      clearBtn: "Clear Token & Secret",
+      envelopeStrippedNote: (bearer, quotes) =>
+        `Stripped outer wrapper (${[bearer ? "Bearer prefix" : "", quotes ? "matching quotes" : ""].filter(Boolean).join(", ")}) without altering internal token characters.`,
+      statusSectionLabel: "Three Independent Inspection Dimensions",
+      dimStructureLabel: "1. Structure & Decode",
+      dimSignatureLabel: "2. Signature Verification",
+      dimTimeLabel: "3. Time Claims",
+      structEmpty: "Waiting for token input",
+      structValidJws: (alg) => `Valid 3-part JWS decoded (alg: ${alg})`,
+      structJweEncrypted: "5-part encrypted JWE (protected header only; decryption unsupported)",
+      structInvalid: "Invalid token structure or encoding",
+      jweUnsupportedBody:
+        "Detected a 5-segment encrypted JWE token (Protected Header · Encrypted Key · IV · Ciphertext · Tag). Decryption is not supported in this phase; the readable protected header is shown below.",
+      sigUnverified: "Signature unverified (enter secret to verify)",
+      sigVerifying: "Verifying HMAC…",
+      sigValid: (alg, keyBytes) => `Signature valid (${alg}, ${keyBytes}-byte key)`,
+      sigInvalid: "Signature invalid (HMAC mismatch)",
+      sigAlgMismatch: (headerAlg, expectedAlg) =>
+        `Algorithm mismatch (header ${headerAlg} ≠ expected ${expectedAlg})`,
+      sigUnsignedNone: "Unsigned token (alg=none — no cryptographic signature)",
+      sigUnsupportedAlg: (alg) => `Verification unsupported in current phase (alg: ${alg})`,
+      sigUnsupportedCrit: (crit) => `Rejected: unsupported critical JOSE extension crit=${crit}`,
+      sigInvalidBase64Key: "Invalid Base64 / Base64url secret key",
+      nonAuthDisclaimer:
+        "Note: A matching HMAC proves shared-secret possession over the raw segments only — it does not imply business authorization or issuer trust.",
+      remoteKeyHintWarning:
+        "Security note: Header includes jku / x5u key URL parameters; WinKit treats them strictly as inert text and never performs network fetches.",
+      unsecuredNonEmptySigWarning:
+        "Structure warning: Header declares alg=none, but segment 3 is non-empty (RFC 7515 requires an empty signature segment for unsecured JWS).",
+      precisionNote:
+        "Detected numeric claims exceeding IEEE 754 safe integers; formatted losslessly from raw JSON literals.",
+      verifierSectionTitle: "Local HMAC Verification (Exact header.payload Bytes)",
+      expectedAlgLabel: "Expected Algorithm",
+      expectedAlgAuto: "Match Header Allowlist (HS256/384/512)",
+      secretModeLabel: "Secret Encoding",
+      secretModeUtf8: "Raw UTF-8 Text",
+      secretModeBase64: "Base64 / Base64url Bytes",
+      secretInputLabel: "Shared Secret (Masked)",
+      secretPlaceholderUtf8: "Enter UTF-8 shared secret to verify HMAC locally",
+      secretPlaceholderBase64: "Enter Base64 or Base64url encoded secret",
+      showSecretBtn: "Show secret",
+      hideSecretBtn: "Hide secret",
+      timeActive: "Currently within valid time window",
+      timeExpired: "Expired (now ≥ exp)",
+      timeNotYetValid: "Not yet active (now < nbf)",
+      timeNoWindow: "No exp / nbf time window provided",
+      timeInvalidClaim: "Malformed or out-of-range time claim detected",
+      evaluatedAtLabel: "Evaluated at",
+      headerSectionTitle: "Header (JOSE JSON)",
+      payloadSectionTitle: "Payload (Claims JSON)",
+      rawSegmentsSectionTitle: "Raw Encoded Segments (Signing Input)",
+      registeredClaimsTitle: "Registered Claims (RFC 7519)",
+      copyHeaderJsonBtn: "Copy Header",
+      copyPayloadJsonBtn: "Copy Payload",
+      copyRawHeaderBtn: "Copy Raw Header",
+      copyRawPayloadBtn: "Copy Raw Payload",
+      copyRawSigBtn: "Copy Raw Signature",
+      copiedBadge: "Copied",
+      claimMissing: "Not provided",
+      claimInvalidType: (raw) => `Invalid type (expected NumericDate seconds, got: ${raw})`,
+      claimOutOfRange: (raw) => `Timestamp out of representable date range (raw: ${raw})`,
+      claimZeroEpochBadge: "Unix Epoch Zero (0)",
+      claimNames: {
+        iss: "iss · Issuer",
+        sub: "sub · Subject",
+        aud: "aud · Audience",
+        jti: "jti · JWT ID",
+        exp: "exp · Expiration Time",
+        nbf: "nbf · Not Before",
+        iat: "iat · Issued At",
+      },
     },
   },
 };

@@ -830,3 +830,111 @@
     grid-template-columns: minmax(0, 1fr) 256px;
   }
 }
+
+/* Phase 2B1 Tool Layout Primitives (Flat, Restrained, 1000x700 Responsive) */
+.status-strip-3col {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  min-width: 0;
+}
+
+.status-cell-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.status-cell-value {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.status-cell.is-ok {
+  background: var(--status-ok-bg);
+  border-color: transparent;
+}
+.status-cell.is-ok .status-cell-value {
+  color: var(--status-ok);
+}
+
+.status-cell.is-warn {
+  background: var(--status-warn-bg);
+  border-color: transparent;
+}
+.status-cell.is-warn .status-cell-value {
+  color: var(--status-warn);
+}
+
+.status-cell.is-err {
+  background: var(--status-err-bg);
+  border-color: transparent;
+}
+.status-cell.is-err .status-cell-value {
+  color: var(--status-err);
+}
+
+.mono-block {
+  margin: 0;
+  padding: 12px;
+  font-family: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 19px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  overflow-x: auto;
+}
+
+.kv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.kv-table th,
+.kv-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.kv-table tr:last-child th,
+.kv-table tr:last-child td {
+  border-bottom: none;
+}
+
+.kv-table th {
+  width: 210px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mono-inline {
+  font-family: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+@media (max-width: 1060px) {
+  .status-strip-3col {
+    grid-template-columns: 1fr;
+  }
+  .kv-table th {
+    width: 160px;
+  }
+}
