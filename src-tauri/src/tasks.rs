@@ -135,7 +135,9 @@ impl TaskRegistry {
         let mut inner = lock.lock().expect("task registry mutex poisoned");
         inner.shutting_down = true;
         for entry in inner.active.values() {
-            entry.cancel_flag.store(true, Ordering::SeqCst);
+            if entry.interruptible {
+                entry.cancel_flag.store(true, Ordering::SeqCst);
+            }
         }
 
         let deadline = Instant::now() + timeout;
@@ -308,5 +310,30 @@ mod tests {
 
         // After timeout, shutting_down resets to false so user can still interact or retry
         assert!(!reg.snapshot().shutting_down);
+    }
+
+    #[test]
+    fn shutdown_drain_cancels_interruptible_tasks_while_letting_uninterruptible_writes_finish() {
+        let reg = TaskRegistry::default();
+        let read_guard = reg
+            .register_checked("stream-hash", "D03", true)
+            .expect("register interruptible");
+        let write_guard = reg
+            .register_checked("atomic-export", "I03", false)
+            .expect("register uninterruptible write");
+
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(35));
+            // Interruptible task receives cancellation, whereas uninterruptible short write does not
+            assert!(read_guard.is_cancelled());
+            assert!(!write_guard.is_cancelled());
+            drop(read_guard);
+            thread::sleep(Duration::from_millis(25));
+            drop(write_guard);
+        });
+
+        let res = reg.begin_shutdown_and_drain(Duration::from_secs(2));
+        assert!(res.ready_to_close);
+        handle.join().expect("joined");
     }
 }

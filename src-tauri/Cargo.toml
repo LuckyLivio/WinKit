@@ -1,6 +1,6 @@
 [package]
 name = "winkit"
-version = "0.1.1"
+version = "0.2.0"
 description = "WinKit local-first Windows desktop utility workbench"
 authors = ["Livio <liviow@163.com>"]
 edition = "2021"
