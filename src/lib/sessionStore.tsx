@@ -93,6 +93,15 @@ export interface DiffSessionState {
   inputsCollapsed: boolean;
 }
 
+export interface RegexSessionState {
+  pattern: string;
+  flags: string;
+  testText: string;
+  sourceFileName: string | null;
+  enableReplace: boolean;
+  replacementTemplate: string;
+}
+
 export interface WordCounterSessionState {
   textInput: string;
 }
@@ -141,6 +150,7 @@ export interface SessionWorkspaces {
   jwt: JwtSessionState;
   timestamp: TimestampSessionState;
   diff: DiffSessionState;
+  regex: RegexSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
@@ -220,6 +230,14 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     dropTargetSide: "left",
     inputsCollapsed: false,
   },
+  regex: {
+    pattern: "",
+    flags: "gm",
+    testText: "",
+    sourceFileName: null,
+    enableReplace: false,
+    replacementTemplate: "",
+  },
   wordCounter: {
     textInput: "",
   },
@@ -252,6 +270,7 @@ interface SessionStoreContextValue {
   updateJwtSession: (patch: Partial<JwtSessionState>) => void;
   updateTimestampSession: (patch: Partial<TimestampSessionState>) => void;
   updateDiffSession: (patch: Partial<DiffSessionState>) => void;
+  updateRegexSession: (patch: Partial<RegexSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
@@ -291,6 +310,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, diff: { ...prev.diff, ...patch } }));
   };
 
+  const updateRegexSession = (patch: Partial<RegexSessionState>) => {
+    setSession((prev) => ({ ...prev, regex: { ...prev.regex, ...patch } }));
+  };
+
   const updateWordCounterSession = (patch: Partial<WordCounterSessionState>) => {
     setSession((prev) => ({ ...prev, wordCounter: { ...prev.wordCounter, ...patch } }));
   };
@@ -314,6 +337,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateJwtSession,
         updateTimestampSession,
         updateDiffSession,
+        updateRegexSession,
         updateWordCounterSession,
         updateCaseConverterSession,
         updateBeautifierSession,

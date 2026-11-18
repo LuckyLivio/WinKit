@@ -6,6 +6,7 @@ import { DiffCheckerWorkspace } from "../tools/diff-checker/DiffCheckerWorkspace
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
 import { JwtDecoderWorkspace } from "../tools/jwt-decoder/JwtDecoderWorkspace";
+import { RegexTesterWorkspace } from "../tools/regex-tester/RegexTesterWorkspace";
 import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
 import { TimestampConverterWorkspace } from "../tools/timestamp-converter/TimestampConverterWorkspace";
 import { UuidGeneratorWorkspace } from "../tools/uuid-generator/UuidGeneratorWorkspace";
@@ -244,6 +245,37 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "git-compare",
     implementationStatus: "partial",
     component: DiffCheckerWorkspace,
+  },
+  {
+    id: "D08",
+    category: "developer",
+    name: {
+      "zh-CN": "正则表达式测试",
+      "en-US": "Regex Tester & Replacer",
+    },
+    summary: {
+      "zh-CN":
+        "基于独立 Worker 隔离与 2 秒硬终止预算的 ECMAScript 正则匹配高亮、命名捕获组与替换预览",
+      "en-US":
+        "Worker-isolated ECMAScript RegExp tester with 2-second preemptive timeout, live match highlights, capture groups, and replacement preview",
+    },
+    keywords: [
+      "regex",
+      "regexp",
+      "regular",
+      "expression",
+      "match",
+      "capture",
+      "replace",
+      "ecmascript",
+      "正则",
+      "匹配",
+      "捕获组",
+      "替换",
+    ],
+    icon: "regex",
+    implementationStatus: "partial",
+    component: RegexTesterWorkspace,
   },
   {
     id: "T08",

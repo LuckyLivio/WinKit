@@ -456,6 +456,48 @@ export interface Messages {
     bomBadge: string;
     emptyDiffHint: string;
   };
+  regexTool: {
+    engineBadge: string;
+    scopeNote: string;
+    patternLabel: string;
+    patternPlaceholder: string;
+    flagsLabel: string;
+    flagsInputAria: string;
+    testTextLabel: string;
+    testTextPlaceholder: string;
+    openTextFileBtn: string;
+    stopWorkerBtn: string;
+    clearBtn: string;
+    enableReplaceLabel: string;
+    replacementLabel: string;
+    replacementPlaceholder: string;
+    replacementSyntaxHint: string;
+    offsetUnitNote: string;
+    statusEmptyPattern: string;
+    statusRunning: string;
+    statusInvalidRegex: (msg: string) => string;
+    statusTimeout: (ms: number) => string;
+    statusCancelled: string;
+    statusWorkerError: (msg: string) => string;
+    statusNoMatch: (ms: number) => string;
+    statusMatched: (count: number, ms: number, truncated: boolean) => string;
+    matchesTruncatedWarn: (max: number) => string;
+    highlightTruncatedWarn: (max: number) => string;
+    replacePreviewTruncatedWarn: (shown: number, full: number) => string;
+    highlightPaneTitle: string;
+    matchesPaneTitle: string;
+    replacementPaneTitle: string;
+    copyMatchesBtn: string;
+    copyReplacementBtn: string;
+    copiedBadge: string;
+    colMatchNum: string;
+    colMatchText: string;
+    colUtf16Range: string;
+    colLineCol: string;
+    colCaptures: string;
+    zeroLengthBadge: string;
+    unmatchedGroupBadge: string;
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -977,6 +1019,55 @@ export const MESSAGES: Record<Locale, Messages> = {
       noEofNewlineBadge: "末尾无换行",
       bomBadge: "UTF-8 BOM",
       emptyDiffHint: "两侧均为空文本（0 行）。输入或打开两个文本文件后在此查看行级与词级差异。",
+    },
+    regexTool: {
+      engineBadge: "引擎：ECMAScript / JavaScript RegExp（独立 Worker 隔离）",
+      scopeNote:
+        "全部编译、匹配与替换均在独立 Web Worker 中执行，主线程设 2 秒超时硬终止（防灾难性回溯卡死）。注意与参考版 ICU 引擎差异：不支持 ICU x 自由空白模式，命名捕获替换语法为 $<name>。",
+      patternLabel: "正则表达式 (Pattern)",
+      patternPlaceholder: "例如：(?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2})",
+      flagsLabel: "修饰符 (Flags)",
+      flagsInputAria: "修饰符字符串",
+      testTextLabel: "测试文本（上限 2 MB，不修改原文件）",
+      testTextPlaceholder: "在此输入或打开本地 UTF-8 文本以测试匹配与替换…",
+      openTextFileBtn: "打开文本文件…",
+      stopWorkerBtn: "中止当前计算",
+      clearBtn: "清空",
+      enableReplaceLabel: "启用替换预览",
+      replacementLabel: "替换模板 (Replacement)",
+      replacementPlaceholder: "例如：$<year>/$<month>/$<day>（支持 $&、$1、$<name>、$$）",
+      replacementSyntaxHint:
+        "JS 替换语法：$1..$99 编号组 · $<name> 命名组 · $& 整段匹配 · $` 前缀 · $' 后缀 · $$ 字面量 $",
+      offsetUnitNote:
+        "位置口径：偏移为 0 基 UTF-16 代码单元区间 [start, end)；行列为 1 基（UTF-16 列偏移）。",
+      statusEmptyPattern: "输入正则表达式后开始匹配。",
+      statusRunning: "正在独立 Worker 中执行正则（2000 ms 执行预算）…",
+      statusInvalidRegex: (msg) => `非法表达式或修饰符组合：${msg}`,
+      statusTimeout: (ms) =>
+        `执行已超过 ${ms} ms 安全预算，已强制终止后台 Worker！界面保持正常响应，请简化回溯量词后重试。`,
+      statusCancelled: "已取消上一次正则计算。",
+      statusWorkerError: (msg) => `后台 Worker 异常：${msg}`,
+      statusNoMatch: (ms) => `无匹配项（耗时 ${ms} ms）。`,
+      statusMatched: (count, ms, truncated) =>
+        `共命中 ${count}${truncated ? "+" : ""} 处匹配（耗时 ${ms} ms）。`,
+      matchesTruncatedWarn: (max) => `匹配数量超过单次收集上限（${max} 条），后续匹配已停止收集。`,
+      highlightTruncatedWarn: (max) =>
+        `为保证界面流畅，高亮视图仅渲染前 ${max} 处匹配，完整已收集项见右侧匹配表。`,
+      replacePreviewTruncatedWarn: (shown, full) =>
+        `界面预览仅展示前 ${shown.toLocaleString()} 个字符（完整结果共 ${full.toLocaleString()} 个 UTF-16 单元，“复制替换结果”将复制完整文本）。`,
+      highlightPaneTitle: "原文匹配高亮预览",
+      matchesPaneTitle: "匹配详情与捕获组",
+      replacementPaneTitle: "替换结果预览（不改动原文件）",
+      copyMatchesBtn: "复制匹配项",
+      copyReplacementBtn: "复制完整替换结果",
+      copiedBadge: "已复制",
+      colMatchNum: "#",
+      colMatchText: "匹配文本",
+      colUtf16Range: "UTF-16 [起, 止)",
+      colLineCol: "行 : 列",
+      colCaptures: "编号与命名捕获组",
+      zeroLengthBadge: "零宽匹配",
+      unmatchedGroupBadge: "未参与匹配",
     },
   },
   "en-US": {
@@ -1509,6 +1600,56 @@ export const MESSAGES: Record<Locale, Messages> = {
       bomBadge: "UTF-8 BOM",
       emptyDiffHint:
         "Both sides are empty (0 lines). Paste text or open two UTF-8 files to inspect line and word differences.",
+    },
+    regexTool: {
+      engineBadge: "Engine: ECMAScript / JavaScript RegExp (Worker-Isolated)",
+      scopeNote:
+        "Compile, match, and replace run inside a dedicated Web Worker with a strict 2000 ms main-thread termination budget. Engine differences vs. ICU: no ICU 'x' free-spacing flag; named group replacement uses $<name>.",
+      patternLabel: "Regular Expression (Pattern)",
+      patternPlaceholder: "e.g. (?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2})",
+      flagsLabel: "Flags",
+      flagsInputAria: "RegExp flags string",
+      testTextLabel: "Test Text (Max 2 MB, never modifies source file)",
+      testTextPlaceholder:
+        "Paste text or open a local UTF-8 file to test matching and replacement…",
+      openTextFileBtn: "Open Text File…",
+      stopWorkerBtn: "Stop Worker",
+      clearBtn: "Clear",
+      enableReplaceLabel: "Enable Replacement Preview",
+      replacementLabel: "Replacement Template",
+      replacementPlaceholder: "e.g. $<year>/$<month>/$<day> ($&, $1, $<name>, $$)",
+      replacementSyntaxHint:
+        "JS replacement tokens: $1..$99 numbered · $<name> named · $& full match · $` before · $' after · $$ literal $",
+      offsetUnitNote:
+        "Offset units: 0-based UTF-16 code-unit intervals [start, end); 1-based line and UTF-16 column.",
+      statusEmptyPattern: "Enter a regular expression pattern to evaluate.",
+      statusRunning: "Evaluating inside dedicated Worker (2000 ms budget)…",
+      statusInvalidRegex: (msg) => `Invalid pattern or flag combination: ${msg}`,
+      statusTimeout: (ms) =>
+        `Execution exceeded ${ms} ms budget — dedicated Worker was terminated! UI remains responsive; simplify nested quantifiers and retry.`,
+      statusCancelled: "Previous regex evaluation was cancelled.",
+      statusWorkerError: (msg) => `Worker error: ${msg}`,
+      statusNoMatch: (ms) => `0 matches (${ms} ms).`,
+      statusMatched: (count, ms, truncated) =>
+        `${count}${truncated ? "+" : ""} match${count === 1 ? "" : "es"} found (${ms} ms).`,
+      matchesTruncatedWarn: (max) => `Match collection stopped at the ${max}-match safety cap.`,
+      highlightTruncatedWarn: (max) =>
+        `Highlight preview renders the first ${max} matches to keep scrolling smooth; all collected matches remain in the table.`,
+      replacePreviewTruncatedWarn: (shown, full) =>
+        `Preview shows the first ${shown.toLocaleString()} characters (${full.toLocaleString()} total UTF-16 units; 'Copy Full Replacement' copies the complete output).`,
+      highlightPaneTitle: "Match Highlight Preview",
+      matchesPaneTitle: "Matches & Capture Groups",
+      replacementPaneTitle: "Replacement Preview (Source Untouched)",
+      copyMatchesBtn: "Copy Matches",
+      copyReplacementBtn: "Copy Full Replacement",
+      copiedBadge: "Copied",
+      colMatchNum: "#",
+      colMatchText: "Match",
+      colUtf16Range: "UTF-16 [s, e)",
+      colLineCol: "Line : Col",
+      colCaptures: "Numbered & Named Captures",
+      zeroLengthBadge: "zero-length",
+      unmatchedGroupBadge: "unmatched",
     },
   },
 };

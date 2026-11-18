@@ -1035,3 +1035,47 @@
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+/* D08 Regex Highlighting & Match Table */
+.regex-highlight-mark {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.regex-zero-mark {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  vertical-align: middle;
+  background: var(--accent);
+  margin: 0 1px;
+}
+
+.flag-pill-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.flag-pill {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.flag-pill[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
