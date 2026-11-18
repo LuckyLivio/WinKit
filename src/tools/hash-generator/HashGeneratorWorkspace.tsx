@@ -1,19 +1,26 @@
-import { Check, Copy, Eraser, FolderOpen, Play, Square } from "lucide-react";
+import { AlertTriangle, Check, Copy, Eraser, FolderOpen, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n/I18nContext";
 import { useSessionStore } from "../../lib/sessionStore";
 import {
   bindDisposableListener,
   cancelBackendTask,
-  computeFileSha256,
-  computeTextSha256,
+  computeFileHashes,
+  computeTextHashes,
   formatLocalizedError,
   parseBackendError,
   pickSingleFile,
   subscribeFileDrop,
   subscribeTaskProgress,
 } from "../../lib/tauriBridge";
-import { compareSha256Digest, formatByteSize, utf8ByteLength } from "./hashUtils";
+import {
+  ALL_HASH_ALGORITHMS,
+  compareMultiDigests,
+  formatByteSize,
+  isLegacyCompatAlgorithm,
+  utf8ByteLength,
+  type HashAlgorithm,
+} from "./hashUtils";
 
 let hashTaskSeq = 0;
 
@@ -22,11 +29,13 @@ export function HashGeneratorWorkspace() {
   const { session, updateHashSession } = useSessionStore();
   const {
     mode,
+    selectedAlgorithms,
     textInput,
     filePath,
     fileName,
     fileSize,
-    digestHex,
+    digests,
+    needsRecompute,
     uppercase,
     expectedHash,
     status,
@@ -36,21 +45,31 @@ export function HashGeneratorWorkspace() {
 
   const activeTaskIdRef = useRef<string | null>(null);
   const textReqSeqRef = useRef(0);
-  const [copied, setCopied] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
 
   const liveTextBytes = useMemo(() => utf8ByteLength(textInput), [textInput]);
 
-  const formattedDigest = useMemo(() => {
-    if (!digestHex || status !== "completed") {
-      return "";
+  const visibleDigests = useMemo(() => {
+    if (!digests || status !== "completed" || needsRecompute) {
+      return [];
     }
-    return uppercase ? digestHex.toUpperCase() : digestHex.toLowerCase();
-  }, [digestHex, status, uppercase]);
+    return digests
+      .filter((d) => selectedAlgorithms.includes(d.algorithm))
+      .map((d) => ({
+        ...d,
+        formatted: uppercase ? d.digestHex.toUpperCase() : d.digestHex.toLowerCase(),
+      }));
+  }, [digests, needsRecompute, selectedAlgorithms, status, uppercase]);
 
-  const compareState = useMemo(
-    () => compareSha256Digest(status === "completed" ? digestHex : null, expectedHash),
-    [digestHex, expectedHash, status],
+  const compareResult = useMemo(
+    () =>
+      compareMultiDigests(
+        status === "completed" && !needsRecompute ? digests : null,
+        selectedAlgorithms,
+        expectedHash,
+      ),
+    [digests, expectedHash, needsRecompute, selectedAlgorithms, status],
   );
 
   // Listen to backend task progress events for the active file hash task
@@ -74,13 +93,14 @@ export function HashGeneratorWorkspace() {
   }, [fileSize, updateHashSession]);
 
   const runTextHash = useCallback(
-    async (value: string) => {
+    async (value: string, algs: readonly HashAlgorithm[]) => {
       const seq = ++textReqSeqRef.current;
       try {
-        const res = await computeTextSha256(value);
+        const res = await computeTextHashes(value, algs);
         if (seq !== textReqSeqRef.current) return;
         updateHashSession({
-          digestHex: res.digestHex,
+          digests: res.digests,
+          needsRecompute: false,
           status: "completed",
           progressPercent: 100,
           errorMessage: null,
@@ -88,7 +108,8 @@ export function HashGeneratorWorkspace() {
       } catch (err) {
         if (seq !== textReqSeqRef.current) return;
         updateHashSession({
-          digestHex: null,
+          digests: null,
+          needsRecompute: false,
           status: "error",
           progressPercent: null,
           errorMessage: formatLocalizedError(err, t),
@@ -99,8 +120,7 @@ export function HashGeneratorWorkspace() {
   );
 
   const runFileHash = useCallback(
-    async (targetPath: string) => {
-      // Cancel any previous in-flight task first
+    async (targetPath: string, algs: readonly HashAlgorithm[]) => {
       if (activeTaskIdRef.current) {
         void cancelBackendTask(activeTaskIdRef.current);
       }
@@ -109,20 +129,20 @@ export function HashGeneratorWorkspace() {
       activeTaskIdRef.current = taskId;
       const baseName = targetPath.split(/[\\/]/).pop() ?? targetPath;
 
-      // Immediately clear previous digest so cancelled/failed runs NEVER display stale success
       updateHashSession({
         mode: "file",
         filePath: targetPath,
         fileName: baseName,
         fileSize: null,
-        digestHex: null,
+        digests: null,
+        needsRecompute: false,
         status: "running",
         progressPercent: 0,
         errorMessage: null,
       });
 
       try {
-        const result = await computeFileSha256(taskId, targetPath);
+        const result = await computeFileHashes(taskId, targetPath, algs);
         if (activeTaskIdRef.current !== taskId) {
           return;
         }
@@ -131,7 +151,8 @@ export function HashGeneratorWorkspace() {
           filePath: result.path,
           fileName: result.fileName,
           fileSize: result.byteLength,
-          digestHex: result.digestHex,
+          digests: result.digests,
+          needsRecompute: false,
           status: "completed",
           progressPercent: 100,
           errorMessage: null,
@@ -144,14 +165,16 @@ export function HashGeneratorWorkspace() {
         const parsed = parseBackendError(err);
         if (parsed.code === "TASK_CANCELLED") {
           updateHashSession({
-            digestHex: null,
+            digests: null,
+            needsRecompute: false,
             status: "cancelled",
             progressPercent: null,
             errorMessage: null,
           });
         } else {
           updateHashSession({
-            digestHex: null,
+            digests: null,
+            needsRecompute: false,
             status: "error",
             progressPercent: null,
             errorMessage: formatLocalizedError(err, t),
@@ -162,7 +185,6 @@ export function HashGeneratorWorkspace() {
     [t, updateHashSession],
   );
 
-  // Native Tauri drag-and-drop file support
   useEffect(() => {
     return bindDisposableListener(
       () =>
@@ -171,20 +193,48 @@ export function HashGeneratorWorkspace() {
           onDropPaths: (paths) => {
             const first = paths[0];
             if (first) {
-              void runFileHash(first);
+              void runFileHash(first, selectedAlgorithms);
             }
           },
         }),
       "hash-file-drop",
     );
-  }, [runFileHash]);
+  }, [runFileHash, selectedAlgorithms]);
+
+  const handleToggleAlgorithm = (alg: HashAlgorithm) => {
+    const exists = selectedAlgorithms.includes(alg);
+    if (exists && selectedAlgorithms.length === 1) {
+      return; // Keep at least one algorithm selected
+    }
+    const nextAlgs = ALL_HASH_ALGORITHMS.filter((item) =>
+      item === alg ? !exists : selectedAlgorithms.includes(item),
+    );
+
+    if (mode === "text") {
+      updateHashSession({ selectedAlgorithms: nextAlgs });
+      if (status === "completed" || textInput.length > 0) {
+        void runTextHash(textInput, nextAlgs);
+      }
+      return;
+    }
+
+    // File mode: invalidate / flag needsRecompute if newly selected algorithm hasn't been computed
+    const missingAny =
+      status === "completed" &&
+      (!digests || nextAlgs.some((reqAlg) => !digests.some((d) => d.algorithm === reqAlg)));
+
+    updateHashSession({
+      selectedAlgorithms: nextAlgs,
+      needsRecompute: missingAny,
+    });
+  };
 
   const handleSelectFile = async () => {
     const chosen = await pickSingleFile({
       title: t.hashTool.selectFileBtn,
     });
     if (chosen) {
-      await runFileHash(chosen);
+      await runFileHash(chosen, selectedAlgorithms);
     }
   };
 
@@ -202,25 +252,35 @@ export function HashGeneratorWorkspace() {
     }
     updateHashSession({
       mode: nextMode,
-      digestHex: null,
+      digests: null,
+      needsRecompute: false,
       status: "idle",
       progressPercent: null,
       errorMessage: null,
     });
     if (nextMode === "text" && textInput.length > 0) {
-      void runTextHash(textInput);
+      void runTextHash(textInput, selectedAlgorithms);
     }
   };
 
-  const handleCopy = async () => {
-    if (!formattedDigest) return;
+  const copyWithFeedback = async (key: string, text: string) => {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(formattedDigest);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 1600);
     } catch {
-      // Ignore clipboard permission failure silently
+      // Ignore clipboard failure silently
     }
+  };
+
+  const handleCopyAll = async () => {
+    if (visibleDigests.length === 0) return;
+    const payload =
+      visibleDigests.length === 1
+        ? visibleDigests[0]!.formatted
+        : visibleDigests.map((d) => `${d.algorithm}: ${d.formatted}`).join("\n");
+    await copyWithFeedback("all", payload);
   };
 
   const handleClear = () => {
@@ -228,13 +288,14 @@ export function HashGeneratorWorkspace() {
       void cancelBackendTask(activeTaskIdRef.current);
       activeTaskIdRef.current = null;
     }
-    setCopied(false);
+    setCopiedKey(null);
     updateHashSession({
       textInput: "",
       filePath: null,
       fileName: null,
       fileSize: null,
-      digestHex: null,
+      digests: null,
+      needsRecompute: false,
       expectedHash: "",
       status: "idle",
       progressPercent: null,
@@ -242,11 +303,13 @@ export function HashGeneratorWorkspace() {
     });
   };
 
+  const hasLegacySelected = selectedAlgorithms.some(isLegacyCompatAlgorithm);
+
   return (
     <div className="tool-workspace">
       <div className="tool-toolbar">
         <div className="tool-toolbar-group">
-          <div className="segmented" role="group" aria-label={t.hashTool.algorithmBadge}>
+          <div className="segmented" role="group" aria-label={t.hashTool.algorithmsLabel}>
             <button
               type="button"
               className={`segmented-btn ${mode === "text" ? "is-selected" : ""}`}
@@ -265,7 +328,28 @@ export function HashGeneratorWorkspace() {
             </button>
           </div>
 
-          <span className="badge mono">{t.hashTool.algorithmBadge}</span>
+          <div
+            className="segmented"
+            role="group"
+            aria-label={t.hashTool.algorithmsLabel}
+            style={{ flexWrap: "wrap" }}
+          >
+            {ALL_HASH_ALGORITHMS.map((alg) => {
+              const checked = selectedAlgorithms.includes(alg);
+              return (
+                <button
+                  key={alg}
+                  type="button"
+                  className={`segmented-btn mono ${checked ? "is-selected" : ""}`}
+                  aria-pressed={checked}
+                  disabled={status === "running"}
+                  onClick={() => handleToggleAlgorithm(alg)}
+                >
+                  {alg}
+                </button>
+              );
+            })}
+          </div>
 
           <label className="checkbox-label">
             <input
@@ -279,7 +363,11 @@ export function HashGeneratorWorkspace() {
 
         <div className="tool-toolbar-group">
           {mode === "text" ? (
-            <button type="button" className="btn" onClick={() => void runTextHash(textInput)}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void runTextHash(textInput, selectedAlgorithms)}
+            >
               <Play size={14} strokeWidth={1.75} aria-hidden="true" />
               <span>{t.hashTool.computeBtn}</span>
             </button>
@@ -295,7 +383,11 @@ export function HashGeneratorWorkspace() {
                 <span>{t.hashTool.selectFileBtn}</span>
               </button>
               {filePath && (
-                <button type="button" className="btn" onClick={() => void runFileHash(filePath)}>
+                <button
+                  type="button"
+                  className={needsRecompute ? "btn btn-primary" : "btn"}
+                  onClick={() => void runFileHash(filePath, selectedAlgorithms)}
+                >
                   <Play size={14} strokeWidth={1.75} aria-hidden="true" />
                   <span>{t.hashTool.computeBtn}</span>
                 </button>
@@ -306,15 +398,21 @@ export function HashGeneratorWorkspace() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={!formattedDigest}
-            onClick={handleCopy}
+            disabled={visibleDigests.length === 0}
+            onClick={() => void handleCopyAll()}
           >
-            {copied ? (
+            {copiedKey === "all" ? (
               <Check size={14} strokeWidth={1.75} aria-hidden="true" />
             ) : (
               <Copy size={14} strokeWidth={1.75} aria-hidden="true" />
             )}
-            <span>{copied ? t.hashTool.copiedBadge : t.hashTool.copyBtn}</span>
+            <span>
+              {copiedKey === "all"
+                ? t.hashTool.copiedBadge
+                : visibleDigests.length > 1
+                  ? t.hashTool.copyAllBtn
+                  : t.hashTool.copyBtn}
+            </span>
           </button>
 
           <button type="button" className="btn" onClick={handleClear}>
@@ -324,7 +422,25 @@ export function HashGeneratorWorkspace() {
         </div>
       </div>
 
-      <p className="field-hint">{t.hashTool.scopeNote}</p>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "center" }}>
+        <p className="field-hint" style={{ margin: 0 }}>
+          {t.hashTool.scopeNote}
+        </p>
+        {hasLegacySelected && (
+          <span
+            className="field-hint"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+              color: "var(--status-warn)",
+            }}
+          >
+            <AlertTriangle size={13} strokeWidth={1.75} aria-hidden="true" />
+            <span>MD5 / SHA-1：{t.hashTool.compatNote}</span>
+          </span>
+        )}
+      </div>
 
       <div className="split-panes">
         {/* Left Pane: Text or File Input */}
@@ -355,7 +471,7 @@ export function HashGeneratorWorkspace() {
                 onChange={(e) => {
                   const val = e.target.value;
                   updateHashSession({ textInput: val });
-                  void runTextHash(val);
+                  void runTextHash(val, selectedAlgorithms);
                 }}
               />
               <div
@@ -429,7 +545,7 @@ export function HashGeneratorWorkspace() {
                         width:
                           progressPercent !== null
                             ? `${Math.max(2, Math.min(100, progressPercent))}%`
-                            : "35%",
+                            : "10%",
                       }}
                     />
                   </div>
@@ -439,46 +555,55 @@ export function HashGeneratorWorkspace() {
           )}
         </div>
 
-        {/* Right Pane: Digest Result & Expected Checksum Verification */}
+        {/* Right Pane: Multi-Digest List & Expected Checksum Verification */}
         <div className="pane">
           <div className="pane-header">
-            <label htmlFor="hash-digest-output" className="pane-title">
-              {t.hashTool.digestLabel}
-            </label>
+            <span className="pane-title">{t.hashTool.digestLabel}</span>
             <span
               className={`badge ${
-                status === "completed"
-                  ? "badge-ok"
-                  : status === "error"
-                    ? "badge-err"
-                    : status === "cancelled"
-                      ? "badge-partial"
-                      : ""
+                needsRecompute
+                  ? "badge-partial"
+                  : status === "completed"
+                    ? "badge-ok"
+                    : status === "error"
+                      ? "badge-err"
+                      : status === "cancelled"
+                        ? "badge-partial"
+                        : ""
               }`}
             >
-              {status === "completed"
-                ? t.hashTool.statusCompleted
-                : status === "running"
-                  ? t.hashTool.statusRunning(
-                      progressPercent !== null ? `${progressPercent.toFixed(0)}%` : "…",
-                    )
-                  : status === "cancelled"
-                    ? t.hashTool.statusCancelled
-                    : status === "error"
-                      ? t.hashTool.statusError
-                      : t.hashTool.statusIdle}
+              {needsRecompute
+                ? t.hashTool.statusStale
+                : status === "completed"
+                  ? t.hashTool.statusCompleted(visibleDigests.length)
+                  : status === "running"
+                    ? t.hashTool.statusRunning(
+                        progressPercent !== null ? `${progressPercent.toFixed(0)}%` : "…",
+                      )
+                    : status === "cancelled"
+                      ? t.hashTool.statusCancelled
+                      : status === "error"
+                        ? t.hashTool.statusError
+                        : t.hashTool.statusIdle}
             </span>
           </div>
 
           <div
             style={{
-              padding: "16px",
+              padding: "14px 16px",
               display: "flex",
               flexDirection: "column",
-              gap: "16px",
+              gap: "12px",
               flex: 1,
+              overflowY: "auto",
             }}
           >
+            {needsRecompute && (
+              <div className="status-banner is-warn" role="status">
+                <span>{t.hashTool.staleNotice}</span>
+              </div>
+            )}
+
             {status === "error" && errorMessage && (
               <div className="status-banner is-err" role="alert">
                 <span>{errorMessage}</span>
@@ -491,24 +616,94 @@ export function HashGeneratorWorkspace() {
               </div>
             )}
 
-            <div className="field-stack">
-              <textarea
-                id="hash-digest-output"
-                className="code-editor"
+            {visibleDigests.length === 0 ? (
+              <div
                 style={{
-                  minHeight: "76px",
-                  flex: "none",
-                  border: "1px solid var(--border-subtle)",
+                  padding: "18px 12px",
                   borderRadius: "6px",
+                  border: "1px dashed var(--border-subtle)",
                   background: "var(--bg-subtle)",
+                  color: "var(--text-muted)",
+                  fontSize: "12.5px",
+                  textAlign: "center",
                 }}
-                readOnly
-                value={formattedDigest}
-                placeholder="—"
-              />
-            </div>
+              >
+                {t.hashTool.emptyDigestsHint}
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {visibleDigests.map((item) => {
+                  const rowKey = `alg-${item.algorithm}`;
+                  const isLegacy = isLegacyCompatAlgorithm(item.algorithm);
+                  return (
+                    <div
+                      key={item.algorithm}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: "6px",
+                        border: "1px solid var(--border-subtle)",
+                        background: "var(--bg-subtle)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "5px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "8px",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span className="badge mono">{item.algorithm}</span>
+                          <span className="field-hint mono">{item.hexLength} hex</span>
+                          {isLegacy && (
+                            <span className="badge badge-partial" title={t.hashTool.compatNote}>
+                              Compat
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ height: "26px", padding: "0 8px", fontSize: "12px" }}
+                          aria-label={`${t.hashTool.copyBtn} ${item.algorithm}`}
+                          onClick={() => void copyWithFeedback(rowKey, item.formatted)}
+                        >
+                          {copiedKey === rowKey ? (
+                            <Check size={12} strokeWidth={1.75} aria-hidden="true" />
+                          ) : (
+                            <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
+                          )}
+                          <span>
+                            {copiedKey === rowKey ? t.hashTool.copiedBadge : t.hashTool.copyBtn}
+                          </span>
+                        </button>
+                      </div>
+                      <div
+                        className="mono"
+                        data-testid={`digest-${item.algorithm}`}
+                        style={{
+                          fontSize: "12px",
+                          lineHeight: "18px",
+                          wordBreak: "break-all",
+                          overflowX: "auto",
+                          userSelect: "all",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        {item.formatted}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
-            <div className="field-stack">
+            <div className="field-stack" style={{ marginTop: "auto" }}>
               <label htmlFor="hash-compare-input" className="field-label">
                 {t.hashTool.compareLabel}
               </label>
@@ -522,20 +717,42 @@ export function HashGeneratorWorkspace() {
                 onChange={(e) => updateHashSession({ expectedHash: e.target.value })}
               />
 
-              {compareState === "idle" && <p className="field-hint">{t.hashTool.compareIdle}</p>}
-              {compareState === "invalid_format" && (
+              {compareResult.kind === "idle" && (
+                <p className="field-hint">{t.hashTool.compareIdle}</p>
+              )}
+              {compareResult.kind === "invalid_format" && (
                 <div className="status-banner is-warn" role="alert">
                   <span>{t.hashTool.compareInvalidFormat}</span>
                 </div>
               )}
-              {compareState === "match" && (
-                <div className="status-banner is-ok" role="status" aria-live="polite">
-                  <span>{t.hashTool.compareMatch}</span>
+              {compareResult.kind === "candidate_uncomputed" && (
+                <div className="status-banner is-warn" role="status">
+                  <span>
+                    {t.hashTool.compareUncomputedCandidate(
+                      compareResult.candidateAlgorithm,
+                      compareResult.hexLength,
+                    )}
+                  </span>
                 </div>
               )}
-              {compareState === "mismatch" && (
+              {compareResult.kind === "match" && (
+                <div className="status-banner is-ok" role="status" aria-live="polite">
+                  <span>
+                    {t.hashTool.compareMatch(
+                      compareResult.matchedAlgorithm,
+                      compareResult.hexLength,
+                    )}
+                  </span>
+                </div>
+              )}
+              {compareResult.kind === "mismatch" && (
                 <div className="status-banner is-err" role="alert">
-                  <span>{t.hashTool.compareMismatch}</span>
+                  <span>
+                    {t.hashTool.compareMismatch(
+                      compareResult.candidateAlgorithm,
+                      compareResult.hexLength,
+                    )}
+                  </span>
                 </div>
               )}
             </div>

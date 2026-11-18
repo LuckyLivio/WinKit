@@ -3,6 +3,20 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save, type DialogFilter } from "@tauri-apps/plugin-dialog";
 import type { Messages } from "../i18n/messages";
+import {
+  decodeStringClient,
+  encodeBytesClient,
+  transformTextClientFallback,
+  type CodecOptions,
+  type CodecTransformResponse,
+} from "../tools/codec/codecEngine";
+import {
+  ALGORITHM_HEX_LENGTHS,
+  ALL_HASH_ALGORITHMS,
+  computeMd5HexFallback,
+  type AlgorithmDigestEntry,
+  type HashAlgorithm,
+} from "../tools/hash-generator/hashUtils";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -28,19 +42,17 @@ export interface SavedFileInfo {
   byteLength: number;
 }
 
-export interface TextHashResult {
-  algorithm: string;
+export interface MultiTextHashResult {
   byteLength: number;
-  digestHex: string;
+  digests: AlgorithmDigestEntry[];
 }
 
-export interface FileHashResult {
+export interface MultiFileHashResult {
   taskId: string;
-  algorithm: string;
   path: string;
   fileName: string;
   byteLength: number;
-  digestHex: string;
+  digests: AlgorithmDigestEntry[];
 }
 
 export interface SourceImageInspection {
@@ -172,7 +184,7 @@ export function formatLocalizedError(err: unknown, messages: Messages): string {
   const key = parsed.code as keyof Messages["errors"];
   if (key in messages.errors && key !== "FALLBACK") {
     const base = messages.errors[key];
-    if (key === "SIZE_LIMIT_EXCEEDED" && parsed.message) {
+    if ((key === "SIZE_LIMIT_EXCEEDED" || key === "DECODE_FAILED") && parsed.message) {
       return `${base} (${parsed.message})`;
     }
     return base;
@@ -293,24 +305,96 @@ export async function abortGracefulShutdown(): Promise<void> {
   await invoke<void>("abort_graceful_shutdown");
 }
 
-export async function computeTextSha256(text: string): Promise<TextHashResult> {
+export async function computeTextHashes(
+  text: string,
+  algorithms: readonly HashAlgorithm[],
+): Promise<MultiTextHashResult> {
+  if (algorithms.length === 0) {
+    throw JSON.stringify({
+      code: "INVALID_PARAMETER",
+      message: "At least one hash algorithm must be selected.",
+    });
+  }
   if (!isTauriDesktop()) {
     const bytes = new TextEncoder().encode(text);
-    const buf = await globalThis.crypto.subtle.digest("SHA-256", bytes);
-    const digestHex = Array.from(new Uint8Array(buf))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    const ordered = ALL_HASH_ALGORITHMS.filter((alg) => algorithms.includes(alg));
+    const digests: AlgorithmDigestEntry[] = [];
+    for (const alg of ordered) {
+      if (alg === "MD5") {
+        digests.push({
+          algorithm: "MD5",
+          hexLength: ALGORITHM_HEX_LENGTHS.MD5,
+          digestHex: computeMd5HexFallback(bytes),
+        });
+      } else {
+        const buf = await globalThis.crypto.subtle.digest(alg, bytes);
+        const digestHex = Array.from(new Uint8Array(buf))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        digests.push({
+          algorithm: alg,
+          hexLength: ALGORITHM_HEX_LENGTHS[alg],
+          digestHex,
+        });
+      }
+    }
     return {
-      algorithm: "SHA-256",
       byteLength: bytes.byteLength,
-      digestHex,
+      digests,
     };
   }
-  return invoke<TextHashResult>("hash_text_sha256", { text });
+  return invoke<MultiTextHashResult>("hash_text_multi", { text, algorithms });
 }
 
-export async function computeFileSha256(taskId: string, path: string): Promise<FileHashResult> {
-  return invoke<FileHashResult>("hash_file_sha256", { taskId, path });
+export async function computeFileHashes(
+  taskId: string,
+  path: string,
+  algorithms: readonly HashAlgorithm[],
+): Promise<MultiFileHashResult> {
+  return invoke<MultiFileHashResult>("hash_file_multi", { taskId, path, algorithms });
+}
+
+export async function codecTransformText(
+  text: string,
+  options: CodecOptions,
+): Promise<CodecTransformResponse> {
+  if (!isTauriDesktop()) {
+    return transformTextClientFallback(text, options);
+  }
+  return invoke<CodecTransformResponse>("codec_transform_text", { text, options });
+}
+
+export async function codecTransformFile(
+  path: string,
+  options: CodecOptions,
+): Promise<CodecTransformResponse> {
+  return invoke<CodecTransformResponse>("codec_transform_file", { path, options });
+}
+
+export async function codecGetFullText(params: {
+  textInput: string | null;
+  filePath: string | null;
+  options: CodecOptions;
+}): Promise<string> {
+  if (!isTauriDesktop()) {
+    const text = params.textInput ?? "";
+    if (params.options.operation === "encode") {
+      return encodeBytesClient(new TextEncoder().encode(text), params.options);
+    }
+    const decoded = decodeStringClient(text, params.options);
+    return new TextDecoder("utf-8", { fatal: true }).decode(decoded);
+  }
+  return invoke<string>("codec_get_full_text", params);
+}
+
+export async function codecSaveOutput(params: {
+  textInput: string | null;
+  sourceFilePath: string | null;
+  outputPath: string;
+  overwrite: boolean;
+  options: CodecOptions;
+}): Promise<SavedFileInfo> {
+  return invoke<SavedFileInfo>("codec_save_output", params);
 }
 
 export async function inspectBeautifierSourceImage(path: string): Promise<SourceImageInspection> {

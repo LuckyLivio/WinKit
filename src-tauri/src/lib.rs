@@ -1,4 +1,5 @@
 pub mod beautifier;
+pub mod codec;
 pub mod error;
 pub mod fs_guard;
 pub mod hasher;
@@ -8,12 +9,19 @@ use crate::beautifier::{
     export_beautified_png_cancellable, inspect_source_image, BeautifyExportParams,
     BeautifyExportResult, SourceImageInspection,
 };
+use crate::codec::{
+    compute_full_utf8_result, export_codec_result_to_file, transform_file_payload,
+    transform_text_payload, CodecOptions, CodecTransformResponse,
+};
 use crate::error::AppError;
 use crate::fs_guard::{
     read_utf8_text_file_bounded, suggest_safe_output_path, validate_user_path,
     write_output_bytes_cancellable, SavedFileInfo, TextFilePayload,
 };
-use crate::hasher::{compute_text_sha256, execute_file_hash_task, FileHashResult, TextHashResult};
+use crate::hasher::{
+    compute_text_hashes, execute_file_hash_task, HashAlgorithm, MultiFileHashResult,
+    MultiTextHashResult,
+};
 use crate::tasks::{
     ShutdownDrainResult, TaskLifecycleState, TaskProgressPayload, TaskRegistry,
     TaskRegistrySnapshot, TASK_PROGRESS_EVENT,
@@ -23,10 +31,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-static INTERNAL_WRITE_SEQ: AtomicU64 = AtomicU64::new(1);
+static INTERNAL_TASK_SEQ: AtomicU64 = AtomicU64::new(1);
 
 fn next_internal_task_id(prefix: &str) -> String {
-    let seq = INTERNAL_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let seq = INTERNAL_TASK_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}-{seq}")
 }
 
@@ -130,25 +138,174 @@ fn suggest_output_path(
 }
 
 #[tauri::command]
-fn hash_text_sha256(text: String) -> TextHashResult {
-    compute_text_sha256(&text)
+fn hash_text_multi(
+    text: String,
+    algorithms: Vec<HashAlgorithm>,
+) -> Result<MultiTextHashResult, AppError> {
+    compute_text_hashes(&text, &algorithms)
 }
 
 #[tauri::command]
-async fn hash_file_sha256<R: Runtime>(
+async fn hash_file_multi<R: Runtime>(
     app: AppHandle<R>,
     registry: State<'_, TaskRegistry>,
     task_id: String,
     path: String,
-) -> Result<FileHashResult, AppError> {
+    algorithms: Vec<HashAlgorithm>,
+) -> Result<MultiFileHashResult, AppError> {
     let reg = registry.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        execute_file_hash_task(&reg, &task_id, &path, |payload| {
+        execute_file_hash_task(&reg, &task_id, &path, &algorithms, |payload| {
             let _ = app.emit(TASK_PROGRESS_EVENT, payload);
         })
     })
     .await
     .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background hash worker failed."))?
+}
+
+#[tauri::command]
+async fn codec_transform_text(
+    text: String,
+    options: CodecOptions,
+) -> Result<CodecTransformResponse, AppError> {
+    tauri::async_runtime::spawn_blocking(move || transform_text_payload(&text, &options, None))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background codec worker failed."))?
+}
+
+#[tauri::command]
+async fn codec_transform_file<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    path: String,
+    options: CodecOptions,
+) -> Result<CodecTransformResponse, AppError> {
+    let reg = registry.inner().clone();
+    let task_id = next_internal_task_id("codec-file");
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = reg.register_checked(&task_id, "D02", true)?;
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            &TaskProgressPayload {
+                task_id: task_id.clone(),
+                tool_id: "D02".to_string(),
+                state: TaskLifecycleState::Running,
+                processed_bytes: 0,
+                total_bytes: None,
+                percent: None,
+                error_code: None,
+                error_message: None,
+            },
+        );
+        let cancel_flag = guard.cancel_flag();
+        let res = transform_file_payload(&path, &options, Some(&cancel_flag));
+        let end_state = match &res {
+            Ok(_) => TaskLifecycleState::Completed,
+            Err(e) if e.code == "TASK_CANCELLED" => TaskLifecycleState::Cancelled,
+            Err(_) => TaskLifecycleState::Error,
+        };
+        drop(guard);
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            &TaskProgressPayload {
+                task_id,
+                tool_id: "D02".to_string(),
+                state: end_state,
+                processed_bytes: 0,
+                total_bytes: None,
+                percent: Some(100.0),
+                error_code: None,
+                error_message: None,
+            },
+        );
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background file codec failed."))?
+}
+
+#[tauri::command]
+async fn codec_get_full_text(
+    text_input: Option<String>,
+    file_path: Option<String>,
+    options: CodecOptions,
+) -> Result<String, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        compute_full_utf8_result(text_input.as_deref(), file_path.as_deref(), &options, None)
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background full-text builder failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn codec_save_output<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    text_input: Option<String>,
+    source_file_path: Option<String>,
+    output_path: String,
+    overwrite: bool,
+    options: CodecOptions,
+) -> Result<SavedFileInfo, AppError> {
+    let reg = registry.inner().clone();
+    let task_id = next_internal_task_id("save-d02");
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = reg.register_checked(&task_id, "D02", false)?;
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            &TaskProgressPayload {
+                task_id: task_id.clone(),
+                tool_id: "D02".to_string(),
+                state: TaskLifecycleState::Running,
+                processed_bytes: 0,
+                total_bytes: None,
+                percent: None,
+                error_code: None,
+                error_message: None,
+            },
+        );
+        let cancel_flag = guard.cancel_flag();
+        let res = export_codec_result_to_file(
+            text_input.as_deref(),
+            source_file_path.as_deref(),
+            &output_path,
+            overwrite,
+            &options,
+            Some(&cancel_flag),
+        );
+        let end_state = match &res {
+            Ok(_) => TaskLifecycleState::Completed,
+            Err(e) if e.code == "TASK_CANCELLED" => TaskLifecycleState::Cancelled,
+            Err(_) => TaskLifecycleState::Error,
+        };
+        drop(guard);
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            &TaskProgressPayload {
+                task_id,
+                tool_id: "D02".to_string(),
+                state: end_state,
+                processed_bytes: 0,
+                total_bytes: None,
+                percent: Some(100.0),
+                error_code: None,
+                error_message: None,
+            },
+        );
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background codec file writer failed.",
+        )
+    })?
 }
 
 #[tauri::command]
@@ -250,8 +407,12 @@ pub fn run() {
             read_text_file,
             save_text_file,
             suggest_output_path,
-            hash_text_sha256,
-            hash_file_sha256,
+            hash_text_multi,
+            hash_file_multi,
+            codec_transform_text,
+            codec_transform_file,
+            codec_get_full_text,
+            codec_save_output,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,

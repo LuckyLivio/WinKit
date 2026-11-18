@@ -13,6 +13,7 @@ export interface Messages {
   categories: {
     all: string;
     developer: string;
+    text: string;
     image: string;
   };
   topbar: {
@@ -122,8 +123,9 @@ export interface Messages {
   hashTool: {
     modeText: string;
     modeFile: string;
-    algorithmBadge: string;
+    algorithmsLabel: string;
     scopeNote: string;
+    compatNote: string;
     textInputLabel: string;
     textPlaceholder: string;
     exactBytesNote: string;
@@ -137,19 +139,178 @@ export interface Messages {
     uppercaseLabel: string;
     digestLabel: string;
     copyBtn: string;
+    copyAllBtn: string;
     copiedBadge: string;
     clearBtn: string;
+    staleNotice: string;
+    emptyDigestsHint: string;
     compareLabel: string;
     comparePlaceholder: string;
     compareIdle: string;
     compareInvalidFormat: string;
-    compareMatch: string;
-    compareMismatch: string;
+    compareUncomputedCandidate: (alg: string, hexLen: number) => string;
+    compareMatch: (alg: string, hexLen: number) => string;
+    compareMismatch: (alg: string, hexLen: number) => string;
     statusIdle: string;
+    statusStale: string;
     statusRunning: (pct: string) => string;
-    statusCompleted: string;
+    statusCompleted: (count: number) => string;
     statusCancelled: string;
     statusError: string;
+  };
+  codecTool: {
+    scopeNote: string;
+    modeText: string;
+    modeFile: string;
+    opEncode: string;
+    opDecode: string;
+    formatStdB64: string;
+    formatUrlB64: string;
+    formatHex: string;
+    formatBinary: string;
+    paddingLabel: string;
+    strictPaddingDecodeLabel: string;
+    wrapLabel: string;
+    wrapNone: string;
+    wrap64: string;
+    wrap76: string;
+    ignoreWsLabel: string;
+    upperHexLabel: string;
+    groupBitsLabel: string;
+    inputLabel: string;
+    outputLabel: string;
+    textPlaceholderEncode: string;
+    textPlaceholderDecode: string;
+    selectFileBtn: string;
+    dropFileHint: string;
+    runFileBtn: string;
+    copyFullBtn: string;
+    copiedBadge: string;
+    saveOutputBtn: string;
+    clearBtn: string;
+    statsSummary: (inBytes: number, outBytes: number) => string;
+    truncationBanner: (shownChars: number, totalChars: number, outBytes: number) => string;
+    binaryNonUtf8Banner: (outBytes: number) => string;
+    hexPreviewHeading: string;
+    savedSuccess: (path: string, bytes: number) => string;
+    overwriteConfirmTitle: string;
+    overwriteConfirmBody: (path: string) => string;
+    overwriteConfirmAccept: string;
+    cancel: string;
+    emptyOutput: string;
+  };
+  uuidTool: {
+    scopeNote: string;
+    generatePaneTitle: string;
+    inspectPaneTitle: string;
+    versionV4: string;
+    versionV7: string;
+    countLabel: string;
+    uppercaseLabel: string;
+    hyphensLabel: string;
+    generateBtn: string;
+    copyAllBtn: string;
+    copySingleBtn: string;
+    copiedBadge: string;
+    clearBtn: string;
+    emptyGenerated: string;
+    inspectPlaceholder: string;
+    inspectValid: string;
+    inspectInvalid: string;
+    fieldCanonical: string;
+    fieldVersion: string;
+    fieldVariant: string;
+    fieldTimestamp: string;
+    fieldNotes: string;
+    v4NoTimestampNote: string;
+    unsupportedTimeVersionNote: (ver: number) => string;
+    nilNote: string;
+    maxNote: string;
+  };
+  timestampTool: {
+    scopeNote: string;
+    modeToDate: string;
+    modeToTs: string;
+    nowBtn: string;
+    clearBtn: string;
+    copyBtn: string;
+    copiedBadge: string;
+    tsInputLabel: string;
+    tsPlaceholder: string;
+    unitLabel: string;
+    unitSec: string;
+    unitMs: string;
+    unitUs: string;
+    unitNs: string;
+    usedUnitBadge: (unit: string) => string;
+    suggestedUnitHint: (suggested: string, applyLabel: string) => { text: string; btn: string };
+    subMsPrecisionNote: (subMsText: string) => string;
+    dateInputLabel: string;
+    datePlaceholder: string;
+    interpretTzLabel: string;
+    displayTzLabel: string;
+    tzPlaceholder: string;
+    cardUtc: string;
+    cardLocal: (tz: string) => string;
+    cardCustom: (tz: string) => string;
+    isoLabel: string;
+    offsetLabel: string;
+    localCivilLabel: string;
+    epochSecLabel: string;
+    epochMsLabel: string;
+    epochUsLabel: string;
+    epochNsLabel: string;
+    precisionTruncatedNote: string;
+    emptyPrompt: string;
+  };
+  wordCounterTool: {
+    scopeNote: string;
+    inputLabel: string;
+    placeholder: string;
+    clearBtn: string;
+    copySummaryBtn: string;
+    copiedBadge: string;
+    statWords: string;
+    statCharsWithSpaces: string;
+    statCharsNoWhitespace: string;
+    statSentences: string;
+    statParagraphs: string;
+    statLines: string;
+    statUtf8Bytes: string;
+    statReadingTime: string;
+    statSpeakingTime: string;
+    estimateAssumptions: string;
+    rulesNote: string;
+    topWordsTitle: string;
+    topWordsEmpty: string;
+    limitExceeded: (maxMb: number) => string;
+    formatDuration: (seconds: number) => string;
+  };
+  caseConverterTool: {
+    scopeNote: string;
+    inputLabel: string;
+    outputLabel: string;
+    placeholder: string;
+    copyBtn: string;
+    copiedBadge: string;
+    clearBtn: string;
+    stylesLabel: string;
+    lineRuleNote: string;
+    emptyPreview: string;
+    styleNames: {
+      uppercase: string;
+      lowercase: string;
+      title: string;
+      sentence: string;
+      camel: string;
+      pascal: string;
+      snake: string;
+      constant: string;
+      kebab: string;
+      dot: string;
+      alternating: string;
+      inverse: string;
+    };
   };
   beautifierTool: {
     scopeNote: string;
@@ -196,6 +357,7 @@ export const MESSAGES: Record<Locale, Messages> = {
     categories: {
       all: "全部分类",
       developer: "开发者",
+      text: "文本与语音",
       image: "图片",
     },
     topbar: {
@@ -207,28 +369,28 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     home: {
       titleAll: "可用工具",
-      titleFavorites: "收藏夹",
+      titleFavorites: "已收藏工具",
       titleRecent: "最近使用",
-      subtitleAvailable: (count) => `当前已上线 ${count} 项本地工具，所有处理均在本机离线完成`,
+      subtitleAvailable: (count) => `当前已启用 ${count} 项本地实用工具（全部计算在本机离线完成）`,
       scopeFull: "完整支持",
       scopePartial: "部分实现",
       openTool: "打开",
       favoriteAdd: "加入收藏",
       favoriteRemove: "取消收藏",
-      emptySearch: "没有匹配当前搜索词的已上线工具。",
-      emptyFavorites: "尚未收藏任何工具。点击工具条目右侧星标即可添加。",
-      emptyRecent: "暂无最近使用记录。",
-      emptyRegistry: "当前构建尚未注册工具。",
+      emptySearch: "未找到匹配当前搜索词的可用工具。",
+      emptyFavorites: "暂无收藏工具。点击任意工具右侧星标即可固定在此处。",
+      emptyRecent: "暂无最近打开的工具记录。",
+      emptyRegistry: "当前尚未注册可用工具。",
       clearSearch: "清空筛选",
       baselineFooter:
-        "仅展示当前阶段已完成闭环并验证通过的工具；其余规划条目记录于 docs/PARITY_MATRIX.md。",
+        "仅展示当前版本已真实实现并通过验证的工具；规划条目见 docs/PARITY_MATRIX.md。",
     },
     settings: {
       title: "设置",
-      subtitle: "外观、语言与本地隐私边界控制",
+      subtitle: "外观、语言与本地隐私控制",
       appearanceSection: "外观主题",
-      themeLabel: "主题模式",
-      themeLight: "浅色（推荐）",
+      themeLabel: "色彩模式",
+      themeLight: "浅色（默认）",
       themeDark: "深色",
       themeSystem: "跟随系统",
       languageSection: "界面语言",
@@ -237,13 +399,13 @@ export const MESSAGES: Record<Locale, Messages> = {
       langEn: "English",
       privacySection: "会话状态与本地隐私",
       privacySessionNote:
-        "在工具间切换时，当前输入与参数仅保留在应用进程内存中；退出应用后立即释放，默认绝不将输入正文、文件内容、密钥或令牌写入磁盘。",
+        "工具输入内容仅在当前运行会话内存中保留，退出应用即清空，默认绝不将你的正文、文件内容、密钥或令牌写入磁盘。",
       privacyLocalNote:
-        "磁盘仅保存主题、语言、收藏列表与最近访问的工具编号，无任何遥测、账号或联网分析。",
+        "本地仅持久化主题、语言、收藏夹与最近使用工具编号。无遥测、无账号、无云端请求。",
       clearRecentButton: "清空最近使用记录",
       clearRecentDone: "已清空最近使用记录",
-      resetPrefsButton: "恢复默认设置",
-      resetPrefsDone: "已恢复默认外观与语言设置",
+      resetPrefsButton: "恢复默认外观与语言",
+      resetPrefsDone: "已恢复默认偏好设置",
       runtimeSection: "运行环境信息",
     },
     closeGuard: {
@@ -273,8 +435,8 @@ export const MESSAGES: Record<Locale, Messages> = {
       PERMISSION_DENIED: "权限不足或目标文件夹为只读，请选择可写目录。",
       FILE_LOCKED: "文件正被其他程序占用，请关闭占用程序后重试。",
       DISK_FULL: "目标磁盘剩余空间不足，无法完成写入。",
-      SIZE_LIMIT_EXCEEDED: "文件体积或画布像素超出安全上限。",
-      DECODE_FAILED: "文件编码或图像格式无法解析，请检查文件是否完整。",
+      SIZE_LIMIT_EXCEEDED: "输入体积、输出预估或画布像素超出安全上限。",
+      DECODE_FAILED: "编码内容或图像格式无法解析。",
       TASK_CANCELLED: "任务已按请求取消。",
       INVALID_PARAMETER: "输入参数或路径格式无效。",
       FALLBACK: "执行本地操作时发生错误。",
@@ -291,15 +453,15 @@ export const MESSAGES: Record<Locale, Messages> = {
       copyBtn: "复制结果",
       copiedBadge: "已复制",
       clearBtn: "清空",
-      indentLabel: "缩进方式",
+      indentLabel: "缩进",
       indent2: "2 空格",
       indent4: "4 空格",
-      indentTab: "Tab 制表符",
-      sortKeysLabel: "按键名字母序排列",
+      indentTab: "Tab",
+      sortKeysLabel: "按键名字母排序",
       statusEmpty: "等待输入 JSON 内容",
       statusValid: (kind) => `合法 JSON（根类型：${kind}）`,
       statusInvalid: "JSON 语法错误",
-      locateErrorBtn: "定位到错误位置",
+      locateErrorBtn: "定位错误处",
       lineColLabel: (line, col) => `第 ${line} 行，第 ${col} 列`,
       precisionNotice:
         "检测到超出 IEEE-754 安全整数范围或含精确尾随零的数值；WinKit 已通过无损词法保真原样保留，未发生精度改写。",
@@ -316,37 +478,228 @@ export const MESSAGES: Record<Locale, Messages> = {
     hashTool: {
       modeText: "UTF-8 文本",
       modeFile: "本地文件",
-      algorithmBadge: "SHA-256",
+      algorithmsLabel: "摘要算法",
       scopeNote:
-        "阶段 1 子集：提供 UTF-8 文本与任意大小本地文件流式 SHA-256 校验（其余算法见阶段 2 规划）。",
+        "支持单遍流式计算 MD5、SHA-1、SHA-256、SHA-384、SHA-512（多文件批处理见阶段 2C 规划）。",
+      compatNote: "仅用于文件兼容性校验，不适用于密码存储或安全签名",
       textInputLabel: "待计算文本",
       textPlaceholder: "输入或粘贴任意文本…",
       exactBytesNote:
         "按原始 UTF-8 字节精确计算，完整保留首尾空格、制表符与换行符，不做任何自动修剪。",
       byteCount: (bytes) => `${bytes.toLocaleString()} UTF-8 字节`,
       selectFileBtn: "选择本地文件…",
-      dropFileHint: "也可直接将文件从资源管理器拖入此工作区（只读流式计算，绝不改动原文件）",
+      dropFileHint:
+        "也可直接将文件从资源管理器拖入此工作区（单次分块流式读取更新所选全部算法，不改动原文件）",
       selectedFileLabel: "当前文件",
       fileSizeLabel: "文件大小",
       computeBtn: "重新计算",
       cancelBtn: "取消计算",
       uppercaseLabel: "大写十六进制",
-      digestLabel: "SHA-256 摘要结果",
-      copyBtn: "复制摘要",
+      digestLabel: "摘要计算结果",
+      copyBtn: "复制",
+      copyAllBtn: "复制全部",
       copiedBadge: "已复制",
       clearBtn: "清空",
+      staleNotice: "所选摘要算法已变更，请点击“重新计算”以单遍读取文件生成最新摘要。",
+      emptyDigestsHint: "输入文本或选择本地文件后在此显示所选算法的摘要值。",
       compareLabel: "期望摘要比对（可选）",
       comparePlaceholder:
-        "粘贴发布的 SHA-256（支持 sha256: 前缀、shasum 输出、大小写或冒号/空格分隔）",
-      compareIdle: "输入期望摘要后将自动比对一致性",
-      compareInvalidFormat: "期望值格式无效：提取十六进制字符后需为 64 位 SHA-256 摘要",
-      compareMatch: "一致：计算结果与期望 SHA-256 完全匹配",
-      compareMismatch: "不一致：计算结果与期望 SHA-256 不匹配",
+        "粘贴期望摘要（支持 md5:/sha256: 等前缀、shasum 行格式、大小写或冒号/空格分隔）",
+      compareIdle:
+        "输入期望摘要后将检查十六进制格式与长度（长度仅提供候选算法参考，不能证明摘要真实来源）",
+      compareInvalidFormat:
+        "期望值格式无效：需为合法十六进制，且长度为 32 (MD5)、40 (SHA-1)、64 (SHA-256)、96 (SHA-384) 或 128 (SHA-512) 位",
+      compareUncomputedCandidate: (alg, hexLen) =>
+        `按 ${hexLen} 位十六进制长度推断候选算法为 ${alg}（仅代表长度匹配），但当前未勾选或尚未完成 ${alg} 计算；请勾选 ${alg} 并重新计算后再比对`,
+      compareMatch: (alg, hexLen) =>
+        `一致：与当前计算的 ${alg}（${hexLen} 位十六进制）摘要完全匹配`,
+      compareMismatch: (alg, hexLen) =>
+        `不一致：按 ${hexLen} 位长度比对当前计算的 ${alg} 摘要，结果不匹配`,
       statusIdle: "尚未计算",
-      statusRunning: (pct) => `正在流式读取计算（${pct}）…`,
-      statusCompleted: "SHA-256 计算完成",
+      statusStale: "待重新计算",
+      statusRunning: (pct) => `正在单遍流式读取（${pct}）…`,
+      statusCompleted: (count) => `已完成 ${count} 项摘要`,
       statusCancelled: "计算已取消（未生成有效结果）",
       statusError: "计算失败",
+    },
+    codecTool: {
+      scopeNote:
+        "支持标准/URL-safe Base64、Hex 与 8 位二进制编码/解码（注：Base64 等属于数据编码而非加密算法）。文本上限 2 MiB，本地原始字节文件上限 8 MiB（二进制位编码 2 MiB）。",
+      modeText: "UTF-8 文本",
+      modeFile: "本地小文件（原始字节）",
+      opEncode: "编码 (Encode)",
+      opDecode: "解码 (Decode)",
+      formatStdB64: "标准 Base64",
+      formatUrlB64: "URL-Safe Base64",
+      formatHex: "Hex (十六进制)",
+      formatBinary: "Binary (8位二进制)",
+      paddingLabel: "补充 = 填充",
+      strictPaddingDecodeLabel: "要求完整 = 填充",
+      wrapLabel: "换行宽度",
+      wrapNone: "不换行",
+      wrap64: "64 列",
+      wrap76: "76 列",
+      ignoreWsLabel: "忽略空白与换行",
+      upperHexLabel: "大写 Hex",
+      groupBitsLabel: "按字节空格分组",
+      inputLabel: "输入源",
+      outputLabel: "转换结果",
+      textPlaceholderEncode: "输入待编码的 UTF-8 文本（保留全部空格与换行）…",
+      textPlaceholderDecode: "粘贴待解码的 Base64、十六进制或 0/1 二进制字符串…",
+      selectFileBtn: "选择文件…",
+      dropFileHint: "或从资源管理器拖入小文件（直接按原始字节处理，绝不将二进制文件误作文本解码）",
+      runFileBtn: "重新转换文件",
+      copyFullBtn: "复制完整结果",
+      copiedBadge: "已复制",
+      saveOutputBtn: "另存为文件…",
+      clearBtn: "清空",
+      statsSummary: (inBytes, outBytes) =>
+        `输入 ${inBytes.toLocaleString()} B → 输出 ${outBytes.toLocaleString()} B`,
+      truncationBanner: (shownChars, totalChars, outBytes) =>
+        `结果共 ${totalChars.toLocaleString()} 字符（${outBytes.toLocaleString()} B），界面仅预览前 ${shownChars.toLocaleString()} 字符；“复制完整结果”与“另存为文件…”均导出完整结果。`,
+      binaryNonUtf8Banner: (outBytes) =>
+        `解码成功，共得到 ${outBytes.toLocaleString()} 字节原始二进制数据。因包含非 UTF-8 字节序列，未将其替换为乱码文本；下方展示前 256 字节十六进制预览，请使用“另存为文件…”无损导出完整字节。`,
+      hexPreviewHeading: "非 UTF-8 原始字节十六进制预览（前 256 字节）",
+      savedSuccess: (path, bytes) => `已无损写入 ${bytes.toLocaleString()} 字节至：${path}`,
+      overwriteConfirmTitle: "目标文件已存在",
+      overwriteConfirmBody: (path) =>
+        `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖原输入文件）？`,
+      overwriteConfirmAccept: "确认覆盖",
+      cancel: "取消",
+      emptyOutput: "输入内容或选择本地文件后在此实时查看结果。",
+    },
+    uuidTool: {
+      scopeNote:
+        "采用操作系统密码学安全随机源（CSPRNG）生成符合 RFC 9562 的 UUID v4 与时间序 v7（单批 1–500 个）。不承诺跨设备绝对唯一或系统时钟回拨下严格递增；解析器仅对受支持的时间版本提取时间，绝不为 v4 编造时间。",
+      generatePaneTitle: "批量生成 UUID (v4 / v7)",
+      inspectPaneTitle: "解析与校验 UUID",
+      versionV4: "UUID v4（随机）",
+      versionV7: "UUID v7（毫秒时间序）",
+      countLabel: "数量 (1–500)",
+      uppercaseLabel: "大写字母",
+      hyphensLabel: "包含连字符 (-)",
+      generateBtn: "生成 UUID",
+      copyAllBtn: "复制全部",
+      copySingleBtn: "复制",
+      copiedBadge: "已复制",
+      clearBtn: "清空",
+      emptyGenerated: "点击“生成 UUID”创建新的安全随机标识符。",
+      inspectPlaceholder: "粘贴任意带或不带连字符（或花括号/urn:uuid:）的 UUID 字符串进行解析…",
+      inspectValid: "格式合法",
+      inspectInvalid: "UUID 格式无效",
+      fieldCanonical: "标准规范格式",
+      fieldVersion: "版本 (Version)",
+      fieldVariant: "变体 (Variant)",
+      fieldTimestamp: "内嵌时间戳",
+      fieldNotes: "解析说明",
+      v4NoTimestampNote: "UUID v4 由密码学随机位组成，不包含生成时间信息。",
+      unsupportedTimeVersionNote: (ver) =>
+        `检测到 UUID v${ver}；当前版本仅提取 RFC 9562 UUID v7 的 Unix 毫秒时间戳，未解码 v${ver} 格里高利历时钟字段。`,
+      nilNote: "全零特殊 UUID（Nil UUID，RFC 9562 §5.9）。",
+      maxNote: "全 1 特殊 UUID（Max UUID，RFC 9562 §5.10）。",
+    },
+    timestampTool: {
+      scopeNote:
+        "采用 BigInt 精确整数运算（零 Number 浮点舍入）支持秒、毫秒、微秒、纳秒与日期双向互转。无偏移日期必须显式选择解释时区；若落入夏令时跳变缺失或重复小时将明确拒绝，要求提供带 UTC 偏移的字符串。",
+      modeToDate: "时间戳 → 日期时间",
+      modeToTs: "日期时间 → 时间戳",
+      nowBtn: "取当前时刻",
+      clearBtn: "清空",
+      copyBtn: "复制",
+      copiedBadge: "已复制",
+      tsInputLabel: "Unix 时间戳整数",
+      tsPlaceholder: "输入整数时间戳（支持 0、负数及纳秒大整数，如 1700000000）…",
+      unitLabel: "解释单位",
+      unitSec: "秒 (s)",
+      unitMs: "毫秒 (ms)",
+      unitUs: "微秒 (µs)",
+      unitNs: "纳秒 (ns)",
+      usedUnitBadge: (unit) => `当前按 ${unit} 解析`,
+      suggestedUnitHint: (suggested, applyLabel) => ({
+        text: `按数值量级看可能为 ${suggested}（未自动篡改你选定的单位）`,
+        btn: applyLabel,
+      }),
+      subMsPrecisionNote: (subMsText) =>
+        `日历时间精确到毫秒，已额外无损保留亚毫秒余数：${subMsText}`,
+      dateInputLabel: "日期时间输入",
+      datePlaceholder:
+        "支持 ISO 8601 带偏移（如 2026-11-18T09:30:00+08:00）或无偏移本地时间（如 2026-11-18 09:30:00.123456789）",
+      interpretTzLabel: "无偏移日期的解释时区",
+      displayTzLabel: "自选对照 IANA 时区",
+      tzPlaceholder: "输入有效 IANA 时区，如 America/New_York、Europe/London、Asia/Tokyo",
+      cardUtc: "协调世界时 (UTC)",
+      cardLocal: (tz) => `本机系统时区 (${tz})`,
+      cardCustom: (tz) => `指定 IANA 时区 (${tz})`,
+      isoLabel: "ISO 8601",
+      offsetLabel: "UTC 偏移",
+      localCivilLabel: "当地日历时间",
+      epochSecLabel: "秒 (s)",
+      epochMsLabel: "毫秒 (ms)",
+      epochUsLabel: "微秒 (µs)",
+      epochNsLabel: "纳秒 (ns)",
+      precisionTruncatedNote:
+        "注：输入含亚秒小数时，低精度单位按向零截断整数输出，完整精度见微秒/纳秒行。",
+      emptyPrompt: "输入时间戳或点击“取当前时刻”查看多时区与精确整数换算结果。",
+    },
+    wordCounterTool: {
+      scopeNote:
+        "字符数采用 Unicode 字素簇（Grapheme）统计，词数与句数基于 Intl.Segmenter 标准分段（不同编辑器分词口径可能存在差异）。单次输入上限 2 MiB，不记录或持久化任何正文。",
+      inputLabel: "待统计正文",
+      placeholder: "在此输入或粘贴中文、英文或多语言混合文本…",
+      clearBtn: "清空文本",
+      copySummaryBtn: "复制统计摘要",
+      copiedBadge: "已复制",
+      statWords: "词数 (Words)",
+      statCharsWithSpaces: "字符（含空白）",
+      statCharsNoWhitespace: "字符（不含空白）",
+      statSentences: "句子数",
+      statParagraphs: "段落数",
+      statLines: "行数",
+      statUtf8Bytes: "UTF-8 字节",
+      statReadingTime: "预计默读时长",
+      statSpeakingTime: "预计朗读时长",
+      estimateAssumptions:
+        "时长为估算值：默读按中文约 350 字/分、西文约 220 词/分估算；朗读按中文约 180 字/分、西文约 140 词/分估算。",
+      rulesNote:
+        "口径说明：空文本计 0 行 0 段；CRLF 与 LF 统一按换行切分，末尾空行计入物理行数；连续空行分隔的非空文本块计为段落。",
+      topWordsTitle: "高频词统计（忽略大小写与常见中英文虚词，前 10 项）",
+      topWordsEmpty: "输入包含实词的正文后在此展示词频分布。",
+      limitExceeded: (maxMb) => `输入文本超过 ${maxMb} MiB 安全上限，请精简后再统计以防阻塞界面。`,
+      formatDuration: (seconds) => {
+        if (seconds <= 0) return "0 秒";
+        if (seconds < 60) return `约 ${Math.max(1, Math.ceil(seconds))} 秒`;
+        const mins = Math.floor(seconds / 60);
+        const rem = Math.round(seconds % 60);
+        return rem > 0 ? `约 ${mins} 分 ${rem} 秒` : `约 ${mins} 分钟`;
+      },
+    },
+    caseConverterTool: {
+      scopeNote:
+        "支持参考基线全部 12 种大小写与命名风格，按行保留换行边界，输入区保持原文不被覆盖。注：标识符命名转换属于有损格式映射，不承诺可逆还原，亦不执行自然语言翻译或转拼音。",
+      inputLabel: "原始文本 / 名称列表（每行一项）",
+      outputLabel: "转换结果",
+      placeholder: "输入英文标题、句子或代码标识符列表（如 getHTTPResponse、version2Value）…",
+      copyBtn: "复制结果",
+      copiedBadge: "已复制",
+      clearBtn: "清空",
+      stylesLabel: "选择目标样式（共 12 种）",
+      lineRuleNote:
+        "拆分规则：统一识别缩写词边界（HTTPResponse → http + response）、驼峰、数字边界与连续分隔符；Title Case 保留常见英文虚词小写及已知混合大小写专有名词（如 iPhone、macOS、WinKit）。",
+      emptyPreview: "—",
+      styleNames: {
+        uppercase: "UPPERCASE（全大写）",
+        lowercase: "lowercase（全小写）",
+        title: "Title Case（英文标题）",
+        sentence: "Sentence case（句首大写）",
+        camel: "camelCase（小驼峰）",
+        pascal: "PascalCase（大驼峰）",
+        snake: "snake_case（下划线）",
+        constant: "CONSTANT_CASE（常量大写）",
+        kebab: "kebab-case（短横线）",
+        dot: "dot.case（点分隔）",
+        alternating: "aLtErNaTiNg（交替大小写）",
+        inverse: "iNVERSE（大小写反转）",
+      },
     },
     beautifierTool: {
       scopeNote:
@@ -395,6 +748,7 @@ export const MESSAGES: Record<Locale, Messages> = {
     categories: {
       all: "All Categories",
       developer: "Developer",
+      text: "Text & Speech",
       image: "Images",
     },
     topbar: {
@@ -475,8 +829,9 @@ export const MESSAGES: Record<Locale, Messages> = {
       PERMISSION_DENIED: "Permission denied or destination directory is read-only.",
       FILE_LOCKED: "The file is currently locked by another process.",
       DISK_FULL: "Insufficient disk space on the target drive.",
-      SIZE_LIMIT_EXCEEDED: "File size or canvas pixel dimensions exceed safety limits.",
-      DECODE_FAILED: "Unable to decode file encoding or image format.",
+      SIZE_LIMIT_EXCEEDED:
+        "Input size, estimated output, or canvas dimensions exceed safety limits.",
+      DECODE_FAILED: "Unable to decode encoded payload or image format.",
       TASK_CANCELLED: "Operation cancelled.",
       INVALID_PARAMETER: "Invalid input parameter or file path.",
       FALLBACK: "An unexpected local error occurred.",
@@ -519,9 +874,11 @@ export const MESSAGES: Record<Locale, Messages> = {
     hashTool: {
       modeText: "UTF-8 Text",
       modeFile: "Local File",
-      algorithmBadge: "SHA-256",
+      algorithmsLabel: "Algorithms",
       scopeNote:
-        "Phase 1 subset: UTF-8 text and streaming SHA-256 checksums for files of any size (additional algorithms scheduled for Phase 2).",
+        "Single-pass streaming MD5, SHA-1, SHA-256, SHA-384, and SHA-512 checksums (multi-file batching scheduled for Phase 2C).",
+      compatNote:
+        "For compatibility checksums only; not suitable for password storage or security signatures",
       textInputLabel: "Input Text",
       textPlaceholder: "Type or paste text to hash…",
       exactBytesNote:
@@ -529,29 +886,220 @@ export const MESSAGES: Record<Locale, Messages> = {
       byteCount: (bytes) => `${bytes.toLocaleString()} UTF-8 bytes`,
       selectFileBtn: "Choose File…",
       dropFileHint:
-        "Or drag and drop a file from File Explorer (streamed read-only; source file is never modified)",
+        "Or drop a file from File Explorer (updates all selected digests in a single read-only pass)",
       selectedFileLabel: "Selected File",
       fileSizeLabel: "File Size",
       computeBtn: "Recompute",
       cancelBtn: "Cancel",
       uppercaseLabel: "Uppercase hex",
-      digestLabel: "SHA-256 Digest",
-      copyBtn: "Copy Digest",
+      digestLabel: "Computed Digests",
+      copyBtn: "Copy",
+      copyAllBtn: "Copy All",
       copiedBadge: "Copied",
       clearBtn: "Clear",
-      compareLabel: "Compare Expected SHA-256 (Optional)",
+      staleNotice:
+        "Selected algorithms changed — click Recompute to update digests in a single pass.",
+      emptyDigestsHint: "Enter text or select a local file to compute selected digests.",
+      compareLabel: "Compare Expected Digest (Optional)",
       comparePlaceholder:
-        "Paste expected SHA-256 (accepts sha256: prefix, shasum output, uppercase, spaces, or colons)",
-      compareIdle: "Enter an expected digest to verify integrity",
+        "Paste expected digest (accepts md5:/sha256: prefixes, shasum lines, uppercase, spaces, or colons)",
+      compareIdle:
+        "Enter an expected hex digest to verify (hex length suggests a candidate algorithm only and does not prove digest origin)",
       compareInvalidFormat:
-        "Invalid expected digest: must contain 64 hexadecimal characters for SHA-256",
-      compareMatch: "Match: computed SHA-256 matches expected digest",
-      compareMismatch: "Mismatch: computed SHA-256 does not match expected digest",
+        "Invalid expected digest: must contain 32 (MD5), 40 (SHA-1), 64 (SHA-256), 96 (SHA-384), or 128 (SHA-512) hex characters",
+      compareUncomputedCandidate: (alg, hexLen) =>
+        `Hex length (${hexLen} chars) corresponds to candidate algorithm ${alg}, which is not currently computed — select ${alg} and recompute to compare`,
+      compareMatch: (alg, hexLen) => `Match: equals computed ${alg} (${hexLen}-hex) digest`,
+      compareMismatch: (alg, hexLen) =>
+        `Mismatch: does not match computed ${alg} (${hexLen}-hex) digest`,
       statusIdle: "Ready",
-      statusRunning: (pct) => `Streaming file (${pct})…`,
-      statusCompleted: "SHA-256 completed",
+      statusStale: "Recompute needed",
+      statusRunning: (pct) => `Streaming single pass (${pct})…`,
+      statusCompleted: (count) => `${count} digest${count === 1 ? "" : "s"} ready`,
       statusCancelled: "Cancelled (no valid digest retained)",
       statusError: "Hash computation failed",
+    },
+    codecTool: {
+      scopeNote:
+        "Standard/URL-safe Base64, Hex, and 8-bit Binary encoding & decoding (Base64 is data encoding, not encryption). Limits: 2 MiB text, 8 MiB raw file (2 MiB for Binary bit encoding).",
+      modeText: "UTF-8 Text",
+      modeFile: "Local File (Raw Bytes)",
+      opEncode: "Encode",
+      opDecode: "Decode",
+      formatStdB64: "Standard Base64",
+      formatUrlB64: "URL-Safe Base64",
+      formatHex: "Hex (Base16)",
+      formatBinary: "Binary (8-bit)",
+      paddingLabel: "Pad with '='",
+      strictPaddingDecodeLabel: "Require '=' padding",
+      wrapLabel: "Line wrap",
+      wrapNone: "No wrap",
+      wrap64: "64 cols",
+      wrap76: "76 cols",
+      ignoreWsLabel: "Ignore whitespace",
+      upperHexLabel: "Uppercase Hex",
+      groupBitsLabel: "Space-group bytes",
+      inputLabel: "Input Source",
+      outputLabel: "Converted Output",
+      textPlaceholderEncode: "Enter UTF-8 text to encode (exact spaces & newlines preserved)…",
+      textPlaceholderDecode: "Paste Base64, hexadecimal, or 8-bit binary string to decode…",
+      selectFileBtn: "Choose File…",
+      dropFileHint:
+        "Or drop a local file (processed strictly as raw bytes without lossy text decoding)",
+      runFileBtn: "Reconvert File",
+      copyFullBtn: "Copy Full Result",
+      copiedBadge: "Copied",
+      saveOutputBtn: "Save As…",
+      clearBtn: "Clear",
+      statsSummary: (inBytes, outBytes) =>
+        `Input ${inBytes.toLocaleString()} B → Output ${outBytes.toLocaleString()} B`,
+      truncationBanner: (shownChars, totalChars, outBytes) =>
+        `Output has ${totalChars.toLocaleString()} chars (${outBytes.toLocaleString()} B); preview shows first ${shownChars.toLocaleString()} chars. Copy Full Result and Save As export the complete data.`,
+      binaryNonUtf8Banner: (outBytes) =>
+        `Decoded ${outBytes.toLocaleString()} raw binary bytes containing non-UTF-8 sequences. WinKit does not corrupt binary bytes into replacement characters — inspect the 256-byte hex preview below or click Save As… to write exact bytes.`,
+      hexPreviewHeading: "Raw Non-UTF-8 Byte Hex Preview (First 256 Bytes)",
+      savedSuccess: (path, bytes) => `Saved ${bytes.toLocaleString()} exact bytes to: ${path}`,
+      overwriteConfirmTitle: "Destination File Exists",
+      overwriteConfirmBody: (path) =>
+        `"${path}" already exists. Replace this output file (original input file is never overwritten)?`,
+      overwriteConfirmAccept: "Replace File",
+      cancel: "Cancel",
+      emptyOutput: "Type text or choose a local file to see converted output.",
+    },
+    uuidTool: {
+      scopeNote:
+        "Generates RFC 9562 UUID v4 and time-ordered v7 using OS CSPRNG (1–500 per batch). Does not claim cross-device collision impossibility or strict monotonicity across clock rollbacks; v4 carries no timestamp.",
+      generatePaneTitle: "Generate UUIDs (v4 / v7)",
+      inspectPaneTitle: "Inspect & Validate UUID",
+      versionV4: "UUID v4 (Random)",
+      versionV7: "UUID v7 (Unix Time-Ordered)",
+      countLabel: "Count (1–500)",
+      uppercaseLabel: "Uppercase",
+      hyphensLabel: "Hyphens (-)",
+      generateBtn: "Generate",
+      copyAllBtn: "Copy All",
+      copySingleBtn: "Copy",
+      copiedBadge: "Copied",
+      clearBtn: "Clear",
+      emptyGenerated: "Click Generate to create cryptographically random UUIDs.",
+      inspectPlaceholder:
+        "Paste a UUID (with or without hyphens, braces, or urn:uuid:) to inspect…",
+      inspectValid: "Valid UUID",
+      inspectInvalid: "Invalid UUID format",
+      fieldCanonical: "Canonical Form",
+      fieldVersion: "Version",
+      fieldVariant: "Variant",
+      fieldTimestamp: "Embedded Timestamp",
+      fieldNotes: "Notes",
+      v4NoTimestampNote: "UUID v4 consists of random bits and embeds no creation timestamp.",
+      unsupportedTimeVersionNote: (ver) =>
+        `UUID v${ver} detected; WinKit decodes embedded Unix millisecond timestamps for RFC 9562 v7 only and does not decode Gregorian clock fields for v${ver}.`,
+      nilNote: "Special all-zero Nil UUID (RFC 9562 §5.9).",
+      maxNote: "Special all-one Max UUID (RFC 9562 §5.10).",
+    },
+    timestampTool: {
+      scopeNote:
+        "Lossless BigInt conversion across seconds, milliseconds, microseconds, and nanoseconds (zero JS Number rounding). Offset-less dates require an explicit timezone and reject nonexistent/ambiguous DST transitions.",
+      modeToDate: "Timestamp → Date/Time",
+      modeToTs: "Date/Time → Timestamp",
+      nowBtn: "Now",
+      clearBtn: "Clear",
+      copyBtn: "Copy",
+      copiedBadge: "Copied",
+      tsInputLabel: "Unix Timestamp Integer",
+      tsPlaceholder: "Enter integer epoch (supports 0, negative values, and nanosecond BigInts)…",
+      unitLabel: "Selected Unit",
+      unitSec: "Seconds (s)",
+      unitMs: "Milliseconds (ms)",
+      unitUs: "Microseconds (µs)",
+      unitNs: "Nanoseconds (ns)",
+      usedUnitBadge: (unit) => `Interpreted as ${unit}`,
+      suggestedUnitHint: (suggested, applyLabel) => ({
+        text: `Magnitude looks like ${suggested} (your selected unit was kept unchanged)`,
+        btn: applyLabel,
+      }),
+      subMsPrecisionNote: (subMsText) =>
+        `Calendar display resolves to milliseconds; sub-millisecond remainder preserved: ${subMsText}`,
+      dateInputLabel: "Date / Time String",
+      datePlaceholder:
+        "ISO 8601 with offset (e.g. 2026-11-18T09:30:00+08:00) or offset-less civil time (e.g. 2026-11-18 09:30:00.123456789)",
+      interpretTzLabel: "Timezone for Offset-less Input",
+      displayTzLabel: "Custom IANA Timezone",
+      tzPlaceholder: "Valid IANA zone, e.g. America/New_York, Europe/London, Asia/Tokyo",
+      cardUtc: "Coordinated Universal Time (UTC)",
+      cardLocal: (tz) => `System Local Timezone (${tz})`,
+      cardCustom: (tz) => `Selected IANA Timezone (${tz})`,
+      isoLabel: "ISO 8601",
+      offsetLabel: "UTC Offset",
+      localCivilLabel: "Civil Date & Time",
+      epochSecLabel: "Seconds (s)",
+      epochMsLabel: "Milliseconds (ms)",
+      epochUsLabel: "Microseconds (µs)",
+      epochNsLabel: "Nanoseconds (ns)",
+      precisionTruncatedNote:
+        "Note: Coarser units truncate fractional sub-second components toward zero; full precision is preserved in µs/ns.",
+      emptyPrompt: "Enter an integer timestamp or click Now to inspect multi-timezone conversions.",
+    },
+    wordCounterTool: {
+      scopeNote:
+        "Counts user-perceived characters via Unicode grapheme clusters and words/sentences via Intl.Segmenter (word counts can vary across editors). Input capped at 2 MiB; text is never logged or persisted.",
+      inputLabel: "Input Text",
+      placeholder: "Type or paste English, Chinese, or multilingual text…",
+      clearBtn: "Clear",
+      copySummaryBtn: "Copy Stats",
+      copiedBadge: "Copied",
+      statWords: "Words",
+      statCharsWithSpaces: "Characters (with spaces)",
+      statCharsNoWhitespace: "Characters (no whitespace)",
+      statSentences: "Sentences",
+      statParagraphs: "Paragraphs",
+      statLines: "Lines",
+      statUtf8Bytes: "UTF-8 Bytes",
+      statReadingTime: "Est. Reading Time",
+      statSpeakingTime: "Est. Speaking Time",
+      estimateAssumptions:
+        "Estimates assume ~350 CJK chars/min + ~220 Latin words/min silent reading, and ~180 CJK chars/min + ~140 Latin words/min speaking.",
+      rulesNote:
+        "Definitions: empty text = 0 lines & 0 paragraphs; CRLF/LF normalized for line splits (trailing newline adds a physical line); non-empty blocks separated by blank lines = paragraphs.",
+      topWordsTitle: "Top Frequent Words (case-folded, common EN/ZH stopwords excluded, top 10)",
+      topWordsEmpty: "Enter content words to see frequency counts.",
+      limitExceeded: (maxMb) =>
+        `Input exceeds the ${maxMb} MiB safety ceiling; shorten text to keep the UI responsive.`,
+      formatDuration: (seconds) => {
+        if (seconds <= 0) return "0 sec";
+        if (seconds < 60) return `~${Math.max(1, Math.ceil(seconds))} sec`;
+        const mins = Math.floor(seconds / 60);
+        const rem = Math.round(seconds % 60);
+        return rem > 0 ? `~${mins} min ${rem} sec` : `~${mins} min`;
+      },
+    },
+    caseConverterTool: {
+      scopeNote:
+        "Converts across all 12 reference case & naming styles line by line while keeping your original input intact. Naming style conversion is lossy and does not translate or romanize text.",
+      inputLabel: "Source Text / Identifier List (line by line)",
+      outputLabel: "Converted Output",
+      placeholder: "Enter titles, sentences, or identifiers (e.g. getHTTPResponse, version2Value)…",
+      copyBtn: "Copy Output",
+      copiedBadge: "Copied",
+      clearBtn: "Clear",
+      stylesLabel: "Target Style (12 styles)",
+      lineRuleNote:
+        "Tokenizer splits acronym runs (HTTPResponse → http + response), camelCase, digit boundaries, and repeated delimiters; Title Case lowers standard English minor words and preserves mixed-case brands (e.g. iPhone, macOS, WinKit).",
+      emptyPreview: "—",
+      styleNames: {
+        uppercase: "UPPERCASE",
+        lowercase: "lowercase",
+        title: "Title Case",
+        sentence: "Sentence case",
+        camel: "camelCase",
+        pascal: "PascalCase",
+        snake: "snake_case",
+        constant: "CONSTANT_CASE",
+        kebab: "kebab-case",
+        dot: "dot.case",
+        alternating: "aLtErNaTiNg",
+        inverse: "iNVERSE",
+      },
     },
     beautifierTool: {
       scopeNote:

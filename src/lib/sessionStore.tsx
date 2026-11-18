@@ -1,4 +1,11 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
+import type {
+  Base64WrapWidth,
+  CodecFormat,
+  CodecOperation,
+  CodecTransformResponse,
+} from "../tools/codec/codecEngine";
+import type { AlgorithmDigestEntry, HashAlgorithm } from "../tools/hash-generator/hashUtils";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -13,16 +20,78 @@ export interface JsonSessionState {
 
 export interface HashSessionState {
   mode: "text" | "file";
+  selectedAlgorithms: HashAlgorithm[];
   textInput: string;
   filePath: string | null;
   fileName: string | null;
   fileSize: number | null;
-  digestHex: string | null;
+  digests: AlgorithmDigestEntry[] | null;
+  needsRecompute: boolean;
   uppercase: boolean;
   expectedHash: string;
   status: "idle" | "running" | "completed" | "cancelled" | "error";
   progressPercent: number | null;
   errorMessage: string | null;
+}
+
+export interface CodecSessionState {
+  inputMode: "text" | "file";
+  textInput: string;
+  filePath: string | null;
+  fileName: string | null;
+  format: CodecFormat;
+  operation: CodecOperation;
+  padding: boolean;
+  wrap: Base64WrapWidth;
+  ignoreWhitespace: boolean;
+  uppercaseHex: boolean;
+  groupBits: boolean;
+  result: CodecTransformResponse | null;
+  errorMessage: string | null;
+  savedMessage: string | null;
+}
+
+export interface UuidSessionState {
+  version: "v4" | "v7";
+  count: number;
+  uppercase: boolean;
+  hyphens: boolean;
+  generatedList: string[];
+  inspectInput: string;
+}
+
+export type TimestampUnit = "s" | "ms" | "us" | "ns";
+
+export interface TimestampSessionState {
+  mode: "to_date" | "to_timestamp";
+  timestampInput: string;
+  unit: TimestampUnit;
+  dateInput: string;
+  inputTimezone: string;
+  displayTimezone: string;
+}
+
+export interface WordCounterSessionState {
+  textInput: string;
+}
+
+export type CaseStyleId =
+  | "uppercase"
+  | "lowercase"
+  | "title"
+  | "sentence"
+  | "camel"
+  | "pascal"
+  | "snake"
+  | "constant"
+  | "kebab"
+  | "dot"
+  | "alternating"
+  | "inverse";
+
+export interface CaseConverterSessionState {
+  textInput: string;
+  selectedStyle: CaseStyleId;
 }
 
 export type BeautifierAspect = "original" | "1:1" | "16:9";
@@ -45,6 +114,11 @@ export interface BeautifierSessionState {
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
+  codec: CodecSessionState;
+  uuid: UuidSessionState;
+  timestamp: TimestampSessionState;
+  wordCounter: WordCounterSessionState;
+  caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
 }
 
@@ -58,16 +132,57 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
   },
   hash: {
     mode: "text",
+    selectedAlgorithms: ["SHA-256"],
     textInput: "",
     filePath: null,
     fileName: null,
     fileSize: null,
-    digestHex: null,
+    digests: null,
+    needsRecompute: false,
     uppercase: false,
     expectedHash: "",
     status: "idle",
     progressPercent: null,
     errorMessage: null,
+  },
+  codec: {
+    inputMode: "text",
+    textInput: "",
+    filePath: null,
+    fileName: null,
+    format: "base64_standard",
+    operation: "encode",
+    padding: true,
+    wrap: "none",
+    ignoreWhitespace: true,
+    uppercaseHex: false,
+    groupBits: true,
+    result: null,
+    errorMessage: null,
+    savedMessage: null,
+  },
+  uuid: {
+    version: "v4",
+    count: 5,
+    uppercase: false,
+    hyphens: true,
+    generatedList: [],
+    inspectInput: "",
+  },
+  timestamp: {
+    mode: "to_date",
+    timestampInput: "",
+    unit: "s",
+    dateInput: "",
+    inputTimezone: "UTC",
+    displayTimezone: "America/New_York",
+  },
+  wordCounter: {
+    textInput: "",
+  },
+  caseConverter: {
+    textInput: "",
+    selectedStyle: "snake",
   },
   beautifier: {
     sourcePath: null,
@@ -89,6 +204,11 @@ interface SessionStoreContextValue {
   session: SessionWorkspaces;
   updateJsonSession: (patch: Partial<JsonSessionState>) => void;
   updateHashSession: (patch: Partial<HashSessionState>) => void;
+  updateCodecSession: (patch: Partial<CodecSessionState>) => void;
+  updateUuidSession: (patch: Partial<UuidSessionState>) => void;
+  updateTimestampSession: (patch: Partial<TimestampSessionState>) => void;
+  updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
+  updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
 }
 
@@ -99,29 +219,50 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionWorkspaces>(INITIAL_SESSION_STATE);
 
   const updateJsonSession = (patch: Partial<JsonSessionState>) => {
-    setSession((prev) => ({
-      ...prev,
-      json: { ...prev.json, ...patch },
-    }));
+    setSession((prev) => ({ ...prev, json: { ...prev.json, ...patch } }));
   };
 
   const updateHashSession = (patch: Partial<HashSessionState>) => {
-    setSession((prev) => ({
-      ...prev,
-      hash: { ...prev.hash, ...patch },
-    }));
+    setSession((prev) => ({ ...prev, hash: { ...prev.hash, ...patch } }));
+  };
+
+  const updateCodecSession = (patch: Partial<CodecSessionState>) => {
+    setSession((prev) => ({ ...prev, codec: { ...prev.codec, ...patch } }));
+  };
+
+  const updateUuidSession = (patch: Partial<UuidSessionState>) => {
+    setSession((prev) => ({ ...prev, uuid: { ...prev.uuid, ...patch } }));
+  };
+
+  const updateTimestampSession = (patch: Partial<TimestampSessionState>) => {
+    setSession((prev) => ({ ...prev, timestamp: { ...prev.timestamp, ...patch } }));
+  };
+
+  const updateWordCounterSession = (patch: Partial<WordCounterSessionState>) => {
+    setSession((prev) => ({ ...prev, wordCounter: { ...prev.wordCounter, ...patch } }));
+  };
+
+  const updateCaseConverterSession = (patch: Partial<CaseConverterSessionState>) => {
+    setSession((prev) => ({ ...prev, caseConverter: { ...prev.caseConverter, ...patch } }));
   };
 
   const updateBeautifierSession = (patch: Partial<BeautifierSessionState>) => {
-    setSession((prev) => ({
-      ...prev,
-      beautifier: { ...prev.beautifier, ...patch },
-    }));
+    setSession((prev) => ({ ...prev, beautifier: { ...prev.beautifier, ...patch } }));
   };
 
   return (
     <SessionStoreContext.Provider
-      value={{ session, updateJsonSession, updateHashSession, updateBeautifierSession }}
+      value={{
+        session,
+        updateJsonSession,
+        updateHashSession,
+        updateCodecSession,
+        updateUuidSession,
+        updateTimestampSession,
+        updateWordCounterSession,
+        updateCaseConverterSession,
+        updateBeautifierSession,
+      }}
     >
       {children}
     </SessionStoreContext.Provider>

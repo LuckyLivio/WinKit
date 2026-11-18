@@ -63,7 +63,14 @@ export function HomeView({
 
         {mode === "all" && tools.length > 0 && (
           <div className="segmented" role="group" aria-label={t.categories.all}>
-            {(["all", "developer", "image"] as const).map((cat) => (
+            {(
+              [
+                "all",
+                ...(["developer", "text", "image"] as const).filter((cat) =>
+                  tools.some((item) => item.category === cat),
+                ),
+              ] as const
+            ).map((cat) => (
               <button
                 key={cat}
                 type="button"
