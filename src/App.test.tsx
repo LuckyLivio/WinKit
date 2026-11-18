@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 import { useSessionStore } from "./lib/sessionStore";
-import { REGISTERED_TOOLS, type RegisteredTool } from "./registry/tools";
+import { filterTools, REGISTERED_TOOLS, type RegisteredTool } from "./registry/tools";
 
 function MockStatefulTool() {
   const { session, updateJsonSession } = useSessionStore();
@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 16 active Phase 2B2 tools with unique IDs and complete bilingual metadata", () => {
+  it("registers all 17 active Phase 2B3 tools with unique IDs, complete bilingual metadata, and Coordinate Picker search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -104,6 +104,7 @@ describe("WinKit desktop workbench shell", () => {
       "D07",
       "D08",
       "D09",
+      "D10",
       "D11",
       "D12",
       "D13",
@@ -118,5 +119,14 @@ describe("WinKit desktop workbench shell", () => {
       expect(tool.summary["zh-CN"].length).toBeGreaterThan(0);
       expect(tool.summary["en-US"].length).toBeGreaterThan(0);
     }
+
+    expect(
+      filterTools(REGISTERED_TOOLS, { query: "Coordinate Picker", category: "all" }).map(
+        (t) => t.id,
+      ),
+    ).toContain("D10");
+    expect(
+      filterTools(REGISTERED_TOOLS, { query: "地图坐标", category: "all" }).map((t) => t.id),
+    ).toContain("D10");
   });
 });

@@ -3,6 +3,7 @@ import {
   Braces,
   CaseSensitive,
   Clock,
+  Compass,
   FileText,
   Fingerprint,
   Frame,
@@ -38,6 +39,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Regex size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "link":
       return <Link2 size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "compass":
+      return <Compass size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "scan-text":
       return <ScanText size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "text-quote":

@@ -25,6 +25,10 @@ import type {
   PathConflictPolicy,
   RaggedRowPolicy,
 } from "../tools/csv-json/csvJsonEngine";
+import type {
+  CoordinateOutputFormatId,
+  PlainTextAxisOrder,
+} from "../tools/coordinate-converter/coordinateEngine";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -132,6 +136,27 @@ export interface CleanLinksSessionState {
   inputText: string;
 }
 
+export interface CoordinateSessionState {
+  activeTab: "single" | "distance" | "batch";
+  singleInputMode: "paste" | "separate";
+  singleRawInput: string;
+  separateLatInput: string;
+  separateLonInput: string;
+  plainAxisOrder: PlainTextAxisOrder;
+  ddDecimals: string;
+  dmDecimals: string;
+  dmsDecimals: string;
+  pointAInput: string;
+  pointBInput: string;
+  distanceAxisOrder: PlainTextAxisOrder;
+  batchInputText: string;
+  batchSourceFilePath: string | null;
+  batchSourceFileName: string | null;
+  batchOutputFormat: CoordinateOutputFormatId;
+  batchCsvScope: "all_with_errors" | "valid_only";
+  batchFormulaProtection: boolean;
+}
+
 export interface LoremIpsumSessionState {
   unit: LoremUnit;
   rawCount: string;
@@ -230,6 +255,7 @@ export interface SessionWorkspaces {
   regex: RegexSessionState;
   unicode: UnicodeSessionState;
   cleanLinks: CleanLinksSessionState;
+  coordinate: CoordinateSessionState;
   loremIpsum: LoremIpsumSessionState;
   passwordGenerator: PasswordGeneratorSessionState;
   csvJson: CsvJsonSessionState;
@@ -330,6 +356,26 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
   cleanLinks: {
     inputText: "",
   },
+  coordinate: {
+    activeTab: "single",
+    singleInputMode: "paste",
+    singleRawInput: "",
+    separateLatInput: "",
+    separateLonInput: "",
+    plainAxisOrder: "lat_lon",
+    ddDecimals: "6",
+    dmDecimals: "3",
+    dmsDecimals: "2",
+    pointAInput: "",
+    pointBInput: "",
+    distanceAxisOrder: "lat_lon",
+    batchInputText: "",
+    batchSourceFilePath: null,
+    batchSourceFileName: null,
+    batchOutputFormat: "dd",
+    batchCsvScope: "all_with_errors",
+    batchFormulaProtection: false,
+  },
   loremIpsum: {
     unit: "paragraphs",
     rawCount: "3",
@@ -409,6 +455,7 @@ interface SessionStoreContextValue {
   updateRegexSession: (patch: Partial<RegexSessionState>) => void;
   updateUnicodeSession: (patch: Partial<UnicodeSessionState>) => void;
   updateCleanLinksSession: (patch: Partial<CleanLinksSessionState>) => void;
+  updateCoordinateSession: (patch: Partial<CoordinateSessionState>) => void;
   updateLoremIpsumSession: (patch: Partial<LoremIpsumSessionState>) => void;
   updatePasswordGeneratorSession: (patch: Partial<PasswordGeneratorSessionState>) => void;
   updateCsvJsonSession: (patch: Partial<CsvJsonSessionState>) => void;
@@ -463,6 +510,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, cleanLinks: { ...prev.cleanLinks, ...patch } }));
   };
 
+  const updateCoordinateSession = (patch: Partial<CoordinateSessionState>) => {
+    setSession((prev) => ({ ...prev, coordinate: { ...prev.coordinate, ...patch } }));
+  };
+
   const updateLoremIpsumSession = (patch: Partial<LoremIpsumSessionState>) => {
     setSession((prev) => ({ ...prev, loremIpsum: { ...prev.loremIpsum, ...patch } }));
   };
@@ -504,6 +555,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateRegexSession,
         updateUnicodeSession,
         updateCleanLinksSession,
+        updateCoordinateSession,
         updateLoremIpsumSession,
         updatePasswordGeneratorSession,
         updateCsvJsonSession,

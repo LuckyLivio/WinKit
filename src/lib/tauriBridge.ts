@@ -311,6 +311,11 @@ export async function readTabularTextFile(path: string): Promise<DiffTextFilePay
   return invoke<DiffTextFilePayload>("read_tabular_text_file", { path });
 }
 
+export async function readCoordBatchTextFile(path: string): Promise<DiffTextFilePayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<DiffTextFilePayload>("read_coord_batch_text_file", { path });
+}
+
 export async function saveLocalTextFile(params: {
   outputPath: string;
   sourcePath: string | null;

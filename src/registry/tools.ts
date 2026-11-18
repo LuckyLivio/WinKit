@@ -3,6 +3,7 @@ import type { Locale } from "../i18n/messages";
 import { CaseConverterWorkspace } from "../tools/case-converter/CaseConverterWorkspace";
 import { CleanLinksWorkspace } from "../tools/clean-links/CleanLinksWorkspace";
 import { CodecWorkspace } from "../tools/codec/CodecWorkspace";
+import { CoordinateConverterWorkspace } from "../tools/coordinate-converter/CoordinateConverterWorkspace";
 import { CsvJsonWorkspace } from "../tools/csv-json/CsvJsonWorkspace";
 import { DiffCheckerWorkspace } from "../tools/diff-checker/DiffCheckerWorkspace";
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
@@ -29,6 +30,7 @@ export type ToolIconName =
   | "git-compare"
   | "regex"
   | "link"
+  | "compass"
   | "scan-text"
   | "text-quote"
   | "lock-keyhole"
@@ -320,6 +322,48 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "link",
     implementationStatus: "partial",
     component: CleanLinksWorkspace,
+  },
+  {
+    id: "D10",
+    category: "developer",
+    name: {
+      "zh-CN": "坐标转换与测距",
+      "en-US": "Coordinate Converter & Distance",
+    },
+    summary: {
+      "zh-CN":
+        "离线转换二维 WGS 84 坐标（DD / DMS / DM / GeoJSON / WKT / geo: / 地图坐标链接）、计算椭球测地线距离并支持有限批量导出",
+      "en-US":
+        "Offline 2D WGS 84 coordinate converter across 8 formats, ellipsoid geodesic distance calculator, and bounded batch CSV exporter",
+    },
+    keywords: [
+      "coordinate",
+      "picker",
+      "coordinate picker",
+      "latitude",
+      "longitude",
+      "lat",
+      "lon",
+      "wgs84",
+      "dms",
+      "geojson",
+      "wkt",
+      "geo",
+      "geodesic",
+      "distance",
+      "map",
+      "maps",
+      "坐标",
+      "经纬度",
+      "地图",
+      "地图坐标",
+      "坐标拾取",
+      "度分秒",
+      "测距",
+    ],
+    icon: "compass",
+    implementationStatus: "partial",
+    component: CoordinateConverterWorkspace,
   },
   {
     id: "D11",

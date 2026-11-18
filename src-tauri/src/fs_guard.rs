@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MAX_TEXT_FILE_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB ceiling for interactive JSON editor files
 const MAX_TABULAR_FILE_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB ceiling for D14 CSV/TSV/JSON converter
 const MAX_DIFF_FILE_BYTES: u64 = 4 * 1024 * 1024; // 4 MiB per-side ceiling for interactive line/word diff
+const MAX_COORD_BATCH_FILE_BYTES: u64 = 1024 * 1024; // 1 MiB ceiling for D10 batch coordinate files
 const WRITE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
@@ -302,6 +303,14 @@ pub fn read_strict_diff_text_file(raw_path: &str) -> Result<DiffTextFilePayload,
 
 pub fn read_strict_tabular_text_file(raw_path: &str) -> Result<DiffTextFilePayload, AppError> {
     read_strict_utf8_file_with_limit(raw_path, MAX_TABULAR_FILE_BYTES, "8 MiB tabular")
+}
+
+pub fn read_strict_coord_batch_file(raw_path: &str) -> Result<DiffTextFilePayload, AppError> {
+    read_strict_utf8_file_with_limit(
+        raw_path,
+        MAX_COORD_BATCH_FILE_BYTES,
+        "1 MiB coordinate batch",
+    )
 }
 
 fn read_strict_utf8_file_with_limit(

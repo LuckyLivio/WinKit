@@ -766,6 +766,119 @@ export interface Messages {
     overwriteConfirmAccept: string;
     cancel: string;
   };
+  coordinateTool: {
+    offlineBadge: string;
+    scopeNote: string;
+    tabSingle: string;
+    tabDistance: string;
+    tabBatch: string;
+    modePaste: string;
+    modeSeparate: string;
+    plainOrderLabel: string;
+    orderLatLon: string;
+    orderLonLat: string;
+    singleInputLabel: string;
+    singlePlaceholder: string;
+    latFieldLabel: string;
+    lonFieldLabel: string;
+    latPlaceholder: string;
+    lonPlaceholder: string;
+    ddDecLabel: string;
+    dmDecLabel: string;
+    dmsDecLabel: string;
+    precisionHint: string;
+    sampleBtn: string;
+    clearBtn: string;
+    sendToABtn: string;
+    sendToBBtn: string;
+    detectedBadge: (fmt: string, order: string) => string;
+    detectedFormatNames: {
+      separate_fields: string;
+      dd: string;
+      dm: string;
+      dms: string;
+      geojson_point: string;
+      wkt_point: string;
+      geo_uri: string;
+      apple_maps_url: string;
+      google_maps_url: string;
+    };
+    axisOrderNames: {
+      lat_lon: string;
+      lon_lat: string;
+      hemisphere_tagged: string;
+    };
+    outputsPaneTitle: string;
+    emptySinglePrompt: string;
+    formatLabels: {
+      dd: string;
+      dms: string;
+      dm: string;
+      geojson: string;
+      wkt: string;
+      geo_uri: string;
+      apple_maps: string;
+      google_maps: string;
+    };
+    formatMeta: {
+      dd: string;
+      dms: string;
+      dm: string;
+      geojson: string;
+      wkt: string;
+      geo_uri: string;
+      apple_maps: string;
+      google_maps: string;
+    };
+    copyBtn: string;
+    copiedBadge: string;
+    pointATitle: string;
+    pointBTitle: string;
+    pointPlaceholder: string;
+    fillFromCurrentBtn: string;
+    swapPointsBtn: string;
+    sampleAntipodalBtn: string;
+    sampleDatelineBtn: string;
+    pointAErrorPrefix: (msg: string) => string;
+    pointBErrorPrefix: (msg: string) => string;
+    distanceResultTitle: string;
+    distanceEmptyPrompt: string;
+    unitKilometers: string;
+    unitMeters: string;
+    unitMiles: string;
+    distanceModelNote: string;
+    batchInputTitle: (fileName: string | null) => string;
+    batchPlaceholder: string;
+    batchOutputFormatLabel: string;
+    batchCsvScopeLabel: string;
+    batchCsvScopeAll: string;
+    batchCsvScopeValid: string;
+    batchFormulaProtection: string;
+    openBatchFileBtn: string;
+    cancelBatchBtn: string;
+    copyValidBtn: (count: number) => string;
+    exportCsvBtn: string;
+    batchStatusEmpty: string;
+    batchStatusRunning: string;
+    batchStatusCancelled: string;
+    batchStatusSummary: (valid: number, errors: number, skippedBlank: number) => string;
+    batchPreviewTruncated: (shown: number, total: number) => string;
+    batchScopeRuleNote: string;
+    colLine: string;
+    colRaw: string;
+    colStatus: string;
+    colLat: string;
+    colLon: string;
+    colResultOrError: string;
+    badgeOk: string;
+    badgeErr: string;
+    savedCsvSuccess: (path: string, bytes: number) => string;
+    saveAbortedChanged: string;
+    overwriteConfirmTitle: string;
+    overwriteConfirmBody: (path: string) => string;
+    overwriteConfirmAccept: string;
+    cancel: string;
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -1645,6 +1758,132 @@ export const MESSAGES: Record<Locale, Messages> = {
       overwriteConfirmTitle: "目标文件已存在",
       overwriteConfirmBody: (path) =>
         `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖原输入文件）？`,
+      overwriteConfirmAccept: "确认覆盖",
+      cancel: "取消",
+    },
+    coordinateTool: {
+      offlineBadge: "WGS 84 · 离线",
+      scopeNote:
+        "支持二维 WGS 84 地理坐标解析、8 种标准格式导出、参考椭球测地线距离与有限批量转换（纯离线计算，不含在线底图、地址检索或定位）。",
+      tabSingle: "坐标转换",
+      tabDistance: "两点测距",
+      tabBatch: "批量转换",
+      modePaste: "单框表达式 / 链接",
+      modeSeparate: "独立纬经度输入",
+      plainOrderLabel: "无方向标签文本顺序",
+      orderLatLon: "纬度, 经度",
+      orderLonLat: "经度, 纬度",
+      singleInputLabel: "坐标表达式或地图坐标链接（上限 16 KiB）",
+      singlePlaceholder:
+        "粘贴 DD (37.8197, -122.4786)、DMS (37°49′10.92″N 122°28′42.96″W)、GeoJSON Point、WKT POINT、geo: 或 Apple / Google 坐标链接…",
+      latFieldLabel: "纬度 Latitude [-90°, 90°]",
+      lonFieldLabel: "经度 Longitude [-180°, 180°]",
+      latPlaceholder: "例如 37.8197 或 37°49′10.92″N",
+      lonPlaceholder: "例如 -122.4786 或 122°28′42.96″W",
+      ddDecLabel: "十进制度位数 (0–8)",
+      dmDecLabel: "分小数位 (0–4)",
+      dmsDecLabel: "秒小数位 (0–4)",
+      precisionHint:
+        "显示位数仅控制格式化舍入（含分秒进位），不代表实际定位精度，也不会覆盖未舍入内部坐标或测距输入。",
+      sampleBtn: "填入示例",
+      clearBtn: "清空",
+      sendToABtn: "填入测距起点 A",
+      sendToBBtn: "填入测距终点 B",
+      detectedBadge: (fmt, order) => `识别格式：${fmt} · 轴序：${order}`,
+      detectedFormatNames: {
+        separate_fields: "独立纬经度字段",
+        dd: "DD 十进制度",
+        dm: "DM 度与十进制分",
+        dms: "DMS 度分秒",
+        geojson_point: "GeoJSON Point",
+        wkt_point: "WKT POINT",
+        geo_uri: "geo: URI",
+        apple_maps_url: "Apple Maps 坐标链接",
+        google_maps_url: "Google Maps 坐标链接",
+      },
+      axisOrderNames: {
+        lat_lon: "纬度在前 (Lat, Lon)",
+        lon_lat: "经度在前 (Lon, Lat)",
+        hemisphere_tagged: "按 N/S/E/W 半球确定",
+      },
+      outputsPaneTitle: "八种 WGS 84 标准表示（点击仅复制文本，不打开外部网页）",
+      emptySinglePrompt: "输入或粘贴有效二维 WGS 84 坐标后生成八种标准格式。",
+      formatLabels: {
+        dd: "DD 十进制度",
+        dms: "DMS 度分秒",
+        dm: "DM 十进制分",
+        geojson: "GeoJSON Point",
+        wkt: "WKT Point",
+        geo_uri: "geo: URI",
+        apple_maps: "Apple Maps 链接",
+        google_maps: "Google Maps 链接",
+      },
+      formatMeta: {
+        dd: "纬度, 经度",
+        dms: "度°分′秒″N/S E/W",
+        dm: "度°分′N/S E/W",
+        geojson: "RFC 7946 [经度, 纬度]",
+        wkt: "POINT (经度 纬度) · 按 WGS 84 约定",
+        geo_uri: "RFC 5870 geo:纬度,经度",
+        apple_maps: "coordinate=纬度,经度",
+        google_maps: "api=1&query=纬度%2C经度",
+      },
+      copyBtn: "复制",
+      copiedBadge: "已复制",
+      pointATitle: "起点 A",
+      pointBTitle: "终点 B",
+      pointPlaceholder: "输入 DD / DMS / DM / GeoJSON / WKT / geo: / 坐标链接…",
+      fillFromCurrentBtn: "用当前转换点填入",
+      swapPointsBtn: "交换 A ↔ B",
+      sampleAntipodalBtn: "近对跖点示例",
+      sampleDatelineBtn: "跨日界线示例",
+      pointAErrorPrefix: (msg) => `起点 A 错误：${msg}`,
+      pointBErrorPrefix: (msg) => `终点 B 错误：${msg}`,
+      distanceResultTitle: "WGS 84 椭球逆测地线距离",
+      distanceEmptyPrompt: "分别输入起点 A 与终点 B 坐标后计算参考椭球表面最短距离。",
+      unitKilometers: "千米 (km)",
+      unitMeters: "米 (m)",
+      unitMiles: "英里 (mi)",
+      distanceModelNote:
+        "计算模型：WGS 84 参考椭球（a = 6378137 m, f = 1/298.257223563）表面最短测地线距离（GeographicLib Karney 算法），非驾车/步行路线距离或含高程的三维距离。",
+      batchInputTitle: (fileName) =>
+        fileName ? `批量源（${fileName}）` : "每行一条坐标表达式（上限 1 MiB / 5,000 行）",
+      batchPlaceholder:
+        "每行粘贴一条 DD、DMS、DM、单行 GeoJSON Point、WKT POINT、geo: 或官方坐标链接（多行格式化 GeoJSON 请使用“坐标转换”单点视图；不支持地址查询）…",
+      batchOutputFormatLabel: "目标格式",
+      batchCsvScopeLabel: "CSV 导出行范围",
+      batchCsvScopeAll: "全部记录（含失败原因，推荐）",
+      batchCsvScopeValid: "仅成功记录",
+      batchFormulaProtection: "电子表格公式保护",
+      openBatchFileBtn: "导入文本…",
+      cancelBatchBtn: "取消转换",
+      copyValidBtn: (count) => `复制有效结果 (${count})`,
+      exportCsvBtn: "保存 CSV…",
+      batchStatusEmpty: "粘贴或导入每行一条坐标列表后自动在后台 Worker 中解析。",
+      batchStatusRunning: "正在后台 Worker 中批量解析与格式化…",
+      batchStatusCancelled: "已取消上一次批量转换。",
+      batchStatusSummary: (valid, errors, skippedBlank) =>
+        `解析完成：成功 ${valid.toLocaleString()} 行 · 失败 ${errors.toLocaleString()} 行` +
+        (skippedBlank > 0 ? ` · 跳过空行 ${skippedBlank.toLocaleString()} 行（源行号保留）` : ""),
+      batchPreviewTruncated: (shown, total) =>
+        `预览仅显示前 ${shown.toLocaleString()} / ${total.toLocaleString()} 条非空记录；复制与保存 CSV 将输出完整结果（UTF-8 上限 8 MiB）。`,
+      batchScopeRuleNote:
+        "说明：仅离线解析二维 WGS 84 坐标与坐标链接，不执行地址地理编码或反查；空行自动跳过且不改变后续源行号。",
+      colLine: "源行号",
+      colRaw: "原始内容",
+      colStatus: "状态",
+      colLat: "纬度",
+      colLon: "经度",
+      colResultOrError: "转换结果 / 错误原因",
+      badgeOk: "成功",
+      badgeErr: "失败",
+      savedCsvSuccess: (path, bytes) =>
+        `已安全保存批量坐标 CSV（${bytes.toLocaleString()} 字节）：${path}`,
+      saveAbortedChanged:
+        "批量输入或导出选项在另存对话框打开期间已变更，本次保存已取消以避免输出旧批次。",
+      overwriteConfirmTitle: "目标文件已存在",
+      overwriteConfirmBody: (path) =>
+        `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖原导入文件）？`,
       overwriteConfirmAccept: "确认覆盖",
       cancel: "取消",
     },
@@ -2551,6 +2790,137 @@ export const MESSAGES: Record<Locale, Messages> = {
       overwriteConfirmTitle: "Destination File Exists",
       overwriteConfirmBody: (path) =>
         `"${path}" already exists. Replace it (your source input file can never be overwritten)?`,
+      overwriteConfirmAccept: "Replace File",
+      cancel: "Cancel",
+    },
+    coordinateTool: {
+      offlineBadge: "WGS 84 · Offline",
+      scopeNote:
+        "Offline 2D WGS 84 coordinate conversion across 8 formats, ellipsoid geodesic distance, and bounded batch export (no online tiles, geocoding, or device location).",
+      tabSingle: "Convert",
+      tabDistance: "Distance",
+      tabBatch: "Batch",
+      modePaste: "Single Expression / Link",
+      modeSeparate: "Separate Lat / Lon",
+      plainOrderLabel: "Unlabeled Text Order",
+      orderLatLon: "Lat, Lon",
+      orderLonLat: "Lon, Lat",
+      singleInputLabel: "Coordinate Expression or Maps Link (16 KiB max)",
+      singlePlaceholder:
+        "Paste DD (37.8197, -122.4786), DMS (37°49′10.92″N 122°28′42.96″W), GeoJSON Point, WKT POINT, geo:, or Apple / Google Maps coordinate URL…",
+      latFieldLabel: "Latitude [-90°, 90°]",
+      lonFieldLabel: "Longitude [-180°, 180°]",
+      latPlaceholder: "e.g. 37.8197 or 37°49′10.92″N",
+      lonPlaceholder: "e.g. -122.4786 or 122°28′42.96″W",
+      ddDecLabel: "DD decimals (0–8)",
+      dmDecLabel: "DM decimals (0–4)",
+      dmsDecLabel: "DMS sec decimals (0–4)",
+      precisionHint:
+        "Display digits control formatting rounding (with carry propagation) only, not physical positioning accuracy, and never truncate internal coordinates or distance inputs.",
+      sampleBtn: "Load Sample",
+      clearBtn: "Clear",
+      sendToABtn: "Use as Point A",
+      sendToBBtn: "Use as Point B",
+      detectedBadge: (fmt, order) => `Detected: ${fmt} · Axis order: ${order}`,
+      detectedFormatNames: {
+        separate_fields: "Separate Lat/Lon Fields",
+        dd: "DD (Decimal Degrees)",
+        dm: "DM (Degrees & Decimal Minutes)",
+        dms: "DMS (Degrees Minutes Seconds)",
+        geojson_point: "GeoJSON Point",
+        wkt_point: "WKT POINT",
+        geo_uri: "geo: URI",
+        apple_maps_url: "Apple Maps Coordinate URL",
+        google_maps_url: "Google Maps Coordinate URL",
+      },
+      axisOrderNames: {
+        lat_lon: "Latitude first (Lat, Lon)",
+        lon_lat: "Longitude first (Lon, Lat)",
+        hemisphere_tagged: "Determined by N/S/E/W hemispheres",
+      },
+      outputsPaneTitle: "Eight Standard WGS 84 Representations (Copy Only — Never Opens Browser)",
+      emptySinglePrompt: "Enter or paste a valid 2D WGS 84 coordinate to generate all 8 formats.",
+      formatLabels: {
+        dd: "DD (Decimal Degrees)",
+        dms: "DMS (Deg Min Sec)",
+        dm: "DM (Decimal Minutes)",
+        geojson: "GeoJSON Point",
+        wkt: "WKT Point",
+        geo_uri: "geo: URI",
+        apple_maps: "Apple Maps Link",
+        google_maps: "Google Maps Link",
+      },
+      formatMeta: {
+        dd: "latitude, longitude",
+        dms: "deg°min′sec″N/S E/W",
+        dm: "deg°min′N/S E/W",
+        geojson: "RFC 7946 [longitude, latitude]",
+        wkt: "POINT (longitude latitude) · WGS 84 convention",
+        geo_uri: "RFC 5870 geo:latitude,longitude",
+        apple_maps: "coordinate=latitude,longitude",
+        google_maps: "api=1&query=latitude%2Clongitude",
+      },
+      copyBtn: "Copy",
+      copiedBadge: "Copied",
+      pointATitle: "Point A",
+      pointBTitle: "Point B",
+      pointPlaceholder: "Enter DD / DMS / DM / GeoJSON / WKT / geo: / coordinate URL…",
+      fillFromCurrentBtn: "Fill from Convert Tab",
+      swapPointsBtn: "Swap A ↔ B",
+      sampleAntipodalBtn: "Near-Antipodal Sample",
+      sampleDatelineBtn: "Antimeridian Sample",
+      pointAErrorPrefix: (msg) => `Point A error: ${msg}`,
+      pointBErrorPrefix: (msg) => `Point B error: ${msg}`,
+      distanceResultTitle: "WGS 84 Ellipsoid Inverse Geodesic Distance",
+      distanceEmptyPrompt:
+        "Enter valid coordinates for Point A and Point B to compute shortest ellipsoid surface distance.",
+      unitKilometers: "Kilometers (km)",
+      unitMeters: "Meters (m)",
+      unitMiles: "Miles (mi)",
+      distanceModelNote:
+        "Model: Shortest surface geodesic on the WGS 84 reference ellipsoid (a = 6378137 m, f = 1/298.257223563, GeographicLib Karney algorithm) — not driving/walking route or 3D elevation distance.",
+      batchInputTitle: (fileName) =>
+        fileName
+          ? `Batch Source (${fileName})`
+          : "One Coordinate Expression per Line (1 MiB / 5,000 lines)",
+      batchPlaceholder:
+        "Paste one DD, DMS, DM, single-line GeoJSON Point, WKT POINT, geo:, or coordinate URL per line (use Single-Point view for multi-line GeoJSON; address geocoding is not supported)…",
+      batchOutputFormatLabel: "Target Format",
+      batchCsvScopeLabel: "CSV Rows",
+      batchCsvScopeAll: "All rows (include errors, recommended)",
+      batchCsvScopeValid: "Valid rows only",
+      batchFormulaProtection: "Formula protection",
+      openBatchFileBtn: "Import File…",
+      cancelBatchBtn: "Cancel",
+      copyValidBtn: (count) => `Copy Valid (${count})`,
+      exportCsvBtn: "Save CSV…",
+      batchStatusEmpty: "Paste or import one coordinate expression per line to convert in Worker.",
+      batchStatusRunning: "Parsing and formatting batch in dedicated Worker…",
+      batchStatusCancelled: "Cancelled previous batch conversion.",
+      batchStatusSummary: (valid, errors, skippedBlank) =>
+        `Done: ${valid.toLocaleString()} valid · ${errors.toLocaleString()} error(s)` +
+        (skippedBlank > 0
+          ? ` · ${skippedBlank.toLocaleString()} blank line(s) skipped (source line numbers preserved)`
+          : ""),
+      batchPreviewTruncated: (shown, total) =>
+        `Preview shows first ${shown.toLocaleString()} of ${total.toLocaleString()} non-blank rows; Copy and Save CSV export the full output (8 MiB UTF-8 cap).`,
+      batchScopeRuleNote:
+        "Note: Offline 2D WGS 84 coordinate parsing only (no address geocoding or reverse lookup); blank lines are skipped without shifting source line numbers.",
+      colLine: "Line #",
+      colRaw: "Original Input",
+      colStatus: "Status",
+      colLat: "Latitude",
+      colLon: "Longitude",
+      colResultOrError: "Formatted Output / Error",
+      badgeOk: "OK",
+      badgeErr: "Error",
+      savedCsvSuccess: (path, bytes) =>
+        `Saved batch coordinate CSV (${bytes.toLocaleString()} bytes): ${path}`,
+      saveAbortedChanged:
+        "Batch input or export options changed while the Save dialog was open; save cancelled to prevent writing stale data.",
+      overwriteConfirmTitle: "Destination File Exists",
+      overwriteConfirmBody: (path) =>
+        `"${path}" already exists. Replace it (your imported source file can never be overwritten)?`,
       overwriteConfirmAccept: "Replace File",
       cancel: "Cancel",
     },
