@@ -322,6 +322,28 @@ function tryUnwrapSingleLayer(
 }
 
 /**
+ * Checks whether `rawUrl` contains a known presigned/cryptographic signature query parameter name.
+ * Reused both BEFORE redirect unwrapping at each layer and before parameter stripping.
+ */
+export function findPresignedSignatureParamKey(rawUrl: string): string | null {
+  const slices = splitRawUrlLexically(rawUrl);
+  if (slices.queryKind !== "present") {
+    return null;
+  }
+  const rawSegments = slices.rawQuery.split("&");
+  for (const seg of rawSegments) {
+    if (!seg) continue;
+    const eqIdx = seg.indexOf("=");
+    const rawKey = eqIdx === -1 ? seg : seg.slice(0, eqIdx);
+    const decodedKey = decodeQueryKeyForMatching(rawKey);
+    if (decodedKey && PRESIGNED_SIGNATURE_PARAM_NAMES.has(decodedKey.toLowerCase())) {
+      return decodedKey;
+    }
+  }
+  return null;
+}
+
+/**
  * Strips known tracking query parameters from a single validated HTTP/HTTPS URL while preserving
  * exact raw path, surviving query parameter bytes (`+`, `%20`, `%2B`, `%252F`, `~`, duplicate keys,
  * empty values, keyless flags), and exact `#fragment`.
@@ -347,23 +369,18 @@ function stripTrackingParamsPreservingRawSegments(
     };
   }
 
-  const rawSegments = slices.rawQuery.split("&");
-
   // Conservative presigned check across all parameters first
-  for (const seg of rawSegments) {
-    if (!seg) continue;
-    const eqIdx = seg.indexOf("=");
-    const rawKey = eqIdx === -1 ? seg : seg.slice(0, eqIdx);
-    const decodedKey = decodeQueryKeyForMatching(rawKey);
-    if (decodedKey && PRESIGNED_SIGNATURE_PARAM_NAMES.has(decodedKey.toLowerCase())) {
-      return {
-        cleanedUrl: rawUrl,
-        removedParams: [],
-        presignedSkippedKey: decodedKey,
-        preservedMalformedKeyCount: 0,
-      };
-    }
+  const presignedKey = findPresignedSignatureParamKey(rawUrl);
+  if (presignedKey !== null) {
+    return {
+      cleanedUrl: rawUrl,
+      removedParams: [],
+      presignedSkippedKey: presignedKey,
+      preservedMalformedKeyCount: 0,
+    };
   }
+
+  const rawSegments = slices.rawQuery.split("&");
 
   const keptSegments: string[] = [];
   const removedParams: RemovedParamDetail[] = [];
@@ -465,6 +482,11 @@ export function cleanSingleLine(rawLine: string, lineNumber: number): CleanLinkL
   const visited = new Set<string>([currentRaw]);
 
   for (let depth = 1; depth <= MAX_REDIRECT_UNWRAP_DEPTH + 1; depth++) {
+    // Check presigned signature protection BEFORE attempting to unwrap the current URL layer
+    if (findPresignedSignatureParamKey(currentRaw) !== null) {
+      break;
+    }
+
     const checkWrapper = findMatchingRedirectWrapper(
       currentParsed.hostname,
       currentParsed.pathname,

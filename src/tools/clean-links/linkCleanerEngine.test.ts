@@ -206,7 +206,7 @@ describe("D09 linkCleanerEngine", () => {
     const mixedClip = evaluateClipboardLinksOnlyReplace(batchText);
     expect(mixedClip.canReplace).toBe(false);
 
-    // Pure-links clipboard replaces cleanly
+    // Plain-links clipboard replaces cleanly
     const pureClip = evaluateClipboardLinksOnlyReplace(
       "https://news.example.com/story?id=10&utm_source=rss\r\nhttps://youtu.be/abc?si=track1",
     );
@@ -215,6 +215,47 @@ describe("D09 linkCleanerEngine", () => {
       expect(pureClip.replacementText).toBe(
         "https://news.example.com/story?id=10\r\nhttps://youtu.be/abc",
       );
+    }
+  });
+
+  it("checks presigned signature params BEFORE unwrapping at outer and inner layers", () => {
+    // 1. Signed outer wrapper: must NOT unwrap or strip any params; preserves exact raw URL & fragment
+    const signedOuter =
+      "https://www.google.com/url?url=https%3A%2F%2Fexample.com%2Freport%3Futm_source%3Dmail&sig=test-signature&utm_source=mail#frag%20keep";
+    const outerRes = cleanSingleLine(signedOuter, 1);
+    expect(outerRes.status).toBe("ok");
+    if (outerRes.status === "ok") {
+      expect(outerRes.cleanedUrl).toBe(signedOuter);
+      expect(outerRes.changed).toBe(false);
+      expect(outerRes.unwrapSteps).toHaveLength(0);
+      expect(outerRes.removedParams).toHaveLength(0);
+      expect(outerRes.presignedSkippedKey).toBe("sig");
+    }
+
+    // 2. Unsigned outer wrapper wrapping a signed inner wrapper/URL: unwraps outer only, stops immediately on signed inner
+    const signedInnerWrapper =
+      "https://www.google.com/url?url=https%3A%2F%2Fexample.com%2Fsecret%3Futm_source%3Dinner&X-Amz-Signature=deadbeef&utm_medium=wrapped#sec";
+    const unsignedOuter = `https://l.facebook.com/l.php?u=${encodeURIComponent(signedInnerWrapper)}&fbclid=IwAR_outer`;
+    const nestedSignedRes = cleanSingleLine(unsignedOuter, 1);
+    expect(nestedSignedRes.status).toBe("ok");
+    if (nestedSignedRes.status === "ok") {
+      expect(nestedSignedRes.unwrapSteps.map((s) => s.wrapperId)).toEqual(["facebook_l"]);
+      expect(nestedSignedRes.cleanedUrl).toBe(signedInnerWrapper);
+      expect(nestedSignedRes.changed).toBe(true);
+      expect(nestedSignedRes.removedParams).toHaveLength(0);
+      expect(nestedSignedRes.presignedSkippedKey).toBe("X-Amz-Signature");
+    }
+
+    // 3. Ordinary unsigned wrapper + unsigned target continues to unwrap and clean normally
+    const normalUnsigned =
+      "https://www.google.com/url?url=https%3A%2F%2Fexample.com%2Freport%3Fq%3Da%2Bb%2520c%26utm_source%3Dmail&utm_medium=redirect";
+    const normalRes = cleanSingleLine(normalUnsigned, 1);
+    expect(normalRes.status).toBe("ok");
+    if (normalRes.status === "ok") {
+      expect(normalRes.unwrapSteps).toHaveLength(1);
+      expect(normalRes.presignedSkippedKey).toBeNull();
+      expect(normalRes.cleanedUrl).toBe("https://example.com/report?q=a+b%20c");
+      expect(normalRes.changed).toBe(true);
     }
   });
 });
