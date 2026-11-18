@@ -12,6 +12,7 @@ import {
   Regex,
   ScanText,
   ShieldCheck,
+  TextQuote,
 } from "lucide-react";
 import type { ToolIconName } from "../registry/tools";
 
@@ -37,6 +38,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Link2 size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "scan-text":
       return <ScanText size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "text-quote":
+      return <TextQuote size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "file-text":
       return <FileText size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "case-sensitive":

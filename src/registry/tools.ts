@@ -7,6 +7,7 @@ import { DiffCheckerWorkspace } from "../tools/diff-checker/DiffCheckerWorkspace
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
 import { JwtDecoderWorkspace } from "../tools/jwt-decoder/JwtDecoderWorkspace";
+import { LoremIpsumWorkspace } from "../tools/lorem-ipsum/LoremIpsumWorkspace";
 import { RegexTesterWorkspace } from "../tools/regex-tester/RegexTesterWorkspace";
 import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
 import { TimestampConverterWorkspace } from "../tools/timestamp-converter/TimestampConverterWorkspace";
@@ -27,6 +28,7 @@ export type ToolIconName =
   | "regex"
   | "link"
   | "scan-text"
+  | "text-quote"
   | "file-text"
   | "case-sensitive"
   | "frame";
@@ -350,6 +352,37 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "scan-text",
     implementationStatus: "partial",
     component: UnicodeInspectorWorkspace,
+  },
+  {
+    id: "D12",
+    category: "developer",
+    name: {
+      "zh-CN": "Lorem Ipsum 占位文本生成",
+      "en-US": "Lorem Ipsum Generator",
+    },
+    summary: {
+      "zh-CN":
+        "按词、句、段离线生成纯文本、HTML <p> 段落或 Markdown 占位文本，支持经典开头与一键重新生成",
+      "en-US":
+        "Generate offline placeholder text by words, sentences, or paragraphs as plain text, HTML <p> tags, or Markdown",
+    },
+    keywords: [
+      "lorem",
+      "ipsum",
+      "placeholder",
+      "dummy",
+      "latin",
+      "paragraph",
+      "mockup",
+      "html",
+      "markdown",
+      "占位文本",
+      "假文",
+      "排版",
+    ],
+    icon: "text-quote",
+    implementationStatus: "full",
+    component: LoremIpsumWorkspace,
   },
   {
     id: "T08",

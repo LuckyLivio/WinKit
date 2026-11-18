@@ -610,6 +610,29 @@ export interface Messages {
     };
     malformedKeyPreservedNote: (count: number) => string;
   };
+  loremTool: {
+    scopeNote: string;
+    unitLabel: string;
+    unitWords: string;
+    unitSentences: string;
+    unitParagraphs: string;
+    countLabel: (min: number, max: number) => string;
+    formatLabel: string;
+    formatPlain: string;
+    formatHtml: string;
+    formatMarkdown: string;
+    classicStartLabel: string;
+    regenerateBtn: string;
+    copyBtn: string;
+    copiedBadge: string;
+    clearBtn: string;
+    outputPaneTitle: string;
+    statusStats: (words: number, sentences: number, paragraphs: number, chars: number) => string;
+    statusCleared: string;
+    errNonInteger: string;
+    errOutOfRange: (min: number, max: number) => string;
+    errBudgetExceeded: (maxChars: number) => string;
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -1308,6 +1331,32 @@ export const MESSAGES: Record<Locale, Messages> = {
       },
       malformedKeyPreservedNote: (count) =>
         `注：有 ${count} 个参数名含非常规百分号序列，已按原始字节保守保留。`,
+    },
+    loremTool: {
+      scopeNote:
+        "基于本地固定古典拉丁语词库离线生成占位文本（不调用模型或外部服务）。经典开头计入请求的总词数/句数/段数，HTML <p> 标签不计入正文词数。",
+      unitLabel: "生成粒度",
+      unitWords: "按词 (Words)",
+      unitSentences: "按句 (Sentences)",
+      unitParagraphs: "按段 (Paragraphs)",
+      countLabel: (min, max) => `数量 (${min}–${max})`,
+      formatLabel: "输出格式",
+      formatPlain: "纯文本",
+      formatHtml: "HTML (<p>)",
+      formatMarkdown: "Markdown",
+      classicStartLabel: "以经典 Lorem ipsum dolor sit amet… 开头",
+      regenerateBtn: "重新生成",
+      copyBtn: "复制文本",
+      copiedBadge: "已复制",
+      clearBtn: "清空",
+      outputPaneTitle: "占位文本结果（按纯文本安全展示）",
+      statusStats: (words, sentences, paragraphs, chars) =>
+        `已生成：${words.toLocaleString()} 词 · ${sentences.toLocaleString()} 句 · ${paragraphs.toLocaleString()} 段 · ${chars.toLocaleString()} 字符`,
+      statusCleared: "结果已清空。修改任意选项或点击“重新生成”即可生成新的占位文本。",
+      errNonInteger: "请输入有效的正整数数量（不支持空值、负数、0 或小数）。",
+      errOutOfRange: (min, max) => `当前粒度数量须在 ${min} 至 ${max.toLocaleString()} 之间。`,
+      errBudgetExceeded: (maxChars) =>
+        `生成结果超出 ${maxChars.toLocaleString()} 字符安全上限，请调小数量。`,
     },
   },
   "en-US": {
@@ -2026,6 +2075,35 @@ export const MESSAGES: Record<Locale, Messages> = {
       },
       malformedKeyPreservedNote: (count) =>
         `Note: ${count} parameter name(s) had non-standard percent sequences and were conservatively preserved verbatim.`,
+    },
+    loremTool: {
+      scopeNote:
+        "Generates placeholder text offline from a fixed classical Latin vocabulary (no external APIs or models). The classic opening counts toward the requested word/sentence/paragraph total; HTML <p> tags do not count as words.",
+      unitLabel: "Unit",
+      unitWords: "Words",
+      unitSentences: "Sentences",
+      unitParagraphs: "Paragraphs",
+      countLabel: (min, max) => `Count (${min}–${max})`,
+      formatLabel: "Format",
+      formatPlain: "Plain Text",
+      formatHtml: "HTML (<p>)",
+      formatMarkdown: "Markdown",
+      classicStartLabel: "Start with classic 'Lorem ipsum dolor sit amet…'",
+      regenerateBtn: "New",
+      copyBtn: "Copy",
+      copiedBadge: "Copied",
+      clearBtn: "Clear",
+      outputPaneTitle: "Generated Placeholder Text (Rendered as Inert Text)",
+      statusStats: (words, sentences, paragraphs, chars) =>
+        `Generated: ${words.toLocaleString()} word${words === 1 ? "" : "s"} · ${sentences.toLocaleString()} sentence${sentences === 1 ? "" : "s"} · ${paragraphs.toLocaleString()} paragraph${paragraphs === 1 ? "" : "s"} · ${chars.toLocaleString()} chars`,
+      statusCleared:
+        "Output cleared. Change any setting or click New to generate placeholder text.",
+      errNonInteger:
+        "Enter a positive integer count (0, negative values, and decimals are rejected).",
+      errOutOfRange: (min, max) =>
+        `Count for this unit must be between ${min} and ${max.toLocaleString()}.`,
+      errBudgetExceeded: (maxChars) =>
+        `Estimated output exceeds the ${maxChars.toLocaleString()}-character safety budget; reduce the count.`,
     },
   },
 };

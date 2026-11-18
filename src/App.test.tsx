@@ -105,6 +105,7 @@ describe("WinKit desktop workbench shell", () => {
       "D08",
       "D09",
       "D11",
+      "D12",
       "T08",
       "T09",
       "I03",

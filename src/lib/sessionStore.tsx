@@ -11,6 +11,7 @@ import {
   DEFAULT_UNICODE_SANITIZE_OPTIONS,
   type UnicodeSanitizeOptions,
 } from "../tools/unicode-inspector/unicodeEngine";
+import type { LoremFormat, LoremUnit } from "../tools/lorem-ipsum/loremEngine";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -118,6 +119,14 @@ export interface CleanLinksSessionState {
   inputText: string;
 }
 
+export interface LoremIpsumSessionState {
+  unit: LoremUnit;
+  rawCount: string;
+  format: LoremFormat;
+  startWithClassic: boolean;
+  seed: number;
+}
+
 export interface WordCounterSessionState {
   textInput: string;
 }
@@ -169,6 +178,7 @@ export interface SessionWorkspaces {
   regex: RegexSessionState;
   unicode: UnicodeSessionState;
   cleanLinks: CleanLinksSessionState;
+  loremIpsum: LoremIpsumSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
@@ -266,6 +276,13 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
   cleanLinks: {
     inputText: "",
   },
+  loremIpsum: {
+    unit: "paragraphs",
+    rawCount: "3",
+    format: "plain",
+    startWithClassic: true,
+    seed: 0x20261118,
+  },
   wordCounter: {
     textInput: "",
   },
@@ -301,6 +318,7 @@ interface SessionStoreContextValue {
   updateRegexSession: (patch: Partial<RegexSessionState>) => void;
   updateUnicodeSession: (patch: Partial<UnicodeSessionState>) => void;
   updateCleanLinksSession: (patch: Partial<CleanLinksSessionState>) => void;
+  updateLoremIpsumSession: (patch: Partial<LoremIpsumSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
@@ -352,6 +370,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, cleanLinks: { ...prev.cleanLinks, ...patch } }));
   };
 
+  const updateLoremIpsumSession = (patch: Partial<LoremIpsumSessionState>) => {
+    setSession((prev) => ({ ...prev, loremIpsum: { ...prev.loremIpsum, ...patch } }));
+  };
+
   const updateWordCounterSession = (patch: Partial<WordCounterSessionState>) => {
     setSession((prev) => ({ ...prev, wordCounter: { ...prev.wordCounter, ...patch } }));
   };
@@ -378,6 +400,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateRegexSession,
         updateUnicodeSession,
         updateCleanLinksSession,
+        updateLoremIpsumSession,
         updateWordCounterSession,
         updateCaseConverterSession,
         updateBeautifierSession,
