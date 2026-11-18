@@ -22,9 +22,12 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const cancelBtnRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     cancelBtnRef.current?.focus();
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -34,7 +37,10 @@ export function ConfirmDialog({
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      previousFocusRef.current?.focus?.();
+    };
   }, [open, onCancel]);
 
   if (!open) {

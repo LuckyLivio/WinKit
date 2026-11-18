@@ -62,11 +62,19 @@ export interface Messages {
   };
   closeGuard: {
     title: string;
-    body: (count: number) => string;
+    drainingTitle: string;
+    errorTitle: string;
+    body: (count: number, writeCount: number) => string;
+    bodyFinished: string;
+    drainingBody: string;
+    timeoutBody: (remaining: string) => string;
     stayButton: string;
     quitAnywayButton: string;
+    exitNowButton: string;
+    retryQuitButton: string;
   };
   errors: {
+    APP_SHUTTING_DOWN: string;
     FILE_NOT_FOUND: string;
     IS_DIRECTORY: string;
     SAME_INPUT_AND_OUTPUT: string;
@@ -240,12 +248,24 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     closeGuard: {
       title: "仍有本地任务正在运行",
-      body: (count) =>
-        `当前有 ${count} 个文件处理任务尚未完成。当前版本不支持关闭窗口后在系统托盘继续运行，现在退出将立即取消未完成的任务。是否确认取消任务并退出 WinKit？`,
-      stayButton: "留在应用",
+      drainingTitle: "正在安全收尾并退出…",
+      errorTitle: "暂时无法完成退出",
+      body: (count, writeCount) =>
+        writeCount > 0
+          ? `当前有 ${count} 个任务尚未结束（含 ${writeCount} 个文件写入收尾步骤）。当前版本不支持在系统托盘后台继续运行；确认退出后将取消可中断任务，并等待短时文件写入安全落盘后关闭。`
+          : `当前有 ${count} 个本地任务正在运行。当前版本不支持关闭窗口后在系统托盘继续运行，现在退出将取消未完成的任务并在释放文件句柄后关闭。`,
+      bodyFinished: "刚才运行的后台任务已经结束，现在可以直接退出 WinKit，或留在当前工作区。",
+      drainingBody:
+        "正在请求任务停止、等待文件写入安全收尾并释放文件句柄，请稍候（收尾期间已锁定退出流程）…",
+      timeoutBody: (remaining) =>
+        `等待后台任务结束超时（仍未结束：${remaining}）。为保护文件完整性未强制终止进程；你可以重试退出或先返回应用查看状态（已发出取消请求的任务不会自动恢复）。`,
+      stayButton: "继续使用",
       quitAnywayButton: "取消任务并退出",
+      exitNowButton: "立即退出",
+      retryQuitButton: "重试退出",
     },
     errors: {
+      APP_SHUTTING_DOWN: "应用正在执行退出收尾，暂不接受新的后台任务。",
       FILE_NOT_FOUND: "找不到指定的文件或目录，请确认文件未被移动或删除。",
       IS_DIRECTORY: "所选路径是文件夹而非文件，请选择具体文件。",
       SAME_INPUT_AND_OUTPUT: "为保护原始文件，输出保存路径不能与源文件相同。",
@@ -429,12 +449,25 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     closeGuard: {
       title: "Active Local Task in Progress",
-      body: (count) =>
-        `${count} file task${count === 1 ? " is" : "s are"} currently running. This version does not continue running in the system tray after closing; quitting now will cancel unfinished work. Cancel task and exit WinKit?`,
+      drainingTitle: "Finishing Safely Before Exit…",
+      errorTitle: "Unable to Complete Exit",
+      body: (count, writeCount) =>
+        writeCount > 0
+          ? `${count} local task${count === 1 ? " is" : "s are"} still active (including ${writeCount} file-write commit step${writeCount === 1 ? "" : "s"}). WinKit does not run in the system tray; exiting will cancel interruptible tasks and wait for active file writes to finish safely.`
+          : `${count} local task${count === 1 ? " is" : "s are"} currently running. WinKit does not continue in the system tray after closing; exiting now will cancel unfinished work and close once file handles are released.`,
+      bodyFinished:
+        "Active background tasks have finished. You can exit WinKit immediately or stay in your workspace.",
+      drainingBody:
+        "Stopping active tasks, completing atomic file cleanup, and releasing file handles…",
+      timeoutBody: (remaining) =>
+        `Timed out waiting for tasks to stop (still active: ${remaining}). WinKit kept the window open to avoid corrupting files; you can retry exiting or return to the workspace (cancelled tasks are not resumed).`,
       stayButton: "Stay in WinKit",
       quitAnywayButton: "Cancel Task & Exit",
+      exitNowButton: "Exit Now",
+      retryQuitButton: "Retry Exit",
     },
     errors: {
+      APP_SHUTTING_DOWN: "WinKit is currently shutting down and cannot start new tasks.",
       FILE_NOT_FOUND: "The selected file or folder could not be found.",
       IS_DIRECTORY: "The selected path is a folder rather than a file.",
       SAME_INPUT_AND_OUTPUT: "Output path cannot overwrite the original source file.",

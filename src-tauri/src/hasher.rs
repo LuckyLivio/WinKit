@@ -125,7 +125,7 @@ where
     if task_id.trim().is_empty() {
         return Err(AppError::invalid_param("task_id must not be empty."));
     }
-    let guard = registry.register(task_id);
+    let guard = registry.register_checked(task_id, "D03", true)?;
     let (path, file_len) = match validate_existing_input_file(raw_path) {
         Ok(v) => v,
         Err(err) => {

@@ -81,8 +81,64 @@ export interface TaskProgressPayload {
   errorMessage: string | null;
 }
 
+export interface ActiveTaskSummary {
+  taskId: string;
+  toolId: string;
+  interruptible: boolean;
+}
+
+export interface TaskRegistrySnapshot {
+  shuttingDown: boolean;
+  activeCount: number;
+  interruptibleCount: number;
+  writeFinishingCount: number;
+  tasks: ActiveTaskSummary[];
+}
+
+export interface ShutdownDrainResult {
+  readyToClose: boolean;
+  remainingTasks: ActiveTaskSummary[];
+}
+
 export function isTauriDesktop(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/**
+ * Safely binds an async Tauri event listener inside a React effect so that if the effect
+ * unmounts BEFORE the registration Promise resolves (e.g. React StrictMode double-mount or
+ * rapid workspace navigation), the returned `UnlistenFn` is called immediately on resolution
+ * rather than leaking a duplicate listener.
+ */
+export function bindDisposableListener(
+  subscribe: () => Promise<UnlistenFn>,
+  label: string,
+): () => void {
+  let disposed = false;
+  let unlisten: UnlistenFn | null = null;
+
+  subscribe()
+    .then((fn) => {
+      if (disposed) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    })
+    .catch((err) => {
+      if (!disposed) {
+        console.error(`[WinKit] Failed to register listener (${label}):`, err);
+      }
+    });
+
+  return () => {
+    disposed = true;
+    if (unlisten) {
+      const fn = unlisten;
+      unlisten = null;
+      fn();
+    }
+  };
 }
 
 export function parseBackendError(err: unknown): StructuredBackendError {
@@ -128,7 +184,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.1.0",
+      version: "0.1.1",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -210,6 +266,33 @@ export async function cancelBackendTask(taskId: string): Promise<boolean> {
   return invoke<boolean>("cancel_task", { taskId });
 }
 
+export async function fetchTaskSnapshot(): Promise<TaskRegistrySnapshot> {
+  if (!isTauriDesktop()) {
+    return {
+      shuttingDown: false,
+      activeCount: 0,
+      interruptibleCount: 0,
+      writeFinishingCount: 0,
+      tasks: [],
+    };
+  }
+  return invoke<TaskRegistrySnapshot>("get_task_snapshot");
+}
+
+export async function beginGracefulShutdown(timeoutMs = 8000): Promise<ShutdownDrainResult> {
+  if (!isTauriDesktop()) {
+    return { readyToClose: true, remainingTasks: [] };
+  }
+  return invoke<ShutdownDrainResult>("begin_graceful_shutdown", { timeoutMs });
+}
+
+export async function abortGracefulShutdown(): Promise<void> {
+  if (!isTauriDesktop()) {
+    return;
+  }
+  await invoke<void>("abort_graceful_shutdown");
+}
+
 export async function computeTextSha256(text: string): Promise<TextHashResult> {
   if (!isTauriDesktop()) {
     const bytes = new TextEncoder().encode(text);
@@ -273,31 +356,25 @@ export async function subscribeFileDrop(handlers: {
   });
 }
 
-export async function subscribeWindowCloseGuard(
-  getActiveCount: () => number,
-  onBlockedClose: (count: number) => void,
+/**
+ * Registers the native window close request listener.
+ * Always calls `event.preventDefault()` synchronously before delegating to `onCloseRequest`
+ * so the caller controls idle vs. guarded `destroyCurrentWindow()` inside explicit error handling.
+ */
+export async function subscribeNativeCloseRequest(
+  onCloseRequest: () => Promise<void> | void,
 ): Promise<UnlistenFn> {
   if (!isTauriDesktop()) {
     return () => {};
   }
   const win = getCurrentWindow();
   return win.onCloseRequested(async (event) => {
-    const localCount = getActiveCount();
-    let backendCount: number;
-    try {
-      backendCount = await invoke<number>("get_running_task_count");
-    } catch {
-      backendCount = 0;
-    }
-    const active = Math.max(localCount, backendCount);
-    if (active > 0) {
-      event.preventDefault();
-      onBlockedClose(active);
-    }
+    event.preventDefault();
+    await onCloseRequest();
   });
 }
 
-export async function forceDestroyWindow(): Promise<void> {
+export async function destroyCurrentWindow(): Promise<void> {
   if (!isTauriDesktop()) {
     return;
   }

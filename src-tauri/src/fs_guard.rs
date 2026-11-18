@@ -1,11 +1,13 @@
 use crate::error::AppError;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_TEXT_FILE_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB ceiling for interactive JSON editor files
+const WRITE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,6 +117,21 @@ pub fn write_output_bytes_safely(
     bytes: &[u8],
     overwrite: bool,
 ) -> Result<SavedFileInfo, AppError> {
+    write_output_bytes_cancellable(output_raw, source_path, bytes, overwrite, None)
+}
+
+pub fn write_output_bytes_cancellable(
+    output_raw: &str,
+    source_path: Option<&Path>,
+    bytes: &[u8],
+    overwrite: bool,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<SavedFileInfo, AppError> {
+    let is_cancelled = || cancel_flag.is_some_and(|f| f.load(Ordering::Relaxed));
+    if is_cancelled() {
+        return Err(AppError::cancelled());
+    }
+
     let output_path = validate_user_path(output_raw, "Output")?;
     if output_path.is_dir() {
         return Err(AppError::new(
@@ -144,40 +161,32 @@ pub fn write_output_bytes_safely(
         return Err(AppError::target_exists());
     }
 
-    if !overwrite {
-        // Atomic exclusive file creation (`CREATE_NEW` on Windows) prevents TOCTOU silent overwrite
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&output_path)
-            .map_err(|e| AppError::from_io(e, "Unable to create output file"))?;
+    // Always stage into a sibling temporary file first so neither the source file nor an
+    // existing target file can ever be left partially written on error or cancellation.
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let base_name = output_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "output".to_string());
+    let tmp_path = parent.join(format!(".{base_name}.winkit-{pid}-{stamp}.tmp"));
 
-        if let Err(err) = file.write_all(bytes).and_then(|()| file.flush()) {
-            let _ = fs::remove_file(&output_path);
-            return Err(AppError::from_io(err, "Failed while writing output file"));
+    let mut tmp_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .map_err(|e| AppError::from_io(e, "Unable to create temporary file in output directory"))?;
+
+    for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
+        if is_cancelled() {
+            drop(tmp_file);
+            let _ = fs::remove_file(&tmp_path);
+            return Err(AppError::cancelled());
         }
-    } else {
-        // Write to sibling temporary file first, then atomically replace destination
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let pid = std::process::id();
-        let base_name = output_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "output".to_string());
-        let tmp_path = parent.join(format!(".{base_name}.winkit-{pid}-{stamp}.tmp"));
-
-        let mut tmp_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path)
-            .map_err(|e| {
-                AppError::from_io(e, "Unable to create temporary file in output directory")
-            })?;
-
-        if let Err(err) = tmp_file.write_all(bytes).and_then(|()| tmp_file.flush()) {
+        if let Err(err) = tmp_file.write_all(chunk) {
             drop(tmp_file);
             let _ = fs::remove_file(&tmp_path);
             return Err(AppError::from_io(
@@ -185,15 +194,51 @@ pub fn write_output_bytes_safely(
                 "Failed while writing temporary output file",
             ));
         }
-        drop(tmp_file);
+    }
 
-        if let Err(err) = fs::rename(&tmp_path, &output_path) {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(AppError::from_io(
-                err,
-                "Unable to replace existing target file",
-            ));
+    if let Err(err) = tmp_file.flush() {
+        drop(tmp_file);
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AppError::from_io(
+            err,
+            "Failed while flushing temporary output file",
+        ));
+    }
+    drop(tmp_file);
+
+    if is_cancelled() {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AppError::cancelled());
+    }
+
+    // Final non-interruptible atomic commit step
+    if !overwrite {
+        match fs::hard_link(&tmp_path, &output_path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&tmp_path);
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(AppError::target_exists());
+            }
+            Err(_) => {
+                // Fallback for filesystems without hard_link support (e.g. exFAT/FAT32)
+                if output_path.exists() {
+                    let _ = fs::remove_file(&tmp_path);
+                    return Err(AppError::target_exists());
+                }
+                if let Err(ren_err) = fs::rename(&tmp_path, &output_path) {
+                    let _ = fs::remove_file(&tmp_path);
+                    return Err(AppError::from_io(ren_err, "Unable to finalize output file"));
+                }
+            }
         }
+    } else if let Err(err) = fs::rename(&tmp_path, &output_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AppError::from_io(
+            err,
+            "Unable to replace existing target file",
+        ));
     }
 
     Ok(SavedFileInfo {

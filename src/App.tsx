@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HomeView } from "./components/HomeView";
 import { SettingsView } from "./components/SettingsView";
+import { ShutdownDialog, type ShutdownDialogState } from "./components/ShutdownDialog";
 import { Sidebar, type ActiveRoute } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { I18nContext } from "./i18n/I18nContext";
-import { MESSAGES, type Locale, type ThemePreference } from "./i18n/messages";
+import { MESSAGES, type Locale, type Messages, type ThemePreference } from "./i18n/messages";
 import {
   DEFAULT_PREFERENCES,
   applyDocumentPreferences,
@@ -17,11 +17,15 @@ import {
 } from "./lib/preferences";
 import { SessionStoreProvider } from "./lib/sessionStore";
 import {
-  cancelBackendTask,
+  abortGracefulShutdown,
+  beginGracefulShutdown,
+  bindDisposableListener,
+  destroyCurrentWindow,
   fetchRuntimeInfo,
-  forceDestroyWindow,
+  fetchTaskSnapshot,
+  formatLocalizedError,
+  subscribeNativeCloseRequest,
   subscribeTaskProgress,
-  subscribeWindowCloseGuard,
   type AppRuntimeInfo,
 } from "./lib/tauriBridge";
 import { REGISTERED_TOOLS, type RegisteredTool } from "./registry/tools";
@@ -41,11 +45,19 @@ export function App({ toolsOverride }: AppProps = {}) {
   const [searchQuery, setSearchQuery] = useState("");
   const [runtime, setRuntime] = useState<AppRuntimeInfo | null>(null);
   const [activeTaskIds, setActiveTaskIds] = useState<string[]>([]);
-  const [pendingCloseTaskCount, setPendingCloseTaskCount] = useState<number | null>(null);
+  const [shutdownState, setShutdownState] = useState<ShutdownDialogState>({ phase: "idle" });
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const activeTaskIdsRef = useRef<string[]>([]);
-  activeTaskIdsRef.current = activeTaskIds;
+  const shutdownPhaseRef = useRef<ShutdownDialogState["phase"]>("idle");
+
+  const t = MESSAGES[prefs.locale];
+  const tRef = useRef<Messages>(t);
+  tRef.current = t;
+
+  const setCoordinatedShutdown = useCallback((next: ShutdownDialogState) => {
+    shutdownPhaseRef.current = next.phase;
+    setShutdownState(next);
+  }, []);
 
   // Apply theme & locale to document root and listen to OS theme changes when set to "system"
   useEffect(() => {
@@ -71,51 +83,136 @@ export function App({ toolsOverride }: AppProps = {}) {
       .then((info) => {
         if (mounted) setRuntime(info);
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("[WinKit] Failed to fetch runtime info:", err);
+      });
     return () => {
       mounted = false;
     };
   }, []);
 
-  // Track active backend tasks via real Tauri progress events
+  // Track active backend tasks via real Tauri progress events (StrictMode-safe unlisten)
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    subscribeTaskProgress((payload) => {
-      setActiveTaskIds((prev) => {
-        if (payload.state === "running") {
-          return prev.includes(payload.taskId) ? prev : [...prev, payload.taskId];
-        }
-        return prev.filter((id) => id !== payload.taskId);
+    return bindDisposableListener(
+      () =>
+        subscribeTaskProgress((payload) => {
+          setActiveTaskIds((prev) => {
+            if (payload.state === "running") {
+              return prev.includes(payload.taskId) ? prev : [...prev, payload.taskId];
+            }
+            return prev.filter((id) => id !== payload.taskId);
+          });
+        }),
+      "winkit://task-progress",
+    );
+  }, []);
+
+  // Coordinate native window close requests (`×` / `Alt+F4`) against authoritative backend task state
+  const handleNativeCloseRequest = useCallback(async () => {
+    if (shutdownPhaseRef.current !== "idle") {
+      return;
+    }
+    shutdownPhaseRef.current = "closing";
+
+    let snapshot;
+    try {
+      snapshot = await fetchTaskSnapshot();
+    } catch (err) {
+      setCoordinatedShutdown({
+        phase: "error",
+        message: formatLocalizedError(err, tRef.current),
       });
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      unlisten?.();
-    };
-  }, []);
+      return;
+    }
 
-  // Intercept window close when tasks are actively running
+    // Reconcile frontend indicator with authoritative backend task list
+    setActiveTaskIds(snapshot.tasks.map((item) => item.taskId));
+
+    if (snapshot.activeCount === 0 && !snapshot.shuttingDown) {
+      try {
+        await destroyCurrentWindow();
+      } catch (err) {
+        setCoordinatedShutdown({
+          phase: "error",
+          message: formatLocalizedError(err, tRef.current),
+        });
+      }
+      return;
+    }
+
+    setCoordinatedShutdown({
+      phase: "confirming",
+      activeCount: Math.max(1, snapshot.activeCount),
+      writeFinishingCount: snapshot.writeFinishingCount,
+    });
+  }, [setCoordinatedShutdown]);
+
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    subscribeWindowCloseGuard(
-      () => activeTaskIdsRef.current.length,
-      (count) => setPendingCloseTaskCount(count),
-    )
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      unlisten?.();
-    };
-  }, []);
+    return bindDisposableListener(
+      () => subscribeNativeCloseRequest(handleNativeCloseRequest),
+      "tauri://close-requested",
+    );
+  }, [handleNativeCloseRequest]);
 
-  // Global Ctrl+K shortcut to focus tool search
+  const handleStayInApp = useCallback(() => {
+    if (shutdownPhaseRef.current === "draining" || shutdownPhaseRef.current === "closing") {
+      return;
+    }
+    const wasError = shutdownPhaseRef.current === "error";
+    setCoordinatedShutdown({ phase: "idle" });
+    if (wasError) {
+      void abortGracefulShutdown().catch((err) => {
+        console.error("[WinKit] Failed to reset shutdown flag:", err);
+      });
+    }
+  }, [setCoordinatedShutdown]);
+
+  const handleConfirmQuit = useCallback(async () => {
+    if (shutdownPhaseRef.current === "draining" || shutdownPhaseRef.current === "closing") {
+      return;
+    }
+    setCoordinatedShutdown({ phase: "draining" });
+
+    try {
+      const drain = await beginGracefulShutdown(8000);
+      if (!drain.readyToClose) {
+        setActiveTaskIds(drain.remainingTasks.map((item) => item.taskId));
+        const summary = drain.remainingTasks
+          .map((item) => `${item.toolId}:${item.taskId}`)
+          .join(", ");
+        setCoordinatedShutdown({
+          phase: "error",
+          message: tRef.current.closeGuard.timeoutBody(summary || "unknown"),
+        });
+        return;
+      }
+
+      setActiveTaskIds([]);
+      shutdownPhaseRef.current = "closing";
+      try {
+        await destroyCurrentWindow();
+      } catch (destroyErr) {
+        await abortGracefulShutdown().catch(() => {});
+        setCoordinatedShutdown({
+          phase: "error",
+          message: formatLocalizedError(destroyErr, tRef.current),
+        });
+      }
+    } catch (err) {
+      await abortGracefulShutdown().catch(() => {});
+      setCoordinatedShutdown({
+        phase: "error",
+        message: formatLocalizedError(err, tRef.current),
+      });
+    }
+  }, [setCoordinatedShutdown]);
+
+  // Global Ctrl+K shortcut to focus tool search (disabled while shutdown dialog is open)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (shutdownPhaseRef.current !== "idle") {
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         if (route.kind !== "home") {
@@ -173,7 +270,6 @@ export function App({ toolsOverride }: AppProps = {}) {
     }));
   }, []);
 
-  const t = MESSAGES[prefs.locale];
   const i18nValue = useMemo(
     () => ({
       locale: prefs.locale,
@@ -260,20 +356,11 @@ export function App({ toolsOverride }: AppProps = {}) {
           </div>
         </div>
 
-        <ConfirmDialog
-          open={pendingCloseTaskCount !== null}
-          title={t.closeGuard.title}
-          body={t.closeGuard.body(pendingCloseTaskCount ?? 1)}
-          confirmLabel={t.closeGuard.quitAnywayButton}
-          cancelLabel={t.closeGuard.stayButton}
-          danger
-          onCancel={() => setPendingCloseTaskCount(null)}
-          onConfirm={async () => {
-            const ids = [...activeTaskIdsRef.current];
-            setPendingCloseTaskCount(null);
-            await Promise.allSettled(ids.map((id) => cancelBackendTask(id)));
-            await forceDestroyWindow();
-          }}
+        <ShutdownDialog
+          state={shutdownState}
+          liveActiveCount={activeTaskIds.length}
+          onStay={handleStayInApp}
+          onConfirmQuit={() => void handleConfirmQuit()}
         />
       </SessionStoreProvider>
     </I18nContext.Provider>

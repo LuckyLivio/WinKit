@@ -4,6 +4,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useI18n } from "../../i18n/I18nContext";
 import { useSessionStore, type BeautifierAspect } from "../../lib/sessionStore";
 import {
+  bindDisposableListener,
   exportBeautifiedImage,
   formatLocalizedError,
   inspectBeautifierSourceImage,
@@ -103,23 +104,19 @@ export function ScreenshotBeautifierWorkspace() {
   );
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    subscribeFileDrop({
-      onHover: (hovering) => setDropHover(hovering),
-      onDropPaths: (paths) => {
-        const first = paths[0];
-        if (first) {
-          void loadImagePath(first);
-        }
-      },
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      unlisten?.();
-    };
+    return bindDisposableListener(
+      () =>
+        subscribeFileDrop({
+          onHover: (hovering) => setDropHover(hovering),
+          onDropPaths: (paths) => {
+            const first = paths[0];
+            if (first) {
+              void loadImagePath(first);
+            }
+          },
+        }),
+      "beautifier-file-drop",
+    );
   }, [loadImagePath]);
 
   const handleChooseImage = async () => {

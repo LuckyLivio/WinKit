@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n/I18nContext";
 import { useSessionStore } from "../../lib/sessionStore";
 import {
+  bindDisposableListener,
   cancelBackendTask,
   computeFileSha256,
   computeTextSha256,
@@ -54,26 +55,22 @@ export function HashGeneratorWorkspace() {
 
   // Listen to backend task progress events for the active file hash task
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    subscribeTaskProgress((payload) => {
-      if (payload.taskId !== activeTaskIdRef.current) {
-        return;
-      }
-      if (payload.state === "running") {
-        updateHashSession({
-          status: "running",
-          progressPercent: payload.percent,
-          fileSize: payload.totalBytes ?? fileSize,
-        });
-      }
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      unlisten?.();
-    };
+    return bindDisposableListener(
+      () =>
+        subscribeTaskProgress((payload) => {
+          if (payload.taskId !== activeTaskIdRef.current) {
+            return;
+          }
+          if (payload.state === "running") {
+            updateHashSession({
+              status: "running",
+              progressPercent: payload.percent,
+              fileSize: payload.totalBytes ?? fileSize,
+            });
+          }
+        }),
+      "hash-task-progress",
+    );
   }, [fileSize, updateHashSession]);
 
   const runTextHash = useCallback(
@@ -167,23 +164,19 @@ export function HashGeneratorWorkspace() {
 
   // Native Tauri drag-and-drop file support
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    subscribeFileDrop({
-      onHover: (hovering) => setDropHover(hovering),
-      onDropPaths: (paths) => {
-        const first = paths[0];
-        if (first) {
-          void runFileHash(first);
-        }
-      },
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      unlisten?.();
-    };
+    return bindDisposableListener(
+      () =>
+        subscribeFileDrop({
+          onHover: (hovering) => setDropHover(hovering),
+          onDropPaths: (paths) => {
+            const first = paths[0];
+            if (first) {
+              void runFileHash(first);
+            }
+          },
+        }),
+      "hash-file-drop",
+    );
   }, [runFileHash]);
 
   const handleSelectFile = async () => {

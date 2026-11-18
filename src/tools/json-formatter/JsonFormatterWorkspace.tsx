@@ -4,6 +4,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useI18n } from "../../i18n/I18nContext";
 import { useSessionStore, type JsonIndentOption } from "../../lib/sessionStore";
 import {
+  bindDisposableListener,
   formatLocalizedError,
   parseBackendError,
   pickSaveFilePath,
@@ -61,23 +62,19 @@ export function JsonFormatterWorkspace() {
   );
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    subscribeFileDrop({
-      onHover: (hovering) => setDropHover(hovering),
-      onDropPaths: (paths) => {
-        const first = paths[0];
-        if (first) {
-          void loadFromFilePath(first);
-        }
-      },
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      unlisten?.();
-    };
+    return bindDisposableListener(
+      () =>
+        subscribeFileDrop({
+          onHover: (hovering) => setDropHover(hovering),
+          onDropPaths: (paths) => {
+            const first = paths[0];
+            if (first) {
+              void loadFromFilePath(first);
+            }
+          },
+        }),
+      "json-file-drop",
+    );
   }, [loadFromFilePath]);
 
   const handleOpenFile = async () => {

@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::fs_guard::{validate_existing_input_file, write_output_bytes_safely};
+use crate::fs_guard::{validate_existing_input_file, write_output_bytes_cancellable};
 use base64::Engine;
 use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
@@ -10,6 +10,7 @@ use image::{
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const MAX_INPUT_FILE_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB
 pub const MAX_SOURCE_DIMENSION: u32 = 8192;
@@ -450,9 +451,27 @@ pub fn render_beautified_rgba(
 pub fn export_beautified_png_sync(
     params: &BeautifyExportParams,
 ) -> Result<BeautifyExportResult, AppError> {
+    export_beautified_png_cancellable(params, None)
+}
+
+pub fn export_beautified_png_cancellable(
+    params: &BeautifyExportParams,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<BeautifyExportResult, AppError> {
+    let check_cancelled = || {
+        if cancel_flag.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            Err(AppError::cancelled())
+        } else {
+            Ok(())
+        }
+    };
+    check_cancelled()?;
+
     let (input_path, byte_len) = validate_existing_input_file(&params.input_path)?;
     let bg_rgb = parse_hex_rgb(&params.background_hex)?;
     let decoded = open_validated_png_or_jpeg(&input_path, byte_len)?;
+    check_cancelled()?;
+
     let src_rgba = decoded.to_rgba8();
     let (src_w, src_h) = src_rgba.dimensions();
 
@@ -466,6 +485,7 @@ pub fn export_beautified_png_sync(
     )?;
 
     let rendered = render_beautified_rgba(&src_rgba, bg_rgb, &layout);
+    check_cancelled()?;
 
     let mut png_bytes = Vec::new();
     PngEncoder::new(Cursor::new(&mut png_bytes))
@@ -477,11 +497,12 @@ pub fn export_beautified_png_sync(
         )
         .map_err(|_| AppError::decode_failed("Failed to encode output PNG image."))?;
 
-    let saved = write_output_bytes_safely(
+    let saved = write_output_bytes_cancellable(
         &params.output_path,
         Some(&input_path),
         &png_bytes,
         params.overwrite,
+        cancel_flag,
     )?;
 
     Ok(BeautifyExportResult {
