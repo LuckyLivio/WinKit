@@ -17,13 +17,18 @@ import {
 } from "./lib/preferences";
 import { SessionStoreProvider } from "./lib/sessionStore";
 import {
+  enterFrontendShutdownGate,
+  resetFrontendShutdownGate,
+  terminateAllFrontendWorkers,
+} from "./lib/shutdownGate";
+import {
   abortGracefulShutdown,
   beginGracefulShutdown,
   bindDisposableListener,
   destroyCurrentWindow,
   fetchRuntimeInfo,
-  fetchTaskSnapshot,
   formatLocalizedError,
+  requestWindowClose,
   subscribeNativeCloseRequest,
   subscribeTaskProgress,
   type AppRuntimeInfo,
@@ -107,17 +112,27 @@ export function App({ toolsOverride }: AppProps = {}) {
     );
   }, []);
 
-  // Coordinate native window close requests (`×` / `Alt+F4`) against authoritative backend task state
+  // Coordinate native window close requests (`×` / `Alt+F4`) against authoritative backend task admission
+  useEffect(() => {
+    return () => {
+      resetFrontendShutdownGate();
+      terminateAllFrontendWorkers();
+    };
+  }, []);
+
   const handleNativeCloseRequest = useCallback(async () => {
     if (shutdownPhaseRef.current !== "idle") {
       return;
     }
     shutdownPhaseRef.current = "closing";
+    enterFrontendShutdownGate();
 
-    let snapshot;
+    let decision;
     try {
-      snapshot = await fetchTaskSnapshot();
+      decision = await requestWindowClose();
     } catch (err) {
+      resetFrontendShutdownGate();
+      await abortGracefulShutdown().catch(() => {});
       setCoordinatedShutdown({
         phase: "error",
         message: formatLocalizedError(err, tRef.current),
@@ -125,13 +140,17 @@ export function App({ toolsOverride }: AppProps = {}) {
       return;
     }
 
+    const { immediateCloseAllowed, snapshot } = decision;
     // Reconcile frontend indicator with authoritative backend task list
     setActiveTaskIds(snapshot.tasks.map((item) => item.taskId));
 
-    if (snapshot.activeCount === 0 && !snapshot.shuttingDown) {
+    if (immediateCloseAllowed) {
+      terminateAllFrontendWorkers();
       try {
         await destroyCurrentWindow();
       } catch (err) {
+        resetFrontendShutdownGate();
+        await abortGracefulShutdown().catch(() => {});
         setCoordinatedShutdown({
           phase: "error",
           message: formatLocalizedError(err, tRef.current),
@@ -140,6 +159,8 @@ export function App({ toolsOverride }: AppProps = {}) {
       return;
     }
 
+    // Active tasks exist and user has not confirmed exit yet: restore frontend admission while confirming
+    resetFrontendShutdownGate();
     setCoordinatedShutdown({
       phase: "confirming",
       activeCount: Math.max(1, snapshot.activeCount),
@@ -159,6 +180,7 @@ export function App({ toolsOverride }: AppProps = {}) {
       return;
     }
     const wasError = shutdownPhaseRef.current === "error";
+    resetFrontendShutdownGate();
     setCoordinatedShutdown({ phase: "idle" });
     if (wasError) {
       void abortGracefulShutdown().catch((err) => {
@@ -171,11 +193,14 @@ export function App({ toolsOverride }: AppProps = {}) {
     if (shutdownPhaseRef.current === "draining" || shutdownPhaseRef.current === "closing") {
       return;
     }
+    enterFrontendShutdownGate();
+    terminateAllFrontendWorkers();
     setCoordinatedShutdown({ phase: "draining" });
 
     try {
       const drain = await beginGracefulShutdown(8000);
       if (!drain.readyToClose) {
+        resetFrontendShutdownGate();
         setActiveTaskIds(drain.remainingTasks.map((item) => item.taskId));
         const summary = drain.remainingTasks
           .map((item) => `${item.toolId}:${item.taskId}`)
@@ -192,6 +217,7 @@ export function App({ toolsOverride }: AppProps = {}) {
       try {
         await destroyCurrentWindow();
       } catch (destroyErr) {
+        resetFrontendShutdownGate();
         await abortGracefulShutdown().catch(() => {});
         setCoordinatedShutdown({
           phase: "error",
@@ -199,6 +225,7 @@ export function App({ toolsOverride }: AppProps = {}) {
         });
       }
     } catch (err) {
+      resetFrontendShutdownGate();
       await abortGracefulShutdown().catch(() => {});
       setCoordinatedShutdown({
         phase: "error",

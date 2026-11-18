@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save, type DialogFilter } from "@tauri-apps/plugin-dialog";
 import type { Messages } from "../i18n/messages";
+import { assertFrontendNotShuttingDown } from "./shutdownGate";
 import {
   decodeStringClient,
   encodeBytesClient,
@@ -111,6 +112,11 @@ export interface TaskRegistrySnapshot {
   interruptibleCount: number;
   writeFinishingCount: number;
   tasks: ActiveTaskSummary[];
+}
+
+export interface CloseRequestDecision {
+  immediateCloseAllowed: boolean;
+  snapshot: TaskRegistrySnapshot;
 }
 
 export interface ShutdownDrainResult {
@@ -246,6 +252,7 @@ export async function pickSaveFilePath(options: {
 }
 
 export async function readLocalTextFile(path: string): Promise<TextFilePayload> {
+  assertFrontendNotShuttingDown();
   return invoke<TextFilePayload>("read_text_file", { path });
 }
 
@@ -254,8 +261,16 @@ export async function saveLocalTextFile(params: {
   sourcePath: string | null;
   content: string;
   overwrite: boolean;
+  toolId?: string;
 }): Promise<SavedFileInfo> {
-  return invoke<SavedFileInfo>("save_text_file", params);
+  assertFrontendNotShuttingDown();
+  return invoke<SavedFileInfo>("save_text_file", {
+    outputPath: params.outputPath,
+    sourcePath: params.sourcePath,
+    content: params.content,
+    overwrite: params.overwrite,
+    toolId: params.toolId ?? "D01",
+  });
 }
 
 export async function suggestSafeSiblingPath(
@@ -295,6 +310,22 @@ export async function fetchTaskSnapshot(): Promise<TaskRegistrySnapshot> {
     };
   }
   return invoke<TaskRegistrySnapshot>("get_task_snapshot");
+}
+
+export async function requestWindowClose(): Promise<CloseRequestDecision> {
+  if (!isTauriDesktop()) {
+    return {
+      immediateCloseAllowed: true,
+      snapshot: {
+        shuttingDown: true,
+        activeCount: 0,
+        interruptibleCount: 0,
+        writeFinishingCount: 0,
+        tasks: [],
+      },
+    };
+  }
+  return invoke<CloseRequestDecision>("request_window_close");
 }
 
 export async function beginGracefulShutdown(timeoutMs = 8000): Promise<ShutdownDrainResult> {
@@ -357,6 +388,7 @@ export async function computeFileHashes(
   path: string,
   algorithms: readonly HashAlgorithm[],
 ): Promise<MultiFileHashResult> {
+  assertFrontendNotShuttingDown();
   return invoke<MultiFileHashResult>("hash_file_multi", { taskId, path, algorithms });
 }
 
@@ -364,6 +396,7 @@ export async function codecTransformText(
   text: string,
   options: CodecOptions,
 ): Promise<CodecTransformResponse> {
+  assertFrontendNotShuttingDown();
   if (!isTauriDesktop()) {
     return transformTextClientFallback(text, options);
   }
@@ -374,6 +407,7 @@ export async function codecTransformFile(
   path: string,
   options: CodecOptions,
 ): Promise<CodecTransformResponse> {
+  assertFrontendNotShuttingDown();
   return invoke<CodecTransformResponse>("codec_transform_file", { path, options });
 }
 
@@ -382,6 +416,7 @@ export async function codecGetFullText(params: {
   filePath: string | null;
   options: CodecOptions;
 }): Promise<string> {
+  assertFrontendNotShuttingDown();
   if (!isTauriDesktop()) {
     const text = params.textInput ?? "";
     if (params.options.operation === "encode") {
@@ -400,6 +435,7 @@ export async function codecSaveOutput(params: {
   overwrite: boolean;
   options: CodecOptions;
 }): Promise<SavedFileInfo> {
+  assertFrontendNotShuttingDown();
   return invoke<SavedFileInfo>("codec_save_output", params);
 }
 
@@ -418,12 +454,14 @@ export async function inspectUuidString(input: string): Promise<UuidInspectResul
 }
 
 export async function inspectBeautifierSourceImage(path: string): Promise<SourceImageInspection> {
+  assertFrontendNotShuttingDown();
   return invoke<SourceImageInspection>("inspect_beautifier_image", { path });
 }
 
 export async function exportBeautifiedImage(
   params: BeautifyExportParams,
 ): Promise<BeautifyExportResult> {
+  assertFrontendNotShuttingDown();
   return invoke<BeautifyExportResult>("export_beautified_png", { params });
 }
 

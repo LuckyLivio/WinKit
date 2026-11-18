@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::fs_guard::validate_existing_input_file;
-use crate::tasks::{TaskLifecycleState, TaskProgressPayload, TaskRegistry};
+use crate::tasks::{TaskLifecycleState, TaskProgressPayload, TaskRegistry, TaskTokenGuard};
 use md5::Md5;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -208,11 +208,34 @@ pub fn stream_file_hashes<F>(
     algorithms: &[HashAlgorithm],
     expected_total: u64,
     cancel_flag: &AtomicBool,
+    on_progress: F,
+) -> Result<(u64, Vec<AlgorithmDigestEntry>), AppError>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    let mut processed = 0u64;
+    stream_file_hashes_tracked(
+        path,
+        algorithms,
+        expected_total,
+        cancel_flag,
+        &mut processed,
+        on_progress,
+    )
+}
+
+fn stream_file_hashes_tracked<F>(
+    path: &Path,
+    algorithms: &[HashAlgorithm],
+    expected_total: u64,
+    cancel_flag: &AtomicBool,
+    processed_out: &mut u64,
     mut on_progress: F,
 ) -> Result<(u64, Vec<AlgorithmDigestEntry>), AppError>
 where
     F: FnMut(u64, Option<u64>),
 {
+    *processed_out = 0;
     let normalized = normalize_algorithms(algorithms)?;
     if cancel_flag.load(Ordering::Relaxed) {
         return Err(AppError::cancelled());
@@ -229,7 +252,6 @@ where
 
     let mut hasher = MultiHasher::new(&normalized);
     let mut buffer = vec![0u8; STREAM_CHUNK_BYTES];
-    let mut processed: u64 = 0;
     let mut last_emit = Instant::now();
 
     loop {
@@ -250,7 +272,8 @@ where
         }
 
         hasher.update(&buffer[..n]);
-        processed += n as u64;
+        *processed_out += n as u64;
+        let processed = *processed_out;
 
         let now = Instant::now();
         if now.duration_since(last_emit) >= Duration::from_millis(25) {
@@ -259,49 +282,54 @@ where
         }
     }
 
+    let processed = *processed_out;
     let final_total = Some(processed.max(expected_total));
     on_progress(processed, final_total);
     Ok((processed, hasher.finalize()))
 }
 
-pub fn execute_file_hash_task<E>(
+pub fn prepare_file_hash_task(
     registry: &TaskRegistry,
     task_id: &str,
-    raw_path: &str,
     algorithms: &[HashAlgorithm],
-    mut on_event: E,
-) -> Result<MultiFileHashResult, AppError>
-where
-    E: FnMut(&TaskProgressPayload),
-{
+) -> Result<(TaskTokenGuard, Vec<HashAlgorithm>), AppError> {
     if task_id.trim().is_empty() {
         return Err(AppError::invalid_param("task_id must not be empty."));
     }
     let normalized = normalize_algorithms(algorithms)?;
     let guard = registry.register_checked(task_id, "D03", true)?;
+    Ok((guard, normalized))
+}
+
+pub fn execute_file_hash_with_guard<E>(
+    guard: TaskTokenGuard,
+    raw_path: &str,
+    normalized: &[HashAlgorithm],
+    mut on_event: E,
+) -> Result<MultiFileHashResult, AppError>
+where
+    E: FnMut(&TaskProgressPayload),
+{
+    let task_id = guard.task_id().to_string();
     let (path, file_len) = match validate_existing_input_file(raw_path) {
         Ok(v) => v,
         Err(err) => {
-            on_event(&TaskProgressPayload {
-                task_id: task_id.to_string(),
-                tool_id: "D03".to_string(),
-                state: TaskLifecycleState::Error,
-                processed_bytes: 0,
-                total_bytes: None,
-                percent: None,
-                error_code: Some(err.code.to_string()),
-                error_message: Some(err.message.clone()),
-            });
+            drop(guard);
+            on_event(&TaskProgressPayload::failed_or_cancelled(
+                &task_id, "D03", 0, None, &err,
+            ));
             return Err(err);
         }
     };
 
     let cancel_flag = guard.cancel_flag();
-    let result = stream_file_hashes(
+    let mut processed_so_far = 0u64;
+    let result = stream_file_hashes_tracked(
         &path,
-        &normalized,
+        normalized,
         file_len,
         &cancel_flag,
+        &mut processed_so_far,
         |processed, total| {
             let percent = match total {
                 Some(0) => Some(100.0),
@@ -309,7 +337,7 @@ where
                 None => None,
             };
             on_event(&TaskProgressPayload {
-                task_id: task_id.to_string(),
+                task_id: task_id.clone(),
                 tool_id: "D03".to_string(),
                 state: TaskLifecycleState::Running,
                 processed_bytes: processed,
@@ -321,24 +349,22 @@ where
         },
     );
 
+    drop(guard);
+
     match result {
         Ok((actual_bytes, digests)) => {
-            on_event(&TaskProgressPayload {
-                task_id: task_id.to_string(),
-                tool_id: "D03".to_string(),
-                state: TaskLifecycleState::Completed,
-                processed_bytes: actual_bytes,
-                total_bytes: Some(actual_bytes),
-                percent: Some(100.0),
-                error_code: None,
-                error_message: None,
-            });
+            on_event(&TaskProgressPayload::completed(
+                &task_id,
+                "D03",
+                actual_bytes,
+                Some(actual_bytes),
+            ));
             let file_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             Ok(MultiFileHashResult {
-                task_id: task_id.to_string(),
+                task_id,
                 path: path.to_string_lossy().into_owned(),
                 file_name,
                 byte_length: actual_bytes,
@@ -346,24 +372,30 @@ where
             })
         }
         Err(err) => {
-            let state = if err.code == "TASK_CANCELLED" {
-                TaskLifecycleState::Cancelled
-            } else {
-                TaskLifecycleState::Error
-            };
-            on_event(&TaskProgressPayload {
-                task_id: task_id.to_string(),
-                tool_id: "D03".to_string(),
-                state,
-                processed_bytes: 0,
-                total_bytes: Some(file_len),
-                percent: None,
-                error_code: Some(err.code.to_string()),
-                error_message: Some(err.message.clone()),
-            });
+            on_event(&TaskProgressPayload::failed_or_cancelled(
+                &task_id,
+                "D03",
+                processed_so_far,
+                Some(file_len),
+                &err,
+            ));
             Err(err)
         }
     }
+}
+
+pub fn execute_file_hash_task<E>(
+    registry: &TaskRegistry,
+    task_id: &str,
+    raw_path: &str,
+    algorithms: &[HashAlgorithm],
+    on_event: E,
+) -> Result<MultiFileHashResult, AppError>
+where
+    E: FnMut(&TaskProgressPayload),
+{
+    let (guard, normalized) = prepare_file_hash_task(registry, task_id, algorithms)?;
+    execute_file_hash_with_guard(guard, raw_path, &normalized, on_event)
 }
 
 #[cfg(test)]

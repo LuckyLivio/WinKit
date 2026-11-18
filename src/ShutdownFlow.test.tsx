@@ -5,6 +5,11 @@ import { resolve } from "node:path";
 import { StrictMode, useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import {
+  isFrontendShuttingDown,
+  registerCancelableFrontendWorker,
+  resetFrontendShutdownGate,
+} from "./lib/shutdownGate";
 import * as tauriBridge from "./lib/tauriBridge";
 import type { RegisteredTool } from "./registry/tools";
 
@@ -24,6 +29,7 @@ const MINIMAL_TOOLS: RegisteredTool[] = [
 describe("Phase 1.1 window shutdown coordination & regressions", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    resetFrontendShutdownGate();
     vi.restoreAllMocks();
   });
 
@@ -84,20 +90,33 @@ describe("Phase 1.1 window shutdown coordination & regressions", () => {
     expect(activeSubscriptions).toBe(0);
   });
 
-  it("destroys window directly on idle close without showing confirmation dialog", async () => {
+  it("destroys window directly on coordinated idle close, terminates frontend workers, and blocks new tasks", async () => {
     let triggerClose: (() => Promise<void> | void) | null = null;
     vi.spyOn(tauriBridge, "subscribeNativeCloseRequest").mockImplementation(async (cb) => {
       triggerClose = cb;
       return () => {};
     });
-    vi.spyOn(tauriBridge, "fetchTaskSnapshot").mockResolvedValue({
-      shuttingDown: false,
-      activeCount: 0,
-      interruptibleCount: 0,
-      writeFinishingCount: 0,
-      tasks: [],
+    vi.spyOn(tauriBridge, "requestWindowClose").mockResolvedValue({
+      immediateCloseAllowed: true,
+      snapshot: {
+        shuttingDown: true,
+        activeCount: 0,
+        interruptibleCount: 0,
+        writeFinishingCount: 0,
+        tasks: [],
+      },
     });
-    const destroySpy = vi.spyOn(tauriBridge, "destroyCurrentWindow").mockResolvedValue();
+    let workerDisposed = false;
+    registerCancelableFrontendWorker(() => {
+      workerDisposed = true;
+    });
+
+    let gateDuringDestroy = false;
+    const destroySpy = vi
+      .spyOn(tauriBridge, "destroyCurrentWindow")
+      .mockImplementation(async () => {
+        gateDuringDestroy = isFrontendShuttingDown();
+      });
 
     render(<App toolsOverride={MINIMAL_TOOLS} />);
     await waitFor(() => expect(triggerClose).not.toBeNull());
@@ -107,7 +126,48 @@ describe("Phase 1.1 window shutdown coordination & regressions", () => {
     });
 
     expect(destroySpy).toHaveBeenCalledTimes(1);
+    expect(gateDuringDestroy).toBe(true);
+    expect(workerDisposed).toBe(true);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("recovers task admission and surfaces error dialog if destroyCurrentWindow fails on idle close", async () => {
+    const user = userEvent.setup();
+    let triggerClose: (() => Promise<void> | void) | null = null;
+    vi.spyOn(tauriBridge, "subscribeNativeCloseRequest").mockImplementation(async (cb) => {
+      triggerClose = cb;
+      return () => {};
+    });
+    vi.spyOn(tauriBridge, "requestWindowClose").mockResolvedValue({
+      immediateCloseAllowed: true,
+      snapshot: {
+        shuttingDown: true,
+        activeCount: 0,
+        interruptibleCount: 0,
+        writeFinishingCount: 0,
+        tasks: [],
+      },
+    });
+    const abortSpy = vi.spyOn(tauriBridge, "abortGracefulShutdown").mockResolvedValue();
+    vi.spyOn(tauriBridge, "destroyCurrentWindow").mockRejectedValueOnce(
+      new Error("simulated idle destroy error"),
+    );
+
+    render(<App toolsOverride={MINIMAL_TOOLS} />);
+    await waitFor(() => expect(triggerClose).not.toBeNull());
+
+    await act(async () => {
+      await triggerClose!();
+    });
+
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+    expect(isFrontendShuttingDown()).toBe(false);
+    expect(screen.getByRole("heading", { name: "暂时无法完成退出" })).toBeInTheDocument();
+    expect(screen.getByText(/simulated idle destroy error/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "继续使用" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(isFrontendShuttingDown()).toBe(false);
   });
 
   it("coordinates active-task confirmation, focus restoration, Escape handling, mid-confirm task completion, and draining gate", async () => {
@@ -124,12 +184,15 @@ describe("Phase 1.1 window shutdown coordination & regressions", () => {
       return () => {};
     });
 
-    const snapshotSpy = vi.spyOn(tauriBridge, "fetchTaskSnapshot").mockResolvedValue({
-      shuttingDown: false,
-      activeCount: 1,
-      interruptibleCount: 1,
-      writeFinishingCount: 0,
-      tasks: [{ taskId: "hash-99", toolId: "D03", interruptible: true }],
+    const closeDecisionSpy = vi.spyOn(tauriBridge, "requestWindowClose").mockResolvedValue({
+      immediateCloseAllowed: false,
+      snapshot: {
+        shuttingDown: false,
+        activeCount: 1,
+        interruptibleCount: 1,
+        writeFinishingCount: 0,
+        tasks: [{ taskId: "hash-99", toolId: "D03", interruptible: true }],
+      },
     });
 
     let resolveDrain: ((res: tauriBridge.ShutdownDrainResult) => void) | null = null;
@@ -154,6 +217,7 @@ describe("Phase 1.1 window shutdown coordination & regressions", () => {
       await triggerClose!();
     });
     expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(isFrontendShuttingDown()).toBe(false);
     const stayBtn = screen.getByRole("button", { name: "继续使用" });
     expect(document.activeElement).toBe(stayBtn);
 
@@ -161,7 +225,7 @@ describe("Phase 1.1 window shutdown coordination & regressions", () => {
     await act(async () => {
       await triggerClose!();
     });
-    expect(snapshotSpy).toHaveBeenCalledTimes(1);
+    expect(closeDecisionSpy).toHaveBeenCalledTimes(1);
     expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
 
     // 2. Escape dismisses confirming dialog without cancelling tasks and restores focus
@@ -193,6 +257,7 @@ describe("Phase 1.1 window shutdown coordination & regressions", () => {
     // 4. Confirm quit -> enters draining state; Escape MUST NOT hide draining state; destroy waits for drain!
     await user.click(screen.getByRole("button", { name: "立即退出" }));
     expect(screen.getByRole("heading", { name: "正在安全收尾并退出…" })).toBeInTheDocument();
+    expect(isFrontendShuttingDown()).toBe(true);
     expect(destroySpy).not.toHaveBeenCalled();
 
     await user.keyboard("{Escape}");
@@ -211,12 +276,15 @@ describe("Phase 1.1 window shutdown coordination & regressions", () => {
       triggerClose = cb;
       return () => {};
     });
-    vi.spyOn(tauriBridge, "fetchTaskSnapshot").mockResolvedValue({
-      shuttingDown: false,
-      activeCount: 1,
-      interruptibleCount: 0,
-      writeFinishingCount: 1,
-      tasks: [{ taskId: "export-i03-1", toolId: "I03", interruptible: false }],
+    vi.spyOn(tauriBridge, "requestWindowClose").mockResolvedValue({
+      immediateCloseAllowed: false,
+      snapshot: {
+        shuttingDown: false,
+        activeCount: 1,
+        interruptibleCount: 0,
+        writeFinishingCount: 1,
+        tasks: [{ taskId: "export-i03-1", toolId: "I03", interruptible: false }],
+      },
     });
 
     const drainSpy = vi
