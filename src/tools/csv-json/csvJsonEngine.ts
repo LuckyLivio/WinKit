@@ -19,6 +19,105 @@ export type JsonArrayCellMode = "semicolon" | "compact_json";
 export type PathConflictPolicy = "error" | "bracket_escape";
 export type CsvLineEnding = "lf" | "crlf";
 
+export interface TabularBudgetOverrides {
+  maxInputBytes?: number;
+  maxOutputBytes?: number;
+  maxRows?: number;
+  maxColumns?: number;
+  maxCells?: number;
+  onRowSerialized?: (rowIndexZeroBased: number) => void;
+}
+
+interface ResolvedTabularBudgets {
+  maxInputBytes: number;
+  maxOutputBytes: number;
+  maxRows: number;
+  maxColumns: number;
+  maxCells: number;
+  onRowSerialized?: (rowIndexZeroBased: number) => void;
+}
+
+function resolveBudgets(overrides?: TabularBudgetOverrides): ResolvedTabularBudgets {
+  return {
+    maxInputBytes: overrides?.maxInputBytes ?? MAX_TABULAR_INPUT_BYTES,
+    maxOutputBytes: overrides?.maxOutputBytes ?? MAX_TABULAR_OUTPUT_BYTES,
+    maxRows: overrides?.maxRows ?? MAX_TABULAR_ROWS,
+    maxColumns: overrides?.maxColumns ?? MAX_TABULAR_COLUMNS,
+    maxCells: overrides?.maxCells ?? MAX_TABULAR_CELLS,
+    onRowSerialized: overrides?.onRowSerialized,
+  };
+}
+
+/**
+ * Exact UTF-8 byte length of a JS UTF-16 string without allocating a `Uint8Array`.
+ * Matches `new TextEncoder().encode(str).byteLength` identically (including surrogate pairs
+ * and lone surrogates encoded as 3-byte U+FFFD).
+ */
+export function utf8ByteLength(str: string): number {
+  let bytes = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code <= 0x7f) {
+      bytes += 1;
+    } else if (code <= 0x7ff) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < str.length) {
+      const low = str.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        bytes += 4;
+        i += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+export class BoundedUtf8Builder {
+  private readonly chunks: string[] = [];
+  private totalBytes = 0;
+  private readonly maxBytes: number;
+
+  constructor(maxBytes: number) {
+    this.maxBytes = maxBytes;
+  }
+
+  public append(part: string): boolean {
+    if (part.length === 0) return true;
+    const addBytes = utf8ByteLength(part);
+    if (this.totalBytes + addBytes > this.maxBytes) {
+      this.totalBytes += addBytes;
+      return false;
+    }
+    this.totalBytes += addBytes;
+    this.chunks.push(part);
+    return true;
+  }
+
+  public get byteLength(): number {
+    return this.totalBytes;
+  }
+
+  public build(): string {
+    return this.chunks.join("");
+  }
+}
+
+function makeOutputLimitError(maxOutputBytes: number): TabularConversionResult {
+  const limitLabel =
+    maxOutputBytes >= 1024 * 1024
+      ? `${(maxOutputBytes / (1024 * 1024)).toFixed(2).replace(/\.00$/, "")} MiB`
+      : `${maxOutputBytes.toLocaleString()} bytes`;
+  return {
+    status: "error",
+    code: "OUTPUT_LIMIT_EXCEEDED",
+    message: `Converted output exceeds the ${limitLabel} UTF-8 safety limit.`,
+  };
+}
+
 export interface CsvJsonOptions {
   direction: ConversionDirection;
   delimiter: CsvDelimiter;
@@ -213,6 +312,7 @@ export function detectCsvDelimiter(bodyWithoutBom: string): {
 export function parseCsvRecords(
   rawText: string,
   delimiterOption: CsvDelimiter,
+  budgetOverrides?: TabularBudgetOverrides,
 ):
   | { ok: true; data: ParsedCsvData }
   | {
@@ -223,6 +323,7 @@ export function parseCsvRecords(
       column: number;
       recordNumber: number;
     } {
+  const budgets = resolveBudgets(budgetOverrides);
   const hadLeadingBom = rawText.charCodeAt(0) === 0xfeff;
   const text = hadLeadingBom ? rawText.slice(1) : rawText;
 
@@ -273,31 +374,31 @@ export function parseCsvRecords(
       } => {
     row.push(field);
     totalCells += row.length;
-    if (row.length > MAX_TABULAR_COLUMNS) {
+    if (row.length > budgets.maxColumns) {
       return {
         ok: false,
         code: "COLUMN_LIMIT_EXCEEDED",
-        message: `Row exceeds maximum column limit (${MAX_TABULAR_COLUMNS.toLocaleString()} columns).`,
+        message: `Row exceeds maximum column limit (${budgets.maxColumns.toLocaleString()} columns).`,
         physicalLine: recordStartPhysicalLine,
         column: 1,
         recordNumber: rows.length + 1,
       };
     }
-    if (rows.length + 1 > MAX_TABULAR_ROWS) {
+    if (rows.length + 1 > budgets.maxRows) {
       return {
         ok: false,
         code: "ROW_LIMIT_EXCEEDED",
-        message: `Input exceeds maximum row limit (${MAX_TABULAR_ROWS.toLocaleString()} rows).`,
+        message: `Input exceeds maximum row limit (${budgets.maxRows.toLocaleString()} rows).`,
         physicalLine: recordStartPhysicalLine,
         column: 1,
         recordNumber: rows.length + 1,
       };
     }
-    if (totalCells > MAX_TABULAR_CELLS) {
+    if (totalCells > budgets.maxCells) {
       return {
         ok: false,
         code: "CELL_BUDGET_EXCEEDED",
-        message: `Input exceeds maximum cell budget (${MAX_TABULAR_CELLS.toLocaleString()} cells).`,
+        message: `Input exceeds maximum cell budget (${budgets.maxCells.toLocaleString()} cells).`,
         physicalLine: recordStartPhysicalLine,
         column: 1,
         recordNumber: rows.length + 1,
@@ -532,11 +633,159 @@ export function isSpreadsheetFormulaRisk(value: string, isGenuineNumber: boolean
   return false;
 }
 
-function escapeCsvCell(raw: string, sep: ConcreteDelimiter): string {
+export function escapeCsvCell(raw: string, sep: ConcreteDelimiter): string {
   if (raw.includes('"') || raw.includes(sep) || raw.includes("\n") || raw.includes("\r")) {
     return `"${raw.replace(/"/g, '""')}"`;
   }
   return raw;
+}
+
+export interface CsvCellInput {
+  text: string;
+  isGenuineNumber: boolean;
+}
+
+/**
+ * Reusable RFC 4180 CSV serializer with optional `'` spreadsheet formula protection
+ * and incremental UTF-8 byte budget enforcement (aborts immediately upon crossing `maxOutputBytes`).
+ * Shared by `D14` (`json_to_csv`) and `D10` (batch coordinate CSV export).
+ */
+export function serializeTableToCsvBounded(params: {
+  headers: readonly string[];
+  rows: readonly (readonly CsvCellInput[])[];
+  includeHeaderRow: boolean;
+  delimiter: ConcreteDelimiter;
+  lineEnding: "\n" | "\r\n";
+  includeBom: boolean;
+  formulaProtection: boolean;
+  maxOutputBytes: number;
+  onRowSerialized?: (rowIndexZeroBased: number) => void;
+}):
+  | {
+      ok: true;
+      csvText: string;
+      byteLength: number;
+      formulaLikeCellCount: number;
+      formulaProtectedCount: number;
+      formulaPreviewSamples: FormulaPreviewSample[];
+      previewRows: string[][];
+    }
+  | { ok: false; code: "OUTPUT_LIMIT_EXCEEDED"; message: string } {
+  const {
+    headers,
+    rows,
+    includeHeaderRow,
+    delimiter,
+    lineEnding,
+    includeBom,
+    formulaProtection,
+    maxOutputBytes,
+    onRowSerialized,
+  } = params;
+
+  const limitErr = (): { ok: false; code: "OUTPUT_LIMIT_EXCEEDED"; message: string } => {
+    const e = makeOutputLimitError(maxOutputBytes);
+    return {
+      ok: false,
+      code: "OUTPUT_LIMIT_EXCEEDED",
+      message: e.status === "error" ? e.message : "Output limit exceeded.",
+    };
+  };
+
+  let formulaLikeCellCount = 0;
+  let formulaProtectedCount = 0;
+  const formulaPreviewSamples: FormulaPreviewSample[] = [];
+  const builder = new BoundedUtf8Builder(maxOutputBytes);
+
+  if (includeBom && !builder.append("\uFEFF")) {
+    return limitErr();
+  }
+
+  headers.forEach((h) => {
+    if (isSpreadsheetFormulaRisk(h, false)) {
+      formulaLikeCellCount += 1;
+      if (formulaProtection && includeHeaderRow) {
+        formulaProtectedCount += 1;
+      }
+      if (formulaPreviewSamples.length < 5) {
+        formulaPreviewSamples.push({
+          rowNumber: 0,
+          columnName: h,
+          original: h,
+          protectedValue: `'${h}`,
+        });
+      }
+    }
+  });
+
+  if (includeHeaderRow) {
+    for (let c = 0; c < headers.length; c++) {
+      if (c > 0 && !builder.append(delimiter)) {
+        return limitErr();
+      }
+      const rawH = headers[c] ?? "";
+      const val = formulaProtection && isSpreadsheetFormulaRisk(rawH, false) ? `'${rawH}` : rawH;
+      if (!builder.append(escapeCsvCell(val, delimiter))) {
+        return limitErr();
+      }
+    }
+  }
+
+  const previewRows: string[][] = [];
+  const previewColCap = Math.min(headers.length, MAX_PREVIEW_TABLE_COLS);
+
+  for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+    if ((includeHeaderRow || rIdx > 0) && !builder.append(lineEnding)) {
+      return limitErr();
+    }
+    const row = rows[rIdx]!;
+    const collectPreview = rIdx < MAX_PREVIEW_TABLE_ROWS;
+    const previewRow: string[] = collectPreview ? [] : [];
+
+    for (let cIdx = 0; cIdx < headers.length; cIdx++) {
+      if (cIdx > 0 && !builder.append(delimiter)) {
+        return limitErr();
+      }
+      const cell = row[cIdx] ?? { text: "", isGenuineNumber: false };
+      const risky = isSpreadsheetFormulaRisk(cell.text, cell.isGenuineNumber);
+      if (risky) {
+        formulaLikeCellCount += 1;
+        if (formulaProtection) {
+          formulaProtectedCount += 1;
+        }
+        if (formulaPreviewSamples.length < 5) {
+          formulaPreviewSamples.push({
+            rowNumber: rIdx + 1,
+            columnName: headers[cIdx] ?? `column_${cIdx + 1}`,
+            original: cell.text,
+            protectedValue: `'${cell.text}`,
+          });
+        }
+      }
+      const val = formulaProtection && risky ? `'${cell.text}` : cell.text;
+      if (collectPreview && cIdx < previewColCap) {
+        previewRow.push(val);
+      }
+      if (!builder.append(escapeCsvCell(val, delimiter))) {
+        return limitErr();
+      }
+    }
+
+    if (collectPreview) {
+      previewRows.push(previewRow);
+    }
+    onRowSerialized?.(rIdx);
+  }
+
+  return {
+    ok: true,
+    csvText: builder.build(),
+    byteLength: builder.byteLength,
+    formulaLikeCellCount,
+    formulaProtectedCount,
+    formulaPreviewSamples,
+    previewRows,
+  };
 }
 
 function serializeAstCompactLossless(node: JsonAstNode): string {
@@ -558,10 +807,7 @@ function serializeAstCompactLossless(node: JsonAstNode): string {
   }
 }
 
-interface FlattenedCell {
-  text: string;
-  isGenuineNumber: boolean;
-}
+type FlattenedCell = CsvCellInput;
 
 function formatColumnPath(segments: readonly string[], policy: PathConflictPolicy): string {
   if (policy === "error") {
@@ -584,26 +830,53 @@ function escapeMarkdownCell(raw: string): string {
     .replace(/\r\n|\r|\n/g, "<br>");
 }
 
-function buildMarkdownTable(headers: readonly string[], rows: readonly string[][]): string {
+function buildMarkdownTableBounded(
+  headers: readonly string[],
+  rows: readonly string[][],
+  maxOutputBytes: number,
+  onRowSerialized?: (rowIndexZeroBased: number) => void,
+): { ok: true; mdText: string } | { ok: false } {
   const escapedHeaders = headers.map(escapeMarkdownCell);
-  const escapedRows = rows.map((r) => headers.map((_, idx) => escapeMarkdownCell(r[idx] ?? "")));
+  const widths = escapedHeaders.map((h) => Math.max(3, h.length));
 
-  const widths = escapedHeaders.map((h, colIdx) => {
-    let w = Math.max(3, h.length);
-    for (const r of escapedRows) {
-      const cellLen = (r[colIdx] ?? "").length;
-      if (cellLen > w) w = Math.min(cellLen, 64);
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r]!;
+    for (let c = 0; c < headers.length; c++) {
+      if (widths[c]! >= 64) continue;
+      const cellLen = escapeMarkdownCell(row[c] ?? "").length;
+      if (cellLen > widths[c]!) {
+        widths[c] = Math.min(cellLen, 64);
+      }
     }
-    return w;
-  });
-
-  const outLines: string[] = [];
-  outLines.push(`| ${escapedHeaders.map((h, i) => h.padEnd(widths[i]!)).join(" | ")} |`);
-  outLines.push(`| ${widths.map((w) => "-".repeat(w)).join(" | ")} |`);
-  for (const r of escapedRows) {
-    outLines.push(`| ${r.map((c, i) => c.padEnd(widths[i]!)).join(" | ")} |`);
   }
-  return outLines.join("\n");
+
+  const builder = new BoundedUtf8Builder(maxOutputBytes);
+
+  if (!builder.append("| ")) return { ok: false };
+  for (let c = 0; c < escapedHeaders.length; c++) {
+    if (c > 0 && !builder.append(" | ")) return { ok: false };
+    if (!builder.append(escapedHeaders[c]!.padEnd(widths[c]!))) return { ok: false };
+  }
+  if (!builder.append(" |\n| ")) return { ok: false };
+  for (let c = 0; c < widths.length; c++) {
+    if (c > 0 && !builder.append(" | ")) return { ok: false };
+    if (!builder.append("-".repeat(widths[c]!))) return { ok: false };
+  }
+  if (!builder.append(" |")) return { ok: false };
+
+  for (let r = 0; r < rows.length; r++) {
+    if (!builder.append("\n| ")) return { ok: false };
+    const row = rows[r]!;
+    for (let c = 0; c < headers.length; c++) {
+      if (c > 0 && !builder.append(" | ")) return { ok: false };
+      const escaped = escapeMarkdownCell(row[c] ?? "");
+      if (!builder.append(escaped.padEnd(widths[c]!))) return { ok: false };
+    }
+    if (!builder.append(" |")) return { ok: false };
+    onRowSerialized?.(r);
+  }
+
+  return { ok: true, mdText: builder.build() };
 }
 
 function resolveHeadersOrError(
@@ -676,32 +949,32 @@ function resolveHeadersOrError(
   return { ok: true, headers: resolved, renamed };
 }
 
-function finalizeResult(params: {
-  fullOutput: string;
-  rowCount: number;
-  columnCount: number;
-  detectedDelimiter: ConcreteDelimiter | null;
-  delimiterAmbiguous: boolean;
-  hadInputBom: boolean;
-  formulaLikeCellCount: number;
-  formulaProtectedCount: number;
-  formulaPreviewSamples: FormulaPreviewSample[];
-  renamedHeaders: RenamedHeaderInfo[];
-  paddedRowCount: number;
-  extendedColumnCount: number;
-  ambiguousScalarArrayCount: number;
-  depthCappedCellCount: number;
-  singleObjectNormalized: boolean;
-  tableHeaders: readonly string[];
-  tableRows: readonly string[][];
-}): TabularConversionResult {
-  const outBytes = new TextEncoder().encode(params.fullOutput).byteLength;
-  if (outBytes > MAX_TABULAR_OUTPUT_BYTES) {
-    return {
-      status: "error",
-      code: "OUTPUT_LIMIT_EXCEEDED",
-      message: `Converted output (${(outBytes / (1024 * 1024)).toFixed(2)} MiB) exceeds the 16 MiB safety limit.`,
-    };
+function finalizeResult(
+  params: {
+    fullOutput: string;
+    rowCount: number;
+    columnCount: number;
+    detectedDelimiter: ConcreteDelimiter | null;
+    delimiterAmbiguous: boolean;
+    hadInputBom: boolean;
+    formulaLikeCellCount: number;
+    formulaProtectedCount: number;
+    formulaPreviewSamples: FormulaPreviewSample[];
+    renamedHeaders: RenamedHeaderInfo[];
+    paddedRowCount: number;
+    extendedColumnCount: number;
+    ambiguousScalarArrayCount: number;
+    depthCappedCellCount: number;
+    singleObjectNormalized: boolean;
+    tableHeaders: readonly string[];
+    tableRows: readonly string[][];
+    tableTotalRowCount?: number;
+  },
+  maxOutputBytes: number,
+): TabularConversionResult {
+  const outBytes = utf8ByteLength(params.fullOutput);
+  if (outBytes > maxOutputBytes) {
+    return makeOutputLimitError(maxOutputBytes);
   }
 
   const previewTruncated = params.fullOutput.length > MAX_PREVIEW_CHARS;
@@ -709,8 +982,9 @@ function finalizeResult(params: {
     ? params.fullOutput.slice(0, MAX_PREVIEW_CHARS)
     : params.fullOutput;
 
+  const actualTableRowCount = params.tableTotalRowCount ?? params.tableRows.length;
   const tablePreviewTruncated =
-    params.tableRows.length > MAX_PREVIEW_TABLE_ROWS ||
+    actualTableRowCount > MAX_PREVIEW_TABLE_ROWS ||
     params.tableHeaders.length > MAX_PREVIEW_TABLE_COLS;
   const tablePreviewHeaders = params.tableHeaders.slice(0, MAX_PREVIEW_TABLE_COLS);
   const tablePreviewRows = params.tableRows
@@ -742,17 +1016,27 @@ function finalizeResult(params: {
   };
 }
 
+/**
+ * Header-counting & cell-budget rule:
+ * Any header row present in the input CSV (`firstRowHeaders: true`) or synthesized/emitted as a
+ * table header row in the output (`csv_to_md`, `json_to_md`, or `json_to_csv` with `firstRowHeaders: true`)
+ * counts as 1 row toward the materialized table cell budget (`totalMaterializedRows * columnCount <= maxCells`);
+ * when neither input nor output has a header row (`csv_to_json` or `json_to_csv` with `firstRowHeaders: false`),
+ * `dataRowCount * columnCount <= maxCells`. Checked BEFORE padding/allocating matrices.
+ */
 export function convertTabularData(
   rawInput: string,
   options: CsvJsonOptions,
+  budgetOverrides?: TabularBudgetOverrides,
 ): TabularConversionResult {
+  const budgets = resolveBudgets(budgetOverrides);
   const strippedCheck = rawInput.charCodeAt(0) === 0xfeff ? rawInput.slice(1) : rawInput;
   if (strippedCheck.length === 0) {
     return { status: "empty" };
   }
 
-  const inputBytes = new TextEncoder().encode(rawInput).byteLength;
-  if (inputBytes > MAX_TABULAR_INPUT_BYTES) {
+  const inputBytes = utf8ByteLength(rawInput);
+  if (inputBytes > budgets.maxInputBytes) {
     return {
       status: "error",
       code: "SIZE_LIMIT_EXCEEDED",
@@ -761,13 +1045,17 @@ export function convertTabularData(
   }
 
   if (options.direction === "csv_to_json" || options.direction === "csv_to_md") {
-    return convertFromCsv(rawInput, options);
+    return convertFromCsv(rawInput, options, budgets);
   }
-  return convertFromJson(rawInput, options);
+  return convertFromJson(rawInput, options, budgets);
 }
 
-function convertFromCsv(rawInput: string, options: CsvJsonOptions): TabularConversionResult {
-  const parsed = parseCsvRecords(rawInput, options.delimiter);
+function convertFromCsv(
+  rawInput: string,
+  options: CsvJsonOptions,
+  budgets: ResolvedTabularBudgets,
+): TabularConversionResult {
+  const parsed = parseCsvRecords(rawInput, options.delimiter, budgets);
   if (!parsed.ok) {
     return {
       status: "error",
@@ -813,6 +1101,26 @@ function convertFromCsv(rawInput: string, options: CsvJsonOptions): TabularConve
         maxCols = len;
       }
     }
+  }
+
+  // Enforce final matrix dimensions & cell budget BEFORE allocating headers or padding rows!
+  if (maxCols > budgets.maxColumns) {
+    return {
+      status: "error",
+      code: "COLUMN_LIMIT_EXCEEDED",
+      message: `Normalized column count (${maxCols.toLocaleString()}) exceeds ${budgets.maxColumns.toLocaleString()} columns.`,
+    };
+  }
+
+  const totalMaterializedRows =
+    options.direction === "csv_to_md" && !options.firstRowHeaders ? rows.length + 1 : rows.length;
+  const totalMaterializedCells = totalMaterializedRows * maxCols;
+  if (totalMaterializedCells > budgets.maxCells) {
+    return {
+      status: "error",
+      code: "CELL_BUDGET_EXCEEDED",
+      message: `Normalized table (${totalMaterializedRows.toLocaleString()} rows × ${maxCols.toLocaleString()} columns = ${totalMaterializedCells.toLocaleString()} cells) exceeds the ${budgets.maxCells.toLocaleString()}-cell budget.`,
+    };
   }
 
   const extendedColumnCount = Math.max(0, maxCols - baseCols);
@@ -875,63 +1183,154 @@ function convertFromCsv(rawInput: string, options: CsvJsonOptions): TabularConve
   });
 
   if (options.direction === "csv_to_md") {
-    const md = buildMarkdownTable(headers, dataRows);
-    return finalizeResult({
-      fullOutput: md,
-      rowCount: dataRows.length,
-      columnCount: maxCols,
-      detectedDelimiter: options.delimiter === "auto" ? detectedDelimiter : null,
-      delimiterAmbiguous,
-      hadInputBom: hadLeadingBom,
-      formulaLikeCellCount,
-      formulaProtectedCount: 0,
-      formulaPreviewSamples,
-      renamedHeaders,
-      paddedRowCount,
-      extendedColumnCount,
-      ambiguousScalarArrayCount: 0,
-      depthCappedCellCount: 0,
-      singleObjectNormalized: false,
-      tableHeaders: headers,
-      tableRows: dataRows,
-    });
+    const mdRes = buildMarkdownTableBounded(
+      headers,
+      dataRows,
+      budgets.maxOutputBytes,
+      budgets.onRowSerialized,
+    );
+    if (!mdRes.ok) {
+      return makeOutputLimitError(budgets.maxOutputBytes);
+    }
+    return finalizeResult(
+      {
+        fullOutput: mdRes.mdText,
+        rowCount: dataRows.length,
+        columnCount: maxCols,
+        detectedDelimiter: options.delimiter === "auto" ? detectedDelimiter : null,
+        delimiterAmbiguous,
+        hadInputBom: hadLeadingBom,
+        formulaLikeCellCount,
+        formulaProtectedCount: 0,
+        formulaPreviewSamples,
+        renamedHeaders,
+        paddedRowCount,
+        extendedColumnCount,
+        ambiguousScalarArrayCount: 0,
+        depthCappedCellCount: 0,
+        singleObjectNormalized: false,
+        tableHeaders: headers,
+        tableRows: dataRows,
+      },
+      budgets.maxOutputBytes,
+    );
   }
 
-  // `csv_to_json` — prototype-safe lossless JSON emission (never touches `{}` bracket assignment or JS `Number`)
+  // `csv_to_json` — prototype-safe lossless JSON emission with incremental UTF-8 byte budget
   if (dataRows.length === 0) {
-    return finalizeResult({
-      fullOutput: "[]",
-      rowCount: 0,
-      columnCount: maxCols,
-      detectedDelimiter: options.delimiter === "auto" ? detectedDelimiter : null,
-      delimiterAmbiguous,
-      hadInputBom: hadLeadingBom,
-      formulaLikeCellCount: 0,
-      formulaProtectedCount: 0,
-      formulaPreviewSamples: [],
-      renamedHeaders,
-      paddedRowCount,
-      extendedColumnCount,
-      ambiguousScalarArrayCount: 0,
-      depthCappedCellCount: 0,
-      singleObjectNormalized: false,
-      tableHeaders: headers,
-      tableRows: [],
-    });
+    return finalizeResult(
+      {
+        fullOutput: "[]",
+        rowCount: 0,
+        columnCount: maxCols,
+        detectedDelimiter: options.delimiter === "auto" ? detectedDelimiter : null,
+        delimiterAmbiguous,
+        hadInputBom: hadLeadingBom,
+        formulaLikeCellCount: 0,
+        formulaProtectedCount: 0,
+        formulaPreviewSamples: [],
+        renamedHeaders,
+        paddedRowCount,
+        extendedColumnCount,
+        ambiguousScalarArrayCount: 0,
+        depthCappedCellCount: 0,
+        singleObjectNormalized: false,
+        tableHeaders: headers,
+        tableRows: [],
+      },
+      budgets.maxOutputBytes,
+    );
+  }
+
+  const builder = new BoundedUtf8Builder(budgets.maxOutputBytes);
+  if (!builder.append("[\n")) {
+    return makeOutputLimitError(budgets.maxOutputBytes);
   }
 
   if (options.firstRowHeaders) {
-    const encodedKeys = headers.map((h) => JSON.stringify(h));
-    const objectBlocks = dataRows.map((row) => {
-      const props = encodedKeys.map(
-        (kJson, cIdx) =>
-          `    ${kJson}: ${csvCellToRawJsonLiteral(row[cIdx] ?? "", options.detectTypes, emptyAsNull)}`,
-      );
-      return `  {\n${props.join(",\n")}\n  }`;
-    });
-    const fullOutput = `[\n${objectBlocks.join(",\n")}\n]`;
-    return finalizeResult({
-      fullOutput,
+    const keyPrefixes = headers.map((h) => `    ${JSON.stringify(h)}: `);
+    for (let rIdx = 0; rIdx < dataRows.length; rIdx++) {
+      if (rIdx > 0 && !builder.append(",\n")) {
+        return makeOutputLimitError(budgets.maxOutputBytes);
+      }
+      if (!builder.append("  {\n")) {
+        return makeOutputLimitError(budgets.maxOutputBytes);
+      }
+      const row = dataRows[rIdx]!;
+      for (let cIdx = 0; cIdx < keyPrefixes.length; cIdx++) {
+        if (cIdx > 0 && !builder.append(",\n")) {
+          return makeOutputLimitError(budgets.maxOutputBytes);
+        }
+        if (!builder.append(keyPrefixes[cIdx]!)) {
+          return makeOutputLimitError(budgets.maxOutputBytes);
+        }
+        const literal = csvCellToRawJsonLiteral(row[cIdx] ?? "", options.detectTypes, emptyAsNull);
+        if (!builder.append(literal)) {
+          return makeOutputLimitError(budgets.maxOutputBytes);
+        }
+      }
+      if (!builder.append("\n  }")) {
+        return makeOutputLimitError(budgets.maxOutputBytes);
+      }
+      budgets.onRowSerialized?.(rIdx);
+    }
+    if (!builder.append("\n]")) {
+      return makeOutputLimitError(budgets.maxOutputBytes);
+    }
+
+    return finalizeResult(
+      {
+        fullOutput: builder.build(),
+        rowCount: dataRows.length,
+        columnCount: maxCols,
+        detectedDelimiter: options.delimiter === "auto" ? detectedDelimiter : null,
+        delimiterAmbiguous,
+        hadInputBom: hadLeadingBom,
+        formulaLikeCellCount,
+        formulaProtectedCount: 0,
+        formulaPreviewSamples,
+        renamedHeaders,
+        paddedRowCount,
+        extendedColumnCount,
+        ambiguousScalarArrayCount: 0,
+        depthCappedCellCount: 0,
+        singleObjectNormalized: false,
+        tableHeaders: headers,
+        tableRows: dataRows,
+      },
+      budgets.maxOutputBytes,
+    );
+  }
+
+  for (let rIdx = 0; rIdx < dataRows.length; rIdx++) {
+    if (rIdx > 0 && !builder.append(",\n")) {
+      return makeOutputLimitError(budgets.maxOutputBytes);
+    }
+    if (!builder.append("  [")) {
+      return makeOutputLimitError(budgets.maxOutputBytes);
+    }
+    const row = dataRows[rIdx]!;
+    for (let cIdx = 0; cIdx < row.length; cIdx++) {
+      if (cIdx > 0 && !builder.append(", ")) {
+        return makeOutputLimitError(budgets.maxOutputBytes);
+      }
+      const literal = csvCellToRawJsonLiteral(row[cIdx] ?? "", options.detectTypes, emptyAsNull);
+      if (!builder.append(literal)) {
+        return makeOutputLimitError(budgets.maxOutputBytes);
+      }
+    }
+    if (!builder.append("]")) {
+      return makeOutputLimitError(budgets.maxOutputBytes);
+    }
+    budgets.onRowSerialized?.(rIdx);
+  }
+  if (!builder.append("\n]")) {
+    return makeOutputLimitError(budgets.maxOutputBytes);
+  }
+
+  return finalizeResult(
+    {
+      fullOutput: builder.build(),
       rowCount: dataRows.length,
       columnCount: maxCols,
       detectedDelimiter: options.delimiter === "auto" ? detectedDelimiter : null,
@@ -948,35 +1347,9 @@ function convertFromCsv(rawInput: string, options: CsvJsonOptions): TabularConve
       singleObjectNormalized: false,
       tableHeaders: headers,
       tableRows: dataRows,
-    });
-  }
-
-  const arrayBlocks = dataRows.map((row) => {
-    const elems = row.map((cell) =>
-      csvCellToRawJsonLiteral(cell, options.detectTypes, emptyAsNull),
-    );
-    return `  [${elems.join(", ")}]`;
-  });
-  const fullOutput = `[\n${arrayBlocks.join(",\n")}\n]`;
-  return finalizeResult({
-    fullOutput,
-    rowCount: dataRows.length,
-    columnCount: maxCols,
-    detectedDelimiter: options.delimiter === "auto" ? detectedDelimiter : null,
-    delimiterAmbiguous,
-    hadInputBom: hadLeadingBom,
-    formulaLikeCellCount,
-    formulaProtectedCount: 0,
-    formulaPreviewSamples,
-    renamedHeaders,
-    paddedRowCount,
-    extendedColumnCount,
-    ambiguousScalarArrayCount: 0,
-    depthCappedCellCount: 0,
-    singleObjectNormalized: false,
-    tableHeaders: headers,
-    tableRows: dataRows,
-  });
+    },
+    budgets.maxOutputBytes,
+  );
 }
 
 function astScalarOrComplexToCell(
@@ -1046,7 +1419,11 @@ function astScalarOrComplexToCell(
   }
 }
 
-function convertFromJson(rawInput: string, options: CsvJsonOptions): TabularConversionResult {
+function convertFromJson(
+  rawInput: string,
+  options: CsvJsonOptions,
+  budgets: ResolvedTabularBudgets,
+): TabularConversionResult {
   const hadLeadingBom = rawInput.charCodeAt(0) === 0xfeff;
   if (rawInput.trim().length === 0) {
     return { status: "empty" };
@@ -1093,13 +1470,16 @@ function convertFromJson(rawInput: string, options: CsvJsonOptions): TabularConv
     };
   }
 
-  if (recordsAst.length > MAX_TABULAR_ROWS) {
+  if (recordsAst.length > budgets.maxRows) {
     return {
       status: "error",
       code: "ROW_LIMIT_EXCEEDED",
-      message: `JSON array (${recordsAst.length.toLocaleString()} items) exceeds the ${MAX_TABULAR_ROWS.toLocaleString()}-row limit.`,
+      message: `JSON array (${recordsAst.length.toLocaleString()} items) exceeds the ${budgets.maxRows.toLocaleString()}-row limit.`,
     };
   }
+
+  const hasExportedHeader = options.direction === "json_to_md" || Boolean(options.firstRowHeaders);
+  const totalMaterializedRows = recordsAst.length + (hasExportedHeader ? 1 : 0);
 
   const firstKind = recordsAst[0]!.kind;
   if (firstKind !== "object" && firstKind !== "array") {
@@ -1138,18 +1518,18 @@ function convertFromJson(rawInput: string, options: CsvJsonOptions): TabularConv
         message: "JSON row arrays contain 0 columns.",
       };
     }
-    if (maxLen > MAX_TABULAR_COLUMNS) {
+    if (maxLen > budgets.maxColumns) {
       return {
         status: "error",
         code: "COLUMN_LIMIT_EXCEEDED",
-        message: `Column count (${maxLen.toLocaleString()}) exceeds ${MAX_TABULAR_COLUMNS.toLocaleString()}.`,
+        message: `Column count (${maxLen.toLocaleString()}) exceeds ${budgets.maxColumns.toLocaleString()}.`,
       };
     }
-    if (recordsAst.length * maxLen > MAX_TABULAR_CELLS) {
+    if (totalMaterializedRows * maxLen > budgets.maxCells) {
       return {
         status: "error",
         code: "CELL_BUDGET_EXCEEDED",
-        message: `Total cells exceed ${MAX_TABULAR_CELLS.toLocaleString()}.`,
+        message: `Total table cells (${(totalMaterializedRows * maxLen).toLocaleString()}) exceed ${budgets.maxCells.toLocaleString()}.`,
       };
     }
 
@@ -1213,11 +1593,19 @@ function convertFromJson(rawInput: string, options: CsvJsonOptions): TabularConv
         }
 
         if (existingSig === undefined) {
-          if (orderedColumns.length + 1 > MAX_TABULAR_COLUMNS) {
+          const nextColCount = orderedColumns.length + 1;
+          if (nextColCount > budgets.maxColumns) {
             return {
               ok: false,
               code: "COLUMN_LIMIT_EXCEEDED",
-              message: `Flattened column count exceeds ${MAX_TABULAR_COLUMNS.toLocaleString()}.`,
+              message: `Flattened column count exceeds ${budgets.maxColumns.toLocaleString()}.`,
+            };
+          }
+          if (totalMaterializedRows * nextColCount > budgets.maxCells) {
+            return {
+              ok: false,
+              code: "CELL_BUDGET_EXCEEDED",
+              message: `Flattened table (${(totalMaterializedRows * nextColCount).toLocaleString()} cells) exceeds the ${budgets.maxCells.toLocaleString()}-cell budget.`,
             };
           }
           colProvenance.set(colName, provenanceSig);
@@ -1264,11 +1652,11 @@ function convertFromJson(rawInput: string, options: CsvJsonOptions): TabularConv
       }
     }
 
-    if (recordsAst.length * orderedColumns.length > MAX_TABULAR_CELLS) {
+    if (totalMaterializedRows * orderedColumns.length > budgets.maxCells) {
       return {
         status: "error",
         code: "CELL_BUDGET_EXCEEDED",
-        message: `Flattened table (${(recordsAst.length * orderedColumns.length).toLocaleString()} cells) exceeds the ${MAX_TABULAR_CELLS.toLocaleString()}-cell budget.`,
+        message: `Flattened table (${(totalMaterializedRows * orderedColumns.length).toLocaleString()} cells) exceeds the ${budgets.maxCells.toLocaleString()}-cell budget.`,
       };
     }
 
@@ -1278,61 +1666,103 @@ function convertFromJson(rawInput: string, options: CsvJsonOptions): TabularConv
     );
   }
 
-  let formulaLikeCellCount = 0;
-  let formulaProtectedCount = 0;
-  const formulaPreviewSamples: FormulaPreviewSample[] = [];
-
-  // Check headers too if exported
-  headers.forEach((h) => {
-    if (isSpreadsheetFormulaRisk(h, false)) {
-      formulaLikeCellCount += 1;
-      if (options.formulaProtection && options.direction === "json_to_csv") {
-        formulaProtectedCount += 1;
-      }
-      if (formulaPreviewSamples.length < 5) {
-        formulaPreviewSamples.push({
-          rowNumber: 0,
-          columnName: h,
-          original: h,
-          protectedValue: `'${h}`,
-        });
-      }
-    }
-  });
-
-  cellMatrix.forEach((row, rIdx) => {
-    row.forEach((cell, cIdx) => {
-      if (isSpreadsheetFormulaRisk(cell.text, cell.isGenuineNumber)) {
+  if (options.direction === "json_to_md") {
+    let formulaLikeCellCount = 0;
+    const formulaPreviewSamples: FormulaPreviewSample[] = [];
+    headers.forEach((h) => {
+      if (isSpreadsheetFormulaRisk(h, false)) {
         formulaLikeCellCount += 1;
-        if (options.formulaProtection && options.direction === "json_to_csv") {
-          formulaProtectedCount += 1;
-        }
         if (formulaPreviewSamples.length < 5) {
           formulaPreviewSamples.push({
-            rowNumber: rIdx + 1,
-            columnName: headers[cIdx] ?? `column_${cIdx + 1}`,
-            original: cell.text,
-            protectedValue: `'${cell.text}`,
+            rowNumber: 0,
+            columnName: h,
+            original: h,
+            protectedValue: `'${h}`,
           });
         }
       }
     });
+    cellMatrix.forEach((row, rIdx) => {
+      row.forEach((cell, cIdx) => {
+        if (isSpreadsheetFormulaRisk(cell.text, cell.isGenuineNumber)) {
+          formulaLikeCellCount += 1;
+          if (formulaPreviewSamples.length < 5) {
+            formulaPreviewSamples.push({
+              rowNumber: rIdx + 1,
+              columnName: headers[cIdx] ?? `column_${cIdx + 1}`,
+              original: cell.text,
+              protectedValue: `'${cell.text}`,
+            });
+          }
+        }
+      });
+    });
+
+    const plainStringRows = cellMatrix.map((row) => row.map((c) => c.text));
+    const mdRes = buildMarkdownTableBounded(
+      headers,
+      plainStringRows,
+      budgets.maxOutputBytes,
+      budgets.onRowSerialized,
+    );
+    if (!mdRes.ok) {
+      return makeOutputLimitError(budgets.maxOutputBytes);
+    }
+    return finalizeResult(
+      {
+        fullOutput: mdRes.mdText,
+        rowCount: cellMatrix.length,
+        columnCount: headers.length,
+        detectedDelimiter: null,
+        delimiterAmbiguous: false,
+        hadInputBom: hadLeadingBom,
+        formulaLikeCellCount,
+        formulaProtectedCount: 0,
+        formulaPreviewSamples,
+        renamedHeaders: [],
+        paddedRowCount: 0,
+        extendedColumnCount: 0,
+        ambiguousScalarArrayCount: counters.ambiguousScalarArrays,
+        depthCappedCellCount: counters.depthCapped,
+        singleObjectNormalized,
+        tableHeaders: headers,
+        tableRows: plainStringRows,
+      },
+      budgets.maxOutputBytes,
+    );
+  }
+
+  // `json_to_csv` — shared incremental UTF-8 budget & optional formula protection
+  const csvSerialized = serializeTableToCsvBounded({
+    headers,
+    rows: cellMatrix,
+    includeHeaderRow: options.firstRowHeaders,
+    delimiter: sep,
+    lineEnding,
+    includeBom: Boolean(options.csvIncludeBom),
+    formulaProtection: options.formulaProtection,
+    maxOutputBytes: budgets.maxOutputBytes,
+    onRowSerialized: budgets.onRowSerialized,
   });
+  if (!csvSerialized.ok) {
+    return {
+      status: "error",
+      code: csvSerialized.code,
+      message: csvSerialized.message,
+    };
+  }
 
-  const plainStringRows = cellMatrix.map((row) => row.map((c) => c.text));
-
-  if (options.direction === "json_to_md") {
-    const md = buildMarkdownTable(headers, plainStringRows);
-    return finalizeResult({
-      fullOutput: md,
+  return finalizeResult(
+    {
+      fullOutput: csvSerialized.csvText,
       rowCount: cellMatrix.length,
       columnCount: headers.length,
       detectedDelimiter: null,
       delimiterAmbiguous: false,
       hadInputBom: hadLeadingBom,
-      formulaLikeCellCount,
-      formulaProtectedCount: 0,
-      formulaPreviewSamples,
+      formulaLikeCellCount: csvSerialized.formulaLikeCellCount,
+      formulaProtectedCount: csvSerialized.formulaProtectedCount,
+      formulaPreviewSamples: csvSerialized.formulaPreviewSamples,
       renamedHeaders: [],
       paddedRowCount: 0,
       extendedColumnCount: 0,
@@ -1340,55 +1770,9 @@ function convertFromJson(rawInput: string, options: CsvJsonOptions): TabularConv
       depthCappedCellCount: counters.depthCapped,
       singleObjectNormalized,
       tableHeaders: headers,
-      tableRows: plainStringRows,
-    });
-  }
-
-  // `json_to_csv`
-  const csvLines: string[] = [];
-  if (options.firstRowHeaders) {
-    const headerCells = headers.map((h) => {
-      const val = options.formulaProtection && isSpreadsheetFormulaRisk(h, false) ? `'${h}` : h;
-      return escapeCsvCell(val, sep);
-    });
-    csvLines.push(headerCells.join(sep));
-  }
-
-  const effectiveTableRows: string[][] = [];
-  for (const row of cellMatrix) {
-    const effectiveRow: string[] = [];
-    const encodedRow = row.map((cell) => {
-      const val =
-        options.formulaProtection && isSpreadsheetFormulaRisk(cell.text, cell.isGenuineNumber)
-          ? `'${cell.text}`
-          : cell.text;
-      effectiveRow.push(val);
-      return escapeCsvCell(val, sep);
-    });
-    effectiveTableRows.push(effectiveRow);
-    csvLines.push(encodedRow.join(sep));
-  }
-
-  const bomPrefix = options.csvIncludeBom ? "\uFEFF" : "";
-  const fullOutput = `${bomPrefix}${csvLines.join(lineEnding)}`;
-
-  return finalizeResult({
-    fullOutput,
-    rowCount: cellMatrix.length,
-    columnCount: headers.length,
-    detectedDelimiter: null,
-    delimiterAmbiguous: false,
-    hadInputBom: hadLeadingBom,
-    formulaLikeCellCount,
-    formulaProtectedCount,
-    formulaPreviewSamples,
-    renamedHeaders: [],
-    paddedRowCount: 0,
-    extendedColumnCount: 0,
-    ambiguousScalarArrayCount: counters.ambiguousScalarArrays,
-    depthCappedCellCount: counters.depthCapped,
-    singleObjectNormalized,
-    tableHeaders: headers,
-    tableRows: effectiveTableRows,
-  });
+      tableRows: csvSerialized.previewRows,
+      tableTotalRowCount: cellMatrix.length,
+    },
+    budgets.maxOutputBytes,
+  );
 }

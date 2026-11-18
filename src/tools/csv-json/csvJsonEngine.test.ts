@@ -4,6 +4,7 @@ import {
   detectCsvDelimiter,
   MAX_TABULAR_INPUT_BYTES,
   parseCsvRecords,
+  utf8ByteLength,
 } from "./csvJsonEngine";
 
 describe("D14 csvJsonEngine", () => {
@@ -337,5 +338,132 @@ describe("D14 csvJsonEngine", () => {
       formulaProtection: false,
     });
     expect(limitRes.status === "error" && limitRes.code).toBe("SIZE_LIMIT_EXCEEDED");
+  });
+
+  it("enforces padded matrix cell budgets BEFORE padding and stops serialization early when incremental UTF-8 output budget is exceeded", () => {
+    // 1. Exact reproduction sample: 3,001-byte ragged CSV (`1,000` cols on row 1 + `1,001` 1-col rows)
+    // expands to `1,002 × 1,000 = 1,002,000` cells > `1,000,000` cell budget -> must fail BEFORE padding!
+    const raggedBypassInput = `${",".repeat(999)}\n${Array(1001).fill("x").join("\n")}`;
+    const raggedOverRes = convertTabularData(raggedBypassInput, {
+      direction: "csv_to_json",
+      delimiter: ",",
+      firstRowHeaders: false,
+      detectTypes: false,
+      formulaProtection: false,
+      raggedRowPolicy: "pad_and_extend",
+    });
+    expect(raggedOverRes.status).toBe("error");
+    if (raggedOverRes.status === "error") {
+      expect(raggedOverRes.code).toBe("CELL_BUDGET_EXCEEDED");
+    }
+
+    // Within-budget ragged padding (`1,000 × 1,000 = 1,000,000` cells) still works cleanly
+    const raggedWithinInput = `${",".repeat(999)}\n${Array(999).fill("x").join("\n")}`;
+    const raggedOkRes = convertTabularData(raggedWithinInput, {
+      direction: "csv_to_json",
+      delimiter: ",",
+      firstRowHeaders: false,
+      detectTypes: false,
+      formulaProtection: false,
+      raggedRowPolicy: "pad_and_extend",
+    });
+    expect(raggedOkRes.status).toBe("ok");
+    if (raggedOkRes.status === "ok") {
+      expect(raggedOkRes.rowCount).toBe(1000);
+      expect(raggedOkRes.columnCount).toBe(1000);
+    }
+
+    // JSON exported header row also counts toward materialized table cell budget
+    const jsonHeaderCellOver = convertTabularData(
+      '[{"a":1,"b":2},{"a":3,"b":4}]',
+      {
+        direction: "json_to_csv",
+        delimiter: ",",
+        firstRowHeaders: true,
+        detectTypes: false,
+        formulaProtection: false,
+      },
+      { maxCells: 5 }, // 3 materialized rows (1 header + 2 data) × 2 cols = 6 > 5
+    );
+    expect(jsonHeaderCellOver.status === "error" && jsonHeaderCellOver.code).toBe(
+      "CELL_BUDGET_EXCEEDED",
+    );
+
+    // 2. Incremental UTF-8 output budget stops early mid-generation (JSON, CSV, and Markdown)
+    // Verify `utf8ByteLength` matches `TextEncoder` across ASCII, CJK, and astral emoji surrogates
+    const utf8Sample = 'id,"中文🚀"\r\n1,"quote""test"';
+    expect(utf8ByteLength(utf8Sample)).toBe(new TextEncoder().encode(utf8Sample).byteLength);
+
+    // 200-row CSV with long repeated JSON object keys -> tight 600-byte output cap must abort after a few rows!
+    const manyRowsCsv = ["very_long_repeated_header_name_alpha,very_long_repeated_header_beta"]
+      .concat(Array.from({ length: 200 }, (_, i) => `val_${i},"quoted ""cell"" ${i}"`))
+      .join("\n");
+
+    let jsonRowsSerialized = 0;
+    const jsonEarlyStop = convertTabularData(
+      manyRowsCsv,
+      {
+        direction: "csv_to_json",
+        delimiter: ",",
+        firstRowHeaders: true,
+        detectTypes: false,
+        formulaProtection: false,
+      },
+      {
+        maxOutputBytes: 600,
+        onRowSerialized: () => {
+          jsonRowsSerialized += 1;
+        },
+      },
+    );
+    expect(jsonEarlyStop.status === "error" && jsonEarlyStop.code).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(jsonRowsSerialized).toBeLessThan(10);
+
+    let mdRowsSerialized = 0;
+    const mdEarlyStop = convertTabularData(
+      manyRowsCsv,
+      {
+        direction: "csv_to_md",
+        delimiter: ",",
+        firstRowHeaders: true,
+        detectTypes: false,
+        formulaProtection: false,
+      },
+      {
+        maxOutputBytes: 600,
+        onRowSerialized: () => {
+          mdRowsSerialized += 1;
+        },
+      },
+    );
+    expect(mdEarlyStop.status === "error" && mdEarlyStop.code).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(mdRowsSerialized).toBeLessThan(10);
+
+    const manyRowsJson = JSON.stringify(
+      Array.from({ length: 200 }, (_, i) => ({
+        col_one: `row_${i}_"quoted"`,
+        col_two: `=SUM(A${i}:B${i})`,
+      })),
+    );
+    let csvRowsSerialized = 0;
+    const csvEarlyStop = convertTabularData(
+      manyRowsJson,
+      {
+        direction: "json_to_csv",
+        delimiter: ",",
+        firstRowHeaders: true,
+        detectTypes: false,
+        formulaProtection: true,
+        csvIncludeBom: true,
+      },
+      {
+        maxOutputBytes: 400,
+        onRowSerialized: () => {
+          csvRowsSerialized += 1;
+        },
+      },
+    );
+    expect(csvEarlyStop.status === "error" && csvEarlyStop.code).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(csvRowsSerialized).toBeLessThan(15);
   });
 });

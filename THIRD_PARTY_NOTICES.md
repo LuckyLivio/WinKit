@@ -46,8 +46,8 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 ## Embedded Wordlist & Local Rule Data (`D09`, `D12`, `D13`)
 
 - **`D13` Passphrase Wordlist (`eff_wordlist_7772.txt`)**:
-  - **Source**: EFF Long Wordlist (`eff_large_wordlist.txt`, 2016, SHA-256 `addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e`), © Electronic Frontier Foundation (`https://www.eff.org/dice`).
-  - **License**: Creative Commons Attribution 3.0 United States (`CC-BY-3.0-US`, `https://creativecommons.org/licenses/by/3.0/us/`).
+  - **Source**: EFF Long Wordlist (`https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt`, published via `https://www.eff.org/dice`, SHA-256 `addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e`), © Electronic Frontier Foundation.
+  - **License**: Creative Commons Attribution 4.0 International (`CC-BY-4.0`, `https://creativecommons.org/licenses/by/4.0/`), per EFF's Copyright Policy (`https://www.eff.org/copyright`, linked as the governing copyright notice on `https://www.eff.org/dice`, which licenses original EFF website material under CC BY 4.0 International unless otherwise noted; earlier 2016 site notices referenced CC BY 3.0 US).
   - **Modifications**: Dice roll prefixes were removed, entries were normalized to lowercase ASCII and verified for case-insensitive uniqueness, and the 4 hyphenated entries (`drop-down`, `felt-tip`, `t-shirt`, `yo-yo`) were excluded so all `7,772` retained words match `^[a-z]+$` and remain collision-free under `-`, `_`, `.`, and space separators.
 - **`D12` Lorem Ipsum Vocabulary (`src/tools/lorem-ipsum/loremEngine.ts`)**:
   - Curated directly for WinKit from classical antiquity Latin vocabulary in Marcus Tullius Cicero's _De finibus bonorum et malorum_ (45 BC).

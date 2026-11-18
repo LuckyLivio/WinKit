@@ -1540,7 +1540,7 @@ export const MESSAGES: Record<Locale, Messages> = {
         independent_words_with_replacement: (dictSize, isUpperBound) =>
           isUpperBound
             ? `假设说明：从 ${dictSize.toLocaleString()} 个纯小写英文词中独立均匀有放回选词（允许自然重复）；因当前为空分隔符且未开启首字母大写，不同复合词序列可能合并为同一字符串，故仅标为生成选择上界。`
-            : `假设说明：从 ${dictSize.toLocaleString()} 个纯字母词（EFF Long Wordlist 去连字符子集，CC-BY-3.0）中独立均匀有放回选词（允许自然重复）；固定分隔符与确定性大写不增加随机性，末尾随机数字仅计入 100 种等概选择（+6.64 bits）。`,
+            : `假设说明：从 ${dictSize.toLocaleString()} 个纯字母词（EFF Long Wordlist 去连字符子集，CC BY 4.0）中独立均匀有放回选词（允许自然重复）；固定分隔符与确定性大写不增加随机性，末尾随机数字仅计入 100 种等概选择（+6.64 bits）。`,
       },
       memoryPrivacyNote:
         "内存说明：结果仅保存在当前会话内存中，切换工具保持掩码，清空/重新生成立即替换引用，不写入磁盘或历史（注：受运行时管理内存限制，不宣称已完成物理内存安全擦除）。",
@@ -2444,7 +2444,7 @@ export const MESSAGES: Record<Locale, Messages> = {
         independent_words_with_replacement: (dictSize, isUpperBound) =>
           isUpperBound
             ? `Model assumption: independent uniform draws with replacement over ${dictSize.toLocaleString()} lowercase words; with an empty separator and lowercase words, distinct compound sequences can collide, so this figure is marked strictly as a selection upper bound.`
-            : `Model assumption: independent uniform draws with replacement over ${dictSize.toLocaleString()} pure-alpha words (EFF Long Wordlist hyphen-free subset, CC-BY-3.0); fixed separators and deterministic capitalization add 0 bits, and the optional 00–99 suffix adds log2(100) ≈ 6.64 bits.`,
+            : `Model assumption: independent uniform draws with replacement over ${dictSize.toLocaleString()} pure-alpha words (EFF Long Wordlist hyphen-free subset, CC BY 4.0); fixed separators and deterministic capitalization add 0 bits, and the optional 00–99 suffix adds log2(100) ≈ 6.64 bits.`,
       },
       memoryPrivacyNote:
         "Memory note: Results live only in current session memory, re-mask on tool switch, and drop references on Clear/Regenerate without writing to disk (managed JS/OS memory cannot guarantee cryptographic RAM zeroization).",
