@@ -48,7 +48,7 @@ describe("D08 RegexTesterWorkspace UI", () => {
     );
 
     const patternInput = screen.getByLabelText("正则表达式 (Pattern)");
-    const testTextInput = screen.getByLabelText("测试文本（上限 2 MB，不修改原文件）");
+    const testTextInput = screen.getByLabelText("测试文本（上限 2 MiB，不修改原文件）");
 
     await user.click(testTextInput);
     await user.paste("Order #42 and Order #99");

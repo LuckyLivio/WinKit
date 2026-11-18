@@ -184,7 +184,7 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
       "验签",
     ],
     icon: "key-round",
-    implementationStatus: "partial",
+    implementationStatus: "full",
     component: JwtDecoderWorkspace,
   },
   {

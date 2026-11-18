@@ -949,7 +949,7 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     jwtTool: {
       scopeNote:
-        "离线解析三段式 JWS/JWT（大整数零损保真）与五段式 JWE 保护头；支持本地 HS256 / HS384 / HS512 原始片段 HMAC 验签（非对称算法 RS*/ES*/PS*/EdDSA 与 JWE 解密不在本轮支持范围）。",
+        "离线解析三段式 JWS/JWT（大整数零损保真，上限 256 KiB）与五段式 JWE 保护头；支持本地 HS256 / HS384 / HS512 原始片段 HMAC 验签（密钥上限 64 KiB；公钥算法仅解码不验签，加密 JWE 仅读取头部）。",
       tokenInputLabel: "JWT / JWS 令牌输入",
       tokenPlaceholder:
         "粘贴三段式 JWT（支持自动识别外层成对引号与 Bearer 前缀，绝不上传或写入历史）",
@@ -963,10 +963,10 @@ export const MESSAGES: Record<Locale, Messages> = {
       dimTimeLabel: "3. 时间声明核对",
       structEmpty: "等待输入令牌",
       structValidJws: (alg) => `三段式 JWS 解码成功（alg: ${alg}）`,
-      structJweEncrypted: "五段式加密 JWE（仅解析保护头，本轮不解密）",
+      structJweEncrypted: "五段式加密 JWE（仅解析保护头，不执行解密）",
       structInvalid: "令牌结构或编码无效",
       jweUnsupportedBody:
-        "检测到 5 段式 JWE 加密结构（Protected Header · Encrypted Key · IV · Ciphertext · Tag）。当前版本仅离线展示可读保护头，不支持本地密钥解密。",
+        "检测到 5 段式 JWE 加密结构（Protected Header · Encrypted Key · IV · Ciphertext · Tag）。按工具基线范围仅离线展示可读保护头，不支持本地密钥解密。",
       sigUnverified: "签名未验证（输入密钥后校验）",
       sigVerifying: "正在校验 HMAC…",
       sigValid: (alg, keyBytes) => `签名有效（${alg}，密钥 ${keyBytes} 字节）`,
@@ -974,7 +974,7 @@ export const MESSAGES: Record<Locale, Messages> = {
       sigAlgMismatch: (headerAlg, expectedAlg) =>
         `算法不匹配（头部 ${headerAlg} ≠ 期望 ${expectedAlg}）`,
       sigUnsignedNone: "未签名令牌（alg=none，无密码学签名）",
-      sigUnsupportedAlg: (alg) => `本轮不支持验签（alg: ${alg}）`,
+      sigUnsupportedAlg: (alg) => `仅解码头部与载荷，不支持公钥/该算法验签（alg: ${alg}）`,
       sigUnsupportedCrit: (crit) => `拒绝验签：含未支持的关键扩展头 crit=${crit}`,
       sigInvalidBase64Key: "密钥 Base64 / Base64url 格式无效",
       nonAuthDisclaimer:
@@ -1027,7 +1027,7 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     diffTool: {
       scopeNote:
-        "支持并排与内联逐行差异对比、词/字符级高亮与精确 Unified Diff 导出（单侧上限 4 MB / 50,000 行；本轮不向用户原文件自动执行补丁）。",
+        "支持并排与内联逐行差异对比、词/字符级高亮与精确 Unified Diff 导出（单侧上限 4 MiB / 50,000 行；不向用户原文件自动执行补丁）。",
       leftTitle: "左侧原文 (A)",
       rightTitle: "右侧新文 (B)",
       leftPlaceholder: "在此输入或粘贴原文 A，或打开/拖入本地 UTF-8 文本文件…",
@@ -1079,12 +1079,12 @@ export const MESSAGES: Record<Locale, Messages> = {
     regexTool: {
       engineBadge: "引擎：ECMAScript / JavaScript RegExp（独立 Worker 隔离）",
       scopeNote:
-        "全部编译、匹配与替换均在独立 Web Worker 中执行，主线程设 2 秒超时硬终止（防灾难性回溯卡死）。注意与参考版 ICU 引擎差异：不支持 ICU x 自由空白模式，命名捕获替换语法为 $<name>。",
+        "全部编译、匹配与替换均在独立 Web Worker 中执行，主线程设 2,000 ms 超时硬终止（不保留超时前局部匹配）。表达式上限 16,384 UTF-16 代码单元、文本上限 2 MiB、单次收集最多 2,000 处匹配；与参考版 ICU 引擎差异：无 x 自由空白标志，命名捕获替换为 $<name>。",
       patternLabel: "正则表达式 (Pattern)",
       patternPlaceholder: "例如：(?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2})",
       flagsLabel: "修饰符 (Flags)",
       flagsInputAria: "修饰符字符串",
-      testTextLabel: "测试文本（上限 2 MB，不修改原文件）",
+      testTextLabel: "测试文本（上限 2 MiB，不修改原文件）",
       testTextPlaceholder: "在此输入或打开本地 UTF-8 文本以测试匹配与替换…",
       openTextFileBtn: "打开文本文件…",
       stopWorkerBtn: "中止当前计算",
@@ -1127,7 +1127,7 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     unicodeTool: {
       scopeNote: (version) =>
-        `基于离线 Unicode ${version} 官方数据库（UAX #44 / #29 / UTS #39）逐码点检查（上限 512 KB / 50,000 码点）。默认清理保留换行、Tab、组合音标、Emoji ZWJ 与波斯/印地语 ZWNJ 连接符，不默认执行 NFKC 兼容规范化。`,
+        `基于离线 Unicode ${version} 官方数据库（UAX #44 / #29 / UTS #39）逐码点检查（上限 512 KiB / 50,000 码点）。默认清理保留换行、Tab、组合音标、Emoji ZWJ 与波斯/印地语 ZWNJ 连接符；UTS #39 单码点原型仅作易混提示，不承诺覆盖全部跨语种欺骗文本。`,
       confusableNeutralNote:
         "说明：“可能混淆”依据 UTS #39 视觉原型表提示与 ASCII 字形相近的非 ASCII 字符（如西里尔文 а 与拉丁文 a），不代表恶意内容；多语种正常文本中出现属正常现象。",
       inputLabel: "待检查原始文本（点击字符或表格行可双向定位）",
@@ -1591,7 +1591,7 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     jwtTool: {
       scopeNote:
-        "Offline 3-part JWS/JWT decoder (lossless 64-bit numbers) and 5-part JWE header inspector with local HS256 / HS384 / HS512 HMAC verification over raw segments (asymmetric RS*/ES*/PS*/EdDSA and JWE decryption are out of scope in this phase).",
+        "Offline 3-part JWS/JWT decoder (lossless 64-bit numbers, max 256 KiB) and 5-part JWE header inspector with local HS256 / HS384 / HS512 HMAC verification over raw segments (secret max 64 KiB; public-key algorithms are decoded-only and JWE reads header only).",
       tokenInputLabel: "JWT / JWS Token Input",
       tokenPlaceholder:
         "Paste a 3-part JWT (outer quotes and 'Bearer ' prefix are recognized automatically; never uploaded or saved to history)",
@@ -1605,10 +1605,10 @@ export const MESSAGES: Record<Locale, Messages> = {
       dimTimeLabel: "3. Time Claims",
       structEmpty: "Waiting for token input",
       structValidJws: (alg) => `Valid 3-part JWS decoded (alg: ${alg})`,
-      structJweEncrypted: "5-part encrypted JWE (protected header only; decryption unsupported)",
+      structJweEncrypted: "5-part encrypted JWE (protected header only; no decryption)",
       structInvalid: "Invalid token structure or encoding",
       jweUnsupportedBody:
-        "Detected a 5-segment encrypted JWE token (Protected Header · Encrypted Key · IV · Ciphertext · Tag). Decryption is not supported in this phase; the readable protected header is shown below.",
+        "Detected a 5-segment encrypted JWE token (Protected Header · Encrypted Key · IV · Ciphertext · Tag). Only the readable protected header is shown offline; decryption is not supported.",
       sigUnverified: "Signature unverified (enter secret to verify)",
       sigVerifying: "Verifying HMAC…",
       sigValid: (alg, keyBytes) => `Signature valid (${alg}, ${keyBytes}-byte key)`,
@@ -1616,7 +1616,8 @@ export const MESSAGES: Record<Locale, Messages> = {
       sigAlgMismatch: (headerAlg, expectedAlg) =>
         `Algorithm mismatch (header ${headerAlg} ≠ expected ${expectedAlg})`,
       sigUnsignedNone: "Unsigned token (alg=none — no cryptographic signature)",
-      sigUnsupportedAlg: (alg) => `Verification unsupported in current phase (alg: ${alg})`,
+      sigUnsupportedAlg: (alg) =>
+        `Decoded only; signature verification unsupported for alg: ${alg}`,
       sigUnsupportedCrit: (crit) => `Rejected: unsupported critical JOSE extension crit=${crit}`,
       sigInvalidBase64Key: "Invalid Base64 / Base64url secret key",
       nonAuthDisclaimer:
@@ -1670,7 +1671,7 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     diffTool: {
       scopeNote:
-        "Side-by-side and inline line/word diff with exact Unified Diff export (up to 4 MB / 50,000 lines per side; WinKit never applies patches to user files).",
+        "Side-by-side and inline line/word diff with exact Unified Diff export (up to 4 MiB / 50,000 lines per side; WinKit never applies patches to user files).",
       leftTitle: "Original (A)",
       rightTitle: "Modified (B)",
       leftPlaceholder: "Paste or type original text A, or open/drop a UTF-8 text file…",
@@ -1723,12 +1724,12 @@ export const MESSAGES: Record<Locale, Messages> = {
     regexTool: {
       engineBadge: "Engine: ECMAScript / JavaScript RegExp (Worker-Isolated)",
       scopeNote:
-        "Compile, match, and replace run inside a dedicated Web Worker with a strict 2000 ms main-thread termination budget. Engine differences vs. ICU: no ICU 'x' free-spacing flag; named group replacement uses $<name>.",
+        "Compile, match, and replace run inside a dedicated Web Worker with a strict 2,000 ms main-thread termination budget (partial matches before timeout are not kept). Caps: 16,384 UTF-16 code units pattern, 2 MiB text, 2,000 matches. Differences vs. ICU: no 'x' free-spacing flag; named replacement uses $<name>.",
       patternLabel: "Regular Expression (Pattern)",
       patternPlaceholder: "e.g. (?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2})",
       flagsLabel: "Flags",
       flagsInputAria: "RegExp flags string",
-      testTextLabel: "Test Text (Max 2 MB, never modifies source file)",
+      testTextLabel: "Test Text (Max 2 MiB, never modifies source file)",
       testTextPlaceholder:
         "Paste text or open a local UTF-8 file to test matching and replacement…",
       openTextFileBtn: "Open Text File…",
@@ -1772,7 +1773,7 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     unicodeTool: {
       scopeNote: (version) =>
-        `Offline Unicode ${version} UCD / UAX #29 / UTS #39 code-point inspector (up to 512 KB / 50,000 code points). Default cleanup preserves LF/CR/Tab, combining marks, Emoji ZWJ, and script ZWNJ joiners without silent NFKC normalization.`,
+        `Offline Unicode ${version} UCD / UAX #29 / UTS #39 code-point inspector (up to 512 KiB / 50,000 code points). Default cleanup preserves LF/CR/Tab, combining marks, Emoji ZWJ, and script ZWNJ joiners; UTS #39 single-character prototypes are advisory and do not claim to detect all spoofing text.`,
       confusableNeutralNote:
         "Note: 'Potential Confusable' cites UTS #39 visual ASCII prototypes (e.g. Cyrillic а vs. Latin a) for awareness — it does not imply malicious intent and is normal in non-Latin text.",
       inputLabel: "Original Text (Click text or table row for bidirectional jump)",

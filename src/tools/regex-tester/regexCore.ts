@@ -145,7 +145,7 @@ export function executeRegexInWorkerScope(req: RegexExecutionRequest): RegexExec
   if (req.pattern.length > MAX_REGEX_PATTERN_CHARS) {
     return {
       status: "input_too_large",
-      detail: `Pattern exceeds ${MAX_REGEX_PATTERN_CHARS.toLocaleString()} characters.`,
+      detail: `Pattern exceeds ${MAX_REGEX_PATTERN_CHARS.toLocaleString()} UTF-16 code units.`,
     };
   }
 
@@ -153,7 +153,7 @@ export function executeRegexInWorkerScope(req: RegexExecutionRequest): RegexExec
   if (textBytes > MAX_REGEX_INPUT_BYTES) {
     return {
       status: "input_too_large",
-      detail: `Test text exceeds the 2 MB limit (${textBytes.toLocaleString()} bytes).`,
+      detail: `Test text exceeds the 2 MiB limit (${textBytes.toLocaleString()} bytes).`,
     };
   }
 
