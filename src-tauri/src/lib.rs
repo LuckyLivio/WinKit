@@ -5,6 +5,7 @@ pub mod fs_guard;
 pub mod hasher;
 pub mod jwt;
 pub mod tasks;
+pub mod unicode_inspector;
 pub mod uuid_tool;
 
 use crate::beautifier::{
@@ -29,6 +30,9 @@ use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyRespo
 use crate::tasks::{
     CloseRequestDecision, ShutdownDrainResult, TaskProgressPayload, TaskRegistry,
     TaskRegistrySnapshot, TaskTokenGuard, TASK_PROGRESS_EVENT,
+};
+use crate::unicode_inspector::{
+    inspect_and_sanitize_unicode, UnicodeInspectionResponse, UnicodeSanitizeOptions,
 };
 use crate::uuid_tool::{
     generate_uuid_batch, inspect_uuid_string, UuidGenVersion, UuidInspectResult,
@@ -493,6 +497,23 @@ fn verify_jwt_hmac(
 }
 
 #[tauri::command]
+async fn inspect_unicode_text(
+    registry: State<'_, TaskRegistry>,
+    text: String,
+    options: UnicodeSanitizeOptions,
+) -> Result<UnicodeInspectionResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || inspect_and_sanitize_unicode(&text, &options))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "INTERNAL_JOIN_ERROR",
+                "Background Unicode inspector failed.",
+            )
+        })?
+}
+
+#[tauri::command]
 async fn inspect_beautifier_image(
     registry: State<'_, TaskRegistry>,
     path: String,
@@ -577,6 +598,7 @@ pub fn run() {
             generate_uuids,
             inspect_uuid,
             verify_jwt_hmac,
+            inspect_unicode_text,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,

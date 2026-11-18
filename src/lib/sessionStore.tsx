@@ -7,6 +7,10 @@ import type {
 } from "../tools/codec/codecEngine";
 import type { AlgorithmDigestEntry, HashAlgorithm } from "../tools/hash-generator/hashUtils";
 import type { JwtExpectedAlgChoice, JwtSecretEncoding } from "../tools/jwt-decoder/jwtEngine";
+import {
+  DEFAULT_UNICODE_SANITIZE_OPTIONS,
+  type UnicodeSanitizeOptions,
+} from "../tools/unicode-inspector/unicodeEngine";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -102,6 +106,14 @@ export interface RegexSessionState {
   replacementTemplate: string;
 }
 
+export interface UnicodeSessionState {
+  inputText: string;
+  sourcePath: string | null;
+  sourceFileName: string | null;
+  attentionOnly: boolean;
+  sanitizeOptions: UnicodeSanitizeOptions;
+}
+
 export interface WordCounterSessionState {
   textInput: string;
 }
@@ -151,6 +163,7 @@ export interface SessionWorkspaces {
   timestamp: TimestampSessionState;
   diff: DiffSessionState;
   regex: RegexSessionState;
+  unicode: UnicodeSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
@@ -238,6 +251,13 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     enableReplace: false,
     replacementTemplate: "",
   },
+  unicode: {
+    inputText: "",
+    sourcePath: null,
+    sourceFileName: null,
+    attentionOnly: false,
+    sanitizeOptions: { ...DEFAULT_UNICODE_SANITIZE_OPTIONS },
+  },
   wordCounter: {
     textInput: "",
   },
@@ -271,6 +291,7 @@ interface SessionStoreContextValue {
   updateTimestampSession: (patch: Partial<TimestampSessionState>) => void;
   updateDiffSession: (patch: Partial<DiffSessionState>) => void;
   updateRegexSession: (patch: Partial<RegexSessionState>) => void;
+  updateUnicodeSession: (patch: Partial<UnicodeSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
@@ -314,6 +335,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, regex: { ...prev.regex, ...patch } }));
   };
 
+  const updateUnicodeSession = (patch: Partial<UnicodeSessionState>) => {
+    setSession((prev) => ({ ...prev, unicode: { ...prev.unicode, ...patch } }));
+  };
+
   const updateWordCounterSession = (patch: Partial<WordCounterSessionState>) => {
     setSession((prev) => ({ ...prev, wordCounter: { ...prev.wordCounter, ...patch } }));
   };
@@ -338,6 +363,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateTimestampSession,
         updateDiffSession,
         updateRegexSession,
+        updateUnicodeSession,
         updateWordCounterSession,
         updateCaseConverterSession,
         updateBeautifierSession,

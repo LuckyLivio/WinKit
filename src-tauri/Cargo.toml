@@ -25,6 +25,11 @@ sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 thiserror = "2"
+unicode-general-category = "1"
+unicode-script = "0.5"
+unicode-security = "0.1"
+unicode-segmentation = "1"
+unicode_names2 = "1"
 uuid = { version = "1", features = ["v4", "v7"] }
 
 [dev-dependencies]

@@ -498,6 +498,62 @@ export interface Messages {
     zeroLengthBadge: string;
     unmatchedGroupBadge: string;
   };
+  unicodeTool: {
+    scopeNote: (version: string) => string;
+    confusableNeutralNote: string;
+    inputLabel: string;
+    inputPlaceholder: string;
+    openFileBtn: string;
+    sampleBtn: string;
+    clearBtn: string;
+    attentionOnlyLabel: (count: number) => string;
+    summaryStats: (cp: number, utf16: number, graphemes: number, bytes: number) => string;
+    tablePaneTitle: string;
+    pageInfo: (start: number, end: number, total: number) => string;
+    prevPageBtn: string;
+    nextPageBtn: string;
+    colCpIdx: string;
+    colUtf16: string;
+    colGrapheme: string;
+    colHex: string;
+    colGlyph: string;
+    colName: string;
+    colCategoryScript: string;
+    colUtf8: string;
+    colFlags: string;
+    flagLabels: {
+      bom: string;
+      zero_width: string;
+      joiner_or_variation_selector: string;
+      bidi_control: string;
+      special_whitespace: string;
+      control_char: string;
+      combining_mark: string;
+      potential_confusable: string;
+      private_or_unassigned: string;
+    };
+    confusableProtoPrefix: string;
+    sanitizerPaneTitle: string;
+    optRemoveBom: string;
+    optRemoveZeroWidth: string;
+    optNormalizeSpaces: string;
+    optRemoveControls: string;
+    optRemoveBidi: string;
+    optRemoveJoiners: string;
+    optReplaceConfusables: string;
+    changesSummary: (count: number, truncated: boolean) => string;
+    noChangesNote: string;
+    previewLabel: string;
+    copyCleanedBtn: string;
+    saveCleanedBtn: string;
+    copiedBadge: string;
+    savedSuccess: (path: string) => string;
+    overwriteConfirmTitle: string;
+    overwriteConfirmBody: (path: string) => string;
+    overwriteConfirmAccept: string;
+    cancel: string;
+    emptyHint: string;
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -1068,6 +1124,69 @@ export const MESSAGES: Record<Locale, Messages> = {
       colCaptures: "编号与命名捕获组",
       zeroLengthBadge: "零宽匹配",
       unmatchedGroupBadge: "未参与匹配",
+    },
+    unicodeTool: {
+      scopeNote: (version) =>
+        `基于离线 Unicode ${version} 官方数据库（UAX #44 / #29 / UTS #39）逐码点检查（上限 512 KB / 50,000 码点）。默认清理保留换行、Tab、组合音标、Emoji ZWJ 与波斯/印地语 ZWNJ 连接符，不默认执行 NFKC 兼容规范化。`,
+      confusableNeutralNote:
+        "说明：“可能混淆”依据 UTS #39 视觉原型表提示与 ASCII 字形相近的非 ASCII 字符（如西里尔文 а 与拉丁文 a），不代表恶意内容；多语种正常文本中出现属正常现象。",
+      inputLabel: "待检查原始文本（点击字符或表格行可双向定位）",
+      inputPlaceholder:
+        "粘贴或打开本地 UTF-8 文本，逐码点查看名称、UTF-8 字节、零宽/方向控制与相似字形…",
+      openFileBtn: "打开文件…",
+      sampleBtn: "填入综合测试样例",
+      clearBtn: "清空",
+      attentionOnlyLabel: (count) => `仅显示需注意项 (${count})`,
+      summaryStats: (cp, utf16, graphemes, bytes) =>
+        `${cp} 码点 · ${utf16} UTF-16 单元 · ${graphemes} 字素簇 · ${bytes} UTF-8 字节`,
+      tablePaneTitle: "逐码点属性明细（点击任意行在原文中高亮定位）",
+      pageInfo: (start, end, total) => `第 ${start}–${end} 项 / 共 ${total} 项`,
+      prevPageBtn: "上一页",
+      nextPageBtn: "下一页",
+      colCpIdx: "码点#",
+      colUtf16: "UTF-16",
+      colGrapheme: "字素#",
+      colHex: "U+XXXX",
+      colGlyph: "可视标记",
+      colName: "Unicode 官方名称 / 状态",
+      colCategoryScript: "类别 · 文字系",
+      colUtf8: "UTF-8 字节",
+      colFlags: "提示类别",
+      flagLabels: {
+        bom: "BOM / ZWNBSP",
+        zero_width: "零宽格式符",
+        joiner_or_variation_selector: "连接符 / 变体选择符",
+        bidi_control: "双向控制符",
+        special_whitespace: "非常规空白",
+        control_char: "控制字符",
+        combining_mark: "组合附加符",
+        potential_confusable: "可能混淆 (UTS #39)",
+        private_or_unassigned: "私用区 / 未分配",
+      },
+      confusableProtoPrefix: "原型候选",
+      sanitizerPaneTitle: "可预览文本清理（原输入保持不变）",
+      optRemoveBom: "移除开头与正文中的 BOM (U+FEFF)",
+      optRemoveZeroWidth: "移除非连接零宽格式符 (ZWSP / WJ / SHY 等)",
+      optNormalizeSpaces: "将非常规空白 (NBSP / 全角空格等) 转为普通空格（保留换行与 Tab）",
+      optRemoveControls: "移除异常 C0/C1 控制字符（保留 LF / CR / Tab）",
+      optRemoveBidi: "移除双向覆盖与隔离控制符 (RLO / LRI 等，防视觉重排)",
+      optRemoveJoiners:
+        "移除连接符与变体选择符 (ZWJ / ZWNJ / VS，注意会拆分组合 Emoji 或波斯语词形)",
+      optReplaceConfusables: "将 UTS #39 相似字符替换为 ASCII 原型（默认关闭，慎用于非拉丁语种）",
+      changesSummary: (count, truncated) =>
+        `预览变更：共 ${count}${truncated ? "+" : ""} 处删除或替换`,
+      noChangesNote: "当前清理选项下无需修改任何字符。",
+      previewLabel: "清理后结果预览",
+      copyCleanedBtn: "复制清理结果",
+      saveCleanedBtn: "另存清理结果…",
+      copiedBadge: "已复制",
+      savedSuccess: (path) => `已保存清理后的文本：${path}`,
+      overwriteConfirmTitle: "目标文件已存在",
+      overwriteConfirmBody: (path) =>
+        `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖原输入文件）？`,
+      overwriteConfirmAccept: "确认覆盖",
+      cancel: "取消",
+      emptyHint: "输入或打开文本后在此逐码点展示 Unicode 名称、UTF-8 字节序列与清理差异预览。",
     },
   },
   "en-US": {
@@ -1650,6 +1769,73 @@ export const MESSAGES: Record<Locale, Messages> = {
       colCaptures: "Numbered & Named Captures",
       zeroLengthBadge: "zero-length",
       unmatchedGroupBadge: "unmatched",
+    },
+    unicodeTool: {
+      scopeNote: (version) =>
+        `Offline Unicode ${version} UCD / UAX #29 / UTS #39 code-point inspector (up to 512 KB / 50,000 code points). Default cleanup preserves LF/CR/Tab, combining marks, Emoji ZWJ, and script ZWNJ joiners without silent NFKC normalization.`,
+      confusableNeutralNote:
+        "Note: 'Potential Confusable' cites UTS #39 visual ASCII prototypes (e.g. Cyrillic а vs. Latin a) for awareness — it does not imply malicious intent and is normal in non-Latin text.",
+      inputLabel: "Original Text (Click text or table row for bidirectional jump)",
+      inputPlaceholder:
+        "Paste or open UTF-8 text to inspect code-point names, UTF-8 bytes, zero-width/Bidi controls, and UTS #39 lookalikes…",
+      openFileBtn: "Open File…",
+      sampleBtn: "Load Diagnostic Sample",
+      clearBtn: "Clear",
+      attentionOnlyLabel: (count) => `Attention items only (${count})`,
+      summaryStats: (cp, utf16, graphemes, bytes) =>
+        `${cp} code points · ${utf16} UTF-16 units · ${graphemes} graphemes · ${bytes} UTF-8 bytes`,
+      tablePaneTitle: "Code-Point Breakdown (Click any row to highlight in source text)",
+      pageInfo: (start, end, total) => `Showing ${start}–${end} of ${total}`,
+      prevPageBtn: "Prev",
+      nextPageBtn: "Next",
+      colCpIdx: "CP#",
+      colUtf16: "UTF-16",
+      colGrapheme: "Graph#",
+      colHex: "U+XXXX",
+      colGlyph: "Glyph",
+      colName: "Official Unicode Name / State",
+      colCategoryScript: "Category · Script",
+      colUtf8: "UTF-8 Bytes",
+      colFlags: "Attention Flags",
+      flagLabels: {
+        bom: "BOM / ZWNBSP",
+        zero_width: "Zero-Width Format",
+        joiner_or_variation_selector: "Joiner / Variation Selector",
+        bidi_control: "Bidi Control",
+        special_whitespace: "Special Whitespace",
+        control_char: "Control Char",
+        combining_mark: "Combining Mark",
+        potential_confusable: "Potential Confusable (UTS #39)",
+        private_or_unassigned: "Private Use / Unassigned",
+      },
+      confusableProtoPrefix: "Prototype",
+      sanitizerPaneTitle: "Previewable Sanitizer (Original Input Preserved)",
+      optRemoveBom: "Remove leading & embedded BOM (U+FEFF)",
+      optRemoveZeroWidth: "Remove non-joiner zero-width format chars (ZWSP / WJ / SHY)",
+      optNormalizeSpaces:
+        "Convert special non-ASCII spaces (NBSP / Ideographic) to ASCII space (keeps LF/CR/Tab)",
+      optRemoveControls: "Remove non-standard C0/C1 control chars (keeps LF/CR/Tab)",
+      optRemoveBidi:
+        "Remove Bidi override & isolate controls (RLO / LRI, prevents visual reordering)",
+      optRemoveJoiners:
+        "Remove joiners & variation selectors (ZWJ / ZWNJ / VS — warning: splits ZWJ emojis & Persian ZWNJ)",
+      optReplaceConfusables:
+        "Replace UTS #39 confusables with ASCII prototypes (off by default; avoid on full non-Latin prose)",
+      changesSummary: (count, truncated) =>
+        `Previewed edits: ${count}${truncated ? "+" : ""} removal/replacement item${count === 1 ? "" : "s"}`,
+      noChangesNote: "No characters would be modified under the current sanitizer options.",
+      previewLabel: "Cleaned Output Preview",
+      copyCleanedBtn: "Copy Cleaned Text",
+      saveCleanedBtn: "Save Cleaned As…",
+      copiedBadge: "Copied",
+      savedSuccess: (path) => `Saved cleaned text: ${path}`,
+      overwriteConfirmTitle: "Destination File Exists",
+      overwriteConfirmBody: (path) =>
+        `"${path}" already exists. Replace it (your original input file will never be overwritten)?`,
+      overwriteConfirmAccept: "Replace File",
+      cancel: "Cancel",
+      emptyHint:
+        "Enter or open text above to inspect Unicode names, UTF-8 byte sequences, and previewable sanitization.",
     },
   },
 };

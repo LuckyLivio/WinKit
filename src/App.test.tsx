@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 import { useSessionStore } from "./lib/sessionStore";
-import type { RegisteredTool } from "./registry/tools";
+import { REGISTERED_TOOLS, type RegisteredTool } from "./registry/tools";
 
 function MockStatefulTool() {
   const { session, updateJsonSession } = useSessionStore();
@@ -90,5 +90,29 @@ describe("WinKit desktop workbench shell", () => {
     const storedRaw = window.localStorage.getItem("winkit.preferences.v1") ?? "";
     expect(storedRaw).not.toContain("secret-session-payload");
     expect(storedRaw).toContain('"D01"');
+  });
+
+  it("registers all 12 active Phase 2B1 tools with unique IDs and complete bilingual metadata", () => {
+    const ids = REGISTERED_TOOLS.map((t) => t.id);
+    expect(ids).toEqual([
+      "D01",
+      "D02",
+      "D03",
+      "D04",
+      "D05",
+      "D06",
+      "D07",
+      "D08",
+      "D11",
+      "T08",
+      "T09",
+      "I03",
+    ]);
+    for (const tool of REGISTERED_TOOLS) {
+      expect(tool.name["zh-CN"].length).toBeGreaterThan(0);
+      expect(tool.name["en-US"].length).toBeGreaterThan(0);
+      expect(tool.summary["zh-CN"].length).toBeGreaterThan(0);
+      expect(tool.summary["en-US"].length).toBeGreaterThan(0);
+    }
   });
 });

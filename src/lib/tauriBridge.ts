@@ -29,6 +29,11 @@ import {
   type JwtHmacVerifyRequest,
   type JwtHmacVerifyResponse,
 } from "../tools/jwt-decoder/jwtEngine";
+import {
+  inspectUnicodeClientFallback,
+  type UnicodeInspectionResponse,
+  type UnicodeSanitizeOptions,
+} from "../tools/unicode-inspector/unicodeEngine";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -481,6 +486,17 @@ export async function verifyJwtHmac(req: JwtHmacVerifyRequest): Promise<JwtHmacV
     return verifyJwtHmacClientFallback(req);
   }
   return invoke<JwtHmacVerifyResponse>("verify_jwt_hmac", { req });
+}
+
+export async function inspectUnicodeText(
+  text: string,
+  options: UnicodeSanitizeOptions,
+): Promise<UnicodeInspectionResponse> {
+  assertFrontendNotShuttingDown();
+  if (!isTauriDesktop()) {
+    return inspectUnicodeClientFallback(text, options);
+  }
+  return invoke<UnicodeInspectionResponse>("inspect_unicode_text", { text, options });
 }
 
 export async function inspectBeautifierSourceImage(path: string): Promise<SourceImageInspection> {

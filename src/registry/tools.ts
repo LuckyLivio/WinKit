@@ -9,6 +9,7 @@ import { JwtDecoderWorkspace } from "../tools/jwt-decoder/JwtDecoderWorkspace";
 import { RegexTesterWorkspace } from "../tools/regex-tester/RegexTesterWorkspace";
 import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
 import { TimestampConverterWorkspace } from "../tools/timestamp-converter/TimestampConverterWorkspace";
+import { UnicodeInspectorWorkspace } from "../tools/unicode-inspector/UnicodeInspectorWorkspace";
 import { UuidGeneratorWorkspace } from "../tools/uuid-generator/UuidGeneratorWorkspace";
 import { WordCounterWorkspace } from "../tools/word-counter/WordCounterWorkspace";
 
@@ -276,6 +277,42 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "regex",
     implementationStatus: "partial",
     component: RegexTesterWorkspace,
+  },
+  {
+    id: "D11",
+    category: "developer",
+    name: {
+      "zh-CN": "Unicode 隐形与混淆字符检查",
+      "en-US": "Unicode Inspector & Sanitizer",
+    },
+    summary: {
+      "zh-CN":
+        "离线逐码点解析 Unicode 16.0 官方名称、字素簇、UTF-8 字节及零宽/双向控制/UTS #39 相似字形，支持安全预览清理",
+      "en-US":
+        "Offline Unicode 16.0 code-point, grapheme, and UTF-8 byte inspector with zero-width, Bidi, UTS #39 confusable detection, and previewable cleanup",
+    },
+    keywords: [
+      "unicode",
+      "utf8",
+      "utf16",
+      "codepoint",
+      "grapheme",
+      "zero-width",
+      "zwsp",
+      "zwj",
+      "zwnj",
+      "bom",
+      "bidi",
+      "confusable",
+      "homoglyph",
+      "隐形字符",
+      "零宽",
+      "混淆",
+      "码点",
+    ],
+    icon: "scan-text",
+    implementationStatus: "partial",
+    component: UnicodeInspectorWorkspace,
   },
   {
     id: "T08",
