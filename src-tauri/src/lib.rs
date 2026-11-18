@@ -19,9 +19,9 @@ use crate::codec::{
 };
 use crate::error::AppError;
 use crate::fs_guard::{
-    paths_refer_to_same_location, read_strict_diff_text_file, read_utf8_text_file_bounded,
-    suggest_safe_output_path, validate_user_path, write_output_bytes_cancellable,
-    DiffTextFilePayload, SavedFileInfo, TextFilePayload,
+    paths_refer_to_same_location, read_strict_diff_text_file, read_strict_tabular_text_file,
+    read_utf8_text_file_bounded, suggest_safe_output_path, validate_user_path,
+    write_output_bytes_cancellable, DiffTextFilePayload, SavedFileInfo, TextFilePayload,
 };
 use crate::hasher::{
     compute_text_hashes, execute_file_hash_with_guard, prepare_file_hash_task, HashAlgorithm,
@@ -358,6 +358,27 @@ async fn read_diff_text_file(
     .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background diff file reader failed."))?
 }
 
+#[tauri::command]
+async fn read_tabular_text_file(
+    registry: State<'_, TaskRegistry>,
+    path: String,
+) -> Result<DiffTextFilePayload, AppError> {
+    let task_id = next_internal_task_id("read-tabular");
+    let guard = registry.register_checked(&task_id, "D14", true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = read_strict_tabular_text_file(&path);
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background tabular file reader failed.",
+        )
+    })?
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveTextFileParams {
@@ -633,6 +654,7 @@ pub fn run() {
             write_clipboard_text,
             read_text_file,
             read_diff_text_file,
+            read_tabular_text_file,
             save_text_file,
             suggest_output_path,
             hash_text_multi,

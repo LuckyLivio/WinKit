@@ -306,6 +306,11 @@ export async function readDiffTextFile(path: string, toolId = "D07"): Promise<Di
   return invoke<DiffTextFilePayload>("read_diff_text_file", { path, toolId });
 }
 
+export async function readTabularTextFile(path: string): Promise<DiffTextFilePayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<DiffTextFilePayload>("read_tabular_text_file", { path });
+}
+
 export async function saveLocalTextFile(params: {
   outputPath: string;
   sourcePath: string | null;

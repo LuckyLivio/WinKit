@@ -688,6 +688,83 @@ export interface Messages {
     errNoCharset: string;
     errImpossibleConstraints: string;
   };
+  csvJsonTool: {
+    scopeNote: string;
+    directionLabel: string;
+    dirCsvToJson: string;
+    dirJsonToCsv: string;
+    dirCsvToMd: string;
+    dirJsonToMd: string;
+    delimiterLabel: string;
+    delimAuto: string;
+    delimComma: string;
+    delimSemicolon: string;
+    delimTab: string;
+    firstRowHeaders: string;
+    detectTypes: string;
+    emptyCellsAsNull: string;
+    formulaProtection: string;
+    advancedSummaryTitle: string;
+    headerPolicyLabel: string;
+    headerPolicyError: string;
+    headerPolicyRename: string;
+    raggedPolicyLabel: string;
+    raggedPolicyError: string;
+    raggedPolicyPad: string;
+    arrayModeLabel: string;
+    arrayModeSemicolon: string;
+    arrayModeJson: string;
+    pathPolicyLabel: string;
+    pathPolicyError: string;
+    pathPolicyBracket: string;
+    csvEolLabel: string;
+    csvBomLabel: string;
+    mappingRulesNote: string;
+    openFileBtn: string;
+    sampleBtn: string;
+    cancelWorkerBtn: string;
+    copyBtn: string;
+    copiedBadge: string;
+    saveBtn: string;
+    clearBtn: string;
+    viewTextTab: string;
+    viewTableTab: string;
+    inputPaneTitle: (fileName: string | null) => string;
+    outputPaneTitle: string;
+    csvPlaceholder: string;
+    jsonPlaceholder: string;
+    statusEmpty: string;
+    statusRunning: string;
+    statusCancelled: string;
+    statusOk: (rows: number, cols: number) => string;
+    detectedDelimiterBadge: (delimName: string, ambiguous: boolean) => string;
+    statusErrorLoc: (
+      msg: string,
+      physicalLine?: number,
+      col?: number,
+      recordNum?: number,
+    ) => string;
+    previewTruncatedNote: (shownChars: number, fullChars: number) => string;
+    tableTruncatedNote: (
+      shownRows: number,
+      totalRows: number,
+      shownCols: number,
+      totalCols: number,
+    ) => string;
+    formulaDetectedWarn: (count: number) => string;
+    formulaProtectedInfo: (count: number) => string;
+    formulaPreviewHeading: string;
+    renamedHeadersNotice: (items: string) => string;
+    raggedAdjustedNotice: (padded: number, extended: number) => string;
+    ambiguousArrayNotice: (count: number) => string;
+    depthCappedNotice: (count: number, maxDepth: number) => string;
+    singleObjectNotice: string;
+    savedSuccess: (path: string, bytes: number) => string;
+    overwriteConfirmTitle: string;
+    overwriteConfirmBody: (path: string) => string;
+    overwriteConfirmAccept: string;
+    cancel: string;
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -1476,6 +1553,97 @@ export const MESSAGES: Record<Locale, Messages> = {
       errInvalidBatchCount: (min, max) => `每批生成条数须为 ${min} 至 ${max} 之间的整数。`,
       errNoCharset: "请至少勾选一种字符类别（大写、小写、数字或符号）。",
       errImpossibleConstraints: "当前密码长度小于所选必含字符类别数量，无法满足约束。",
+    },
+    csvJsonTool: {
+      scopeNote:
+        "支持 CSV ↔ JSON 互转及 CSV / JSON → Markdown 表格导出（不含 Markdown 反向解析）。独立 Worker 执行，无损保留超 2^53 大整数、精确小数与前导零；输入上限 8 MiB、输出上限 16 MiB。",
+      directionLabel: "转换方向",
+      dirCsvToJson: "CSV → JSON",
+      dirJsonToCsv: "JSON → CSV",
+      dirCsvToMd: "CSV → Markdown",
+      dirJsonToMd: "JSON → Markdown",
+      delimiterLabel: "分隔符",
+      delimAuto: "自动检测",
+      delimComma: "逗号 (,)",
+      delimSemicolon: "分号 (;)",
+      delimTab: "Tab",
+      firstRowHeaders: "首行为表头",
+      detectTypes: "显式类型识别",
+      emptyCellsAsNull: "空单元格转 null",
+      formulaProtection: "电子表格公式保护",
+      advancedSummaryTitle: "高级结构映射、嵌套展开与导出规则",
+      headerPolicyLabel: "空/重复表头",
+      headerPolicyError: "默认报错防覆盖",
+      headerPolicyRename: "自动重命名并提示",
+      raggedPolicyLabel: "列数不一致行",
+      raggedPolicyError: "精确定位报错",
+      raggedPolicyPad: "补齐短行并保留超长列",
+      arrayModeLabel: "简单标量数组",
+      arrayModeSemicolon: "分号连接（兼容模式）",
+      arrayModeJson: "紧凑 JSON 保真",
+      pathPolicyLabel: "点号键路径冲突",
+      pathPolicyError: "报错防覆盖",
+      pathPolicyBracket: "方括号转义区分",
+      csvEolLabel: "CSV 行尾符",
+      csvBomLabel: "附加 UTF-8 BOM",
+      mappingRulesNote:
+        "规则说明：默认将 CSV 单元格原样保留为字符串；开启类型识别后仅转换无空白包裹的标准 JSON 数值、true/false 与 null（前导零编号如 00123 仍保留字符串）。JSON → CSV 将 null/缺失字段输出为空单元格，Markdown 将单元格内换行映射为 <br> 并转义 \\ 与 |。CSV 无法天然保留全部 JSON 类型，不承诺任意往返无损。",
+      openFileBtn: "打开文件…",
+      sampleBtn: "填入保真示例",
+      cancelWorkerBtn: "取消转换",
+      copyBtn: "复制完整结果",
+      copiedBadge: "已复制",
+      saveBtn: "另存为…",
+      clearBtn: "清空",
+      viewTextTab: "结果文本",
+      viewTableTab: "表格预览",
+      inputPaneTitle: (fileName) =>
+        fileName ? `输入源（${fileName}）` : "输入（支持拖入 .csv / .tsv / .json）",
+      outputPaneTitle: "转换结果（复制与另存始终导出完整输出）",
+      csvPlaceholder:
+        "粘贴 CSV / TSV 文本，或打开 / 拖入本地 UTF-8 文件（支持字段内引号、转义引号与多行单元格）…",
+      jsonPlaceholder:
+        "粘贴 JSON 对象数组 [{...}]、行数组 [[...]] 或单对象，或打开 / 拖入本地 .json 文件…",
+      statusEmpty: "输入或导入 CSV / TSV / JSON 数据后自动在后台转换。",
+      statusRunning: "正在后台 Worker 中解析与转换…",
+      statusCancelled: "已取消上一次转换任务。",
+      statusOk: (rows, cols) =>
+        `转换完成：${rows.toLocaleString()} 行 × ${cols.toLocaleString()} 列`,
+      detectedDelimiterBadge: (delimName, ambiguous) =>
+        ambiguous
+          ? `自动检测存疑（暂按 ${delimName} 解析，建议手动指定）`
+          : `已检测分隔符：${delimName}`,
+      statusErrorLoc: (msg, physicalLine, col, recordNum) => {
+        const parts: string[] = [];
+        if (recordNum !== undefined) parts.push(`记录 #${recordNum}`);
+        if (physicalLine !== undefined) parts.push(`物理第 ${physicalLine} 行`);
+        if (col !== undefined) parts.push(`第 ${col} 列`);
+        return parts.length > 0 ? `转换错误（${parts.join("，")}）：${msg}` : `转换错误：${msg}`;
+      },
+      previewTruncatedNote: (shownChars, fullChars) =>
+        `文本预览仅展示前 ${shownChars.toLocaleString()} 字符（完整输出共 ${fullChars.toLocaleString()} 字符，“复制完整结果”与“另存为”将导出全部数据）。`,
+      tableTruncatedNote: (shownRows, totalRows, shownCols, totalCols) =>
+        `表格视图仅渲染前 ${shownRows}/${totalRows} 行、前 ${shownCols}/${totalCols} 列。`,
+      formulaDetectedWarn: (count) =>
+        `检测到 ${count} 个以 = / + / @ / 非纯数字 - / 控制符开头的单元格（当前未启用公式保护，导出保持原始字符不变；双引号包裹本身无法阻止电子表格执行公式）。`,
+      formulaProtectedInfo: (count) =>
+        `已为 ${count} 个疑似公式文本前置单引号 '（纯负数值如 -42.5 未被改动；注意前置 ' 会改变首字符，且不同表格软件二次保存行为可能存在差异）。`,
+      formulaPreviewHeading: "公式保护变更预览（前 5 项）：",
+      renamedHeadersNotice: (items) => `已自动重命名空或重复表头：${items}`,
+      raggedAdjustedNotice: (padded, extended) =>
+        `已按显式规则处理不一致行：补齐短行 ${padded} 行，扩展超长列 ${extended} 列。`,
+      ambiguousArrayNotice: (count) =>
+        `提示：有 ${count} 处标量数组为空或含分号 / null / 空串，分号连接在反向还原时可能存在歧义；如需严格区分可在高级规则切换为“紧凑 JSON 保真”。`,
+      depthCappedNotice: (count, maxDepth) =>
+        `有 ${count} 处嵌套对象达到最大展开深度（${maxDepth} 层），已保留为紧凑 JSON 单元格。`,
+      singleObjectNotice: "输入根为单个 JSON 对象，已按 1 行记录转换。",
+      savedSuccess: (path, bytes) =>
+        `已安全保存完整结果（${bytes.toLocaleString()} 字节）：${path}`,
+      overwriteConfirmTitle: "目标文件已存在",
+      overwriteConfirmBody: (path) =>
+        `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖原输入文件）？`,
+      overwriteConfirmAccept: "确认覆盖",
+      cancel: "取消",
     },
   },
   "en-US": {
@@ -2289,6 +2457,97 @@ export const MESSAGES: Record<Locale, Messages> = {
       errNoCharset: "Enable at least one character category (A–Z, a–z, 0–9, or symbols).",
       errImpossibleConstraints:
         "Password length is shorter than the number of required character categories.",
+    },
+    csvJsonTool: {
+      scopeNote:
+        "CSV ↔ JSON conversion and CSV / JSON → Markdown table export (no reverse Markdown parser). Runs inside a dedicated Worker with lossless >2^53 integers, exact decimals, and leading-zero preservation; caps: 8 MiB input / 16 MiB output.",
+      directionLabel: "Direction",
+      dirCsvToJson: "CSV → JSON",
+      dirJsonToCsv: "JSON → CSV",
+      dirCsvToMd: "CSV → Markdown",
+      dirJsonToMd: "JSON → Markdown",
+      delimiterLabel: "Delimiter",
+      delimAuto: "Auto",
+      delimComma: "Comma (,)",
+      delimSemicolon: "Semicolon (;)",
+      delimTab: "Tab",
+      firstRowHeaders: "First row headers",
+      detectTypes: "Detect types",
+      emptyCellsAsNull: "Empty cell → null",
+      formulaProtection: "Formula protection",
+      advancedSummaryTitle: "Advanced Structure, Flattening & Export Options",
+      headerPolicyLabel: "Empty/Duplicate Headers",
+      headerPolicyError: "Error (prevent overwrite)",
+      headerPolicyRename: "Auto-rename with preview",
+      raggedPolicyLabel: "Ragged Row Lengths",
+      raggedPolicyError: "Error with exact row/line",
+      raggedPolicyPad: "Pad short & keep extra cols",
+      arrayModeLabel: "Plain Scalar Arrays",
+      arrayModeSemicolon: "Join with ';'",
+      arrayModeJson: "Compact JSON",
+      pathPolicyLabel: "Dot-Key Path Collisions",
+      pathPolicyError: "Error (prevent overwrite)",
+      pathPolicyBracket: "Bracket-escape keys",
+      csvEolLabel: "CSV Line Ending",
+      csvBomLabel: "Prepend UTF-8 BOM",
+      mappingRulesNote:
+        "Rules: CSV cells stay strings by default; Detect Types converts only unpadded canonical JSON numbers, true/false, and null (leading-zero codes like 00123 stay strings). JSON → CSV maps null/missing keys to empty cells; Markdown maps cell line breaks to <br> and escapes \\ and |. CSV cannot preserve all JSON types round-trip.",
+      openFileBtn: "Open File…",
+      sampleBtn: "Load Sample",
+      cancelWorkerBtn: "Cancel",
+      copyBtn: "Copy Full Output",
+      copiedBadge: "Copied",
+      saveBtn: "Save As…",
+      clearBtn: "Clear",
+      viewTextTab: "Output Text",
+      viewTableTab: "Table Preview",
+      inputPaneTitle: (fileName) =>
+        fileName ? `Source (${fileName})` : "Input (Drop .csv / .tsv / .json)",
+      outputPaneTitle: "Converted Output (Copy & Save Export Full Data)",
+      csvPlaceholder:
+        "Paste CSV / TSV text, or open / drop a UTF-8 file (supports quoted delimiters, escaped quotes, and multi-line cells)…",
+      jsonPlaceholder:
+        "Paste a JSON array of objects [{...}], row arrays [[...]], or single object, or open / drop a .json file…",
+      statusEmpty: "Paste or open CSV / TSV / JSON data to convert in background.",
+      statusRunning: "Parsing and converting in dedicated Worker…",
+      statusCancelled: "Cancelled previous conversion.",
+      statusOk: (rows, cols) =>
+        `Converted: ${rows.toLocaleString()} row${rows === 1 ? "" : "s"} × ${cols.toLocaleString()} column${cols === 1 ? "" : "s"}`,
+      detectedDelimiterBadge: (delimName, ambiguous) =>
+        ambiguous
+          ? `Ambiguous delimiter (using ${delimName}; manual selection recommended)`
+          : `Detected: ${delimName}`,
+      statusErrorLoc: (msg, physicalLine, col, recordNum) => {
+        const parts: string[] = [];
+        if (recordNum !== undefined) parts.push(`record #${recordNum}`);
+        if (physicalLine !== undefined) parts.push(`physical line ${physicalLine}`);
+        if (col !== undefined) parts.push(`col ${col}`);
+        return parts.length > 0 ? `Error (${parts.join(", ")}): ${msg}` : `Error: ${msg}`;
+      },
+      previewTruncatedNote: (shownChars, fullChars) =>
+        `Preview shows first ${shownChars.toLocaleString()} of ${fullChars.toLocaleString()} chars (Copy Full Output and Save As write the complete result).`,
+      tableTruncatedNote: (shownRows, totalRows, shownCols, totalCols) =>
+        `Table preview renders first ${shownRows}/${totalRows} rows and ${shownCols}/${totalCols} columns.`,
+      formulaDetectedWarn: (count) =>
+        `Detected ${count} cell(s) starting with = / + / @ / non-numeric - / control chars (Formula Protection is off — raw data is unchanged; CSV double quotes alone do not block spreadsheet formula execution).`,
+      formulaProtectedInfo: (count) =>
+        `Prefixed ${count} formula-like cell(s) with ' (genuine negative numbers like -42.5 were kept unchanged; note ' alters the leading character and behavior varies across spreadsheet apps).`,
+      formulaPreviewHeading: "Formula protection preview (up to 5):",
+      renamedHeadersNotice: (items) => `Auto-renamed empty/duplicate headers: ${items}`,
+      raggedAdjustedNotice: (padded, extended) =>
+        `Adjusted ragged rows: ${padded} short row(s) padded, ${extended} extra column(s) preserved.`,
+      ambiguousArrayNotice: (count) =>
+        `Note: ${count} scalar array(s) were empty or contained ';', null, or empty strings; switch Plain Scalar Arrays to 'Compact JSON' if lossless round-trip is needed.`,
+      depthCappedNotice: (count, maxDepth) =>
+        `${count} nested object(s) reached max depth (${maxDepth}) and were kept as compact JSON cells.`,
+      singleObjectNotice: "JSON root was a single object and was converted as a 1-row record.",
+      savedSuccess: (path, bytes) =>
+        `Saved complete output (${bytes.toLocaleString()} bytes): ${path}`,
+      overwriteConfirmTitle: "Destination File Exists",
+      overwriteConfirmBody: (path) =>
+        `"${path}" already exists. Replace it (your source input file can never be overwritten)?`,
+      overwriteConfirmAccept: "Replace File",
+      cancel: "Cancel",
     },
   },
 };

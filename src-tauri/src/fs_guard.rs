@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_TEXT_FILE_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB ceiling for interactive JSON editor files
+const MAX_TABULAR_FILE_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB ceiling for D14 CSV/TSV/JSON converter
 const MAX_DIFF_FILE_BYTES: u64 = 4 * 1024 * 1024; // 4 MiB per-side ceiling for interactive line/word diff
 const WRITE_CHUNK_BYTES: usize = 256 * 1024;
 
@@ -296,10 +297,22 @@ pub fn read_utf8_text_file_bounded(raw_path: &str) -> Result<TextFilePayload, Ap
 /// normalizing line endings, while explicitly rejecting binary files (NUL bytes), UTF-16 BOMs,
 /// and non-UTF-8 encodings instead of inserting U+FFFD replacement characters.
 pub fn read_strict_diff_text_file(raw_path: &str) -> Result<DiffTextFilePayload, AppError> {
+    read_strict_utf8_file_with_limit(raw_path, MAX_DIFF_FILE_BYTES, "4 MiB per-side diff")
+}
+
+pub fn read_strict_tabular_text_file(raw_path: &str) -> Result<DiffTextFilePayload, AppError> {
+    read_strict_utf8_file_with_limit(raw_path, MAX_TABULAR_FILE_BYTES, "8 MiB tabular")
+}
+
+fn read_strict_utf8_file_with_limit(
+    raw_path: &str,
+    max_bytes: u64,
+    limit_label: &str,
+) -> Result<DiffTextFilePayload, AppError> {
     let (path, len) = validate_existing_input_file(raw_path)?;
-    if len > MAX_DIFF_FILE_BYTES {
+    if len > max_bytes {
         return Err(AppError::size_limit(format!(
-            "File exceeds the 4 MB per-side diff limit ({:.2} MB).",
+            "File exceeds the {limit_label} limit ({:.2} MiB).",
             len as f64 / (1024.0 * 1024.0)
         )));
     }

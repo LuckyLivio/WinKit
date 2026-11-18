@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 12 active Phase 2B1 tools with unique IDs and complete bilingual metadata", () => {
+  it("registers all 16 active Phase 2B2 tools with unique IDs and complete bilingual metadata", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -107,6 +107,7 @@ describe("WinKit desktop workbench shell", () => {
       "D11",
       "D12",
       "D13",
+      "D14",
       "T08",
       "T09",
       "I03",
