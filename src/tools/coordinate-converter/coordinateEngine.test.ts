@@ -6,6 +6,7 @@ import {
   formatAllCoordinateOutputs,
   parseCoordinateInput,
   parseSeparateLatLonFields,
+  serializeUnroundedPointForTransfer,
 } from "./coordinateEngine";
 
 describe("D10 coordinateEngine — WGS 84 parsing, 8-format output, geodesic distance & batch", () => {
@@ -251,12 +252,73 @@ describe("D10 coordinateEngine — WGS 84 parsing, 8-format output, geodesic dis
       ok: false,
       code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
     });
+    // Place/address query with a viewport `ll` or `center` must NEVER fall back to `ll`
+    expect(
+      parseCoordinateInput(
+        "https://www.google.com/maps/search/?api=1&query=Eiffel%20Tower&ll=40,-70",
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+    });
+    expect(
+      parseCoordinateInput("https://www.google.com/maps?q=Eiffel%20Tower&ll=40,-70"),
+    ).toMatchObject({
+      ok: false,
+      code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+    });
+    expect(parseCoordinateInput("https://www.google.com/maps?ll=40,-70")).toMatchObject({
+      ok: false,
+      code: "MAPS_URL_VIEWPORT_OR_PLACE_UNSUPPORTED",
+    });
     expect(
       parseCoordinateInput("https://maps.apple.com/place?coordinate=37.8,-122.4&ll=38.0,-122.0"),
     ).toMatchObject({
       ok: false,
       code: "CONFLICTING_URL_COORDINATES",
     });
+    // Apple Map Links documented `ll` + `q` pin label remains valid when no address/place-id is present
+    const appleLabeledPin = parseCoordinateInput(
+      "https://maps.apple.com/?ll=37.8197,-122.4786&q=Custom%20Pin%20Label",
+    );
+    expect(appleLabeledPin).toMatchObject({
+      ok: true,
+      point: { latitude: 37.8197, longitude: -122.4786, datum: "WGS84" },
+      detectedFormat: "apple_maps_url",
+    });
+    // Generated Apple & Google numeric coordinate URLs round-trip losslessly
+    const samplePt = createWgs84Point(37.8197, -122.4786);
+    expect(samplePt.ok).toBe(true);
+    if (samplePt.ok) {
+      const outs = formatAllCoordinateOutputs(samplePt.point, {
+        ddDecimals: 6,
+        dmDecimals: 3,
+        dmsDecimals: 2,
+      });
+      expect(parseCoordinateInput(outs.apple_maps)).toMatchObject({
+        ok: true,
+        point: { latitude: 37.8197, longitude: -122.4786, datum: "WGS84" },
+      });
+      expect(parseCoordinateInput(outs.google_maps)).toMatchObject({
+        ok: true,
+        point: { latitude: 37.8197, longitude: -122.4786, datum: "WGS84" },
+      });
+
+      // Tiny & unrounded point transfer preserves exact coordinates regardless of plainAxisOrder
+      const tiny = createWgs84Point(1e-12, -2.5e-11);
+      expect(tiny.ok).toBe(true);
+      if (tiny.ok) {
+        const payload = serializeUnroundedPointForTransfer(tiny.point);
+        expect(parseCoordinateInput(payload, { plainAxisOrder: "lat_lon" })).toMatchObject({
+          ok: true,
+          point: { latitude: 1e-12, longitude: -2.5e-11, datum: "WGS84" },
+        });
+        expect(parseCoordinateInput(payload, { plainAxisOrder: "lon_lat" })).toMatchObject({
+          ok: true,
+          point: { latitude: 1e-12, longitude: -2.5e-11, datum: "WGS84" },
+        });
+      }
+    }
   });
 
   it("computes exact WGS 84 ellipsoid geodesic distances across identical points, poles, equator, antimeridian, and nearly antipodal points", () => {

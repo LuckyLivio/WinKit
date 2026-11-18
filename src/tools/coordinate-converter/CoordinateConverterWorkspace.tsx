@@ -41,6 +41,7 @@ import {
   MIN_DMS_DECIMALS,
   parseCoordinateInput,
   parseSeparateLatLonFields,
+  serializeUnroundedPointForTransfer,
   type BatchCoordinateConversionResult,
   type BatchCoordinateOptions,
   type CoordinateOutputFormatId,
@@ -482,10 +483,6 @@ export function CoordinateConverterWorkspace({
     await executeSaveBatchCsv(chosen, false, snapshot);
   };
 
-  // Formats an unrounded Wgs84Point at full double precision so sending to Distance never truncates
-  const formatUnroundedPointText = (lat: number, lon: number): string =>
-    `${String(lat)}, ${String(lon)}`;
-
   return (
     <div className="tool-workspace">
       <div
@@ -666,10 +663,7 @@ export function CoordinateConverterWorkspace({
                 onClick={() => {
                   if (!singleParsed.ok) return;
                   updateCoordinateSession({
-                    pointAInput: formatUnroundedPointText(
-                      singleParsed.point.latitude,
-                      singleParsed.point.longitude,
-                    ),
+                    pointAInput: serializeUnroundedPointForTransfer(singleParsed.point),
                     activeTab: "distance",
                   });
                 }}
@@ -684,10 +678,7 @@ export function CoordinateConverterWorkspace({
                 onClick={() => {
                   if (!singleParsed.ok) return;
                   updateCoordinateSession({
-                    pointBInput: formatUnroundedPointText(
-                      singleParsed.point.latitude,
-                      singleParsed.point.longitude,
-                    ),
+                    pointBInput: serializeUnroundedPointForTransfer(singleParsed.point),
                     activeTab: "distance",
                   });
                 }}
@@ -993,10 +984,7 @@ export function CoordinateConverterWorkspace({
                   onClick={() => {
                     if (!singleParsed.ok) return;
                     updateCoordinateSession({
-                      pointAInput: formatUnroundedPointText(
-                        singleParsed.point.latitude,
-                        singleParsed.point.longitude,
-                      ),
+                      pointAInput: serializeUnroundedPointForTransfer(singleParsed.point),
                     });
                   }}
                 >
@@ -1031,10 +1019,7 @@ export function CoordinateConverterWorkspace({
                   onClick={() => {
                     if (!singleParsed.ok) return;
                     updateCoordinateSession({
-                      pointBInput: formatUnroundedPointText(
-                        singleParsed.point.latitude,
-                        singleParsed.point.longitude,
-                      ),
+                      pointBInput: serializeUnroundedPointForTransfer(singleParsed.point),
                     });
                   }}
                 >

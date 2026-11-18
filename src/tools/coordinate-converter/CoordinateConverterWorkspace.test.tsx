@@ -7,7 +7,12 @@ import { SessionStoreProvider } from "../../lib/sessionStore";
 import * as tauriBridge from "../../lib/tauriBridge";
 import { CoordinateConverterWorkspace } from "./CoordinateConverterWorkspace";
 import type { CoordinateWorkerLike } from "./coordinateController";
-import { convertCoordinateBatch, type CoordinateOutputFormatId } from "./coordinateEngine";
+import {
+  calculateWgs84EllipsoidDistance,
+  convertCoordinateBatch,
+  createWgs84Point,
+  type CoordinateOutputFormatId,
+} from "./coordinateEngine";
 import type {
   CoordinateBatchWorkerRequest,
   CoordinateBatchWorkerResponse,
@@ -113,7 +118,9 @@ describe("D10 CoordinateConverterWorkspace UI", () => {
     expect(screen.getByTestId("coord-output-dd")).toHaveTextContent("38, -122");
 
     await user.click(screen.getByRole("button", { name: "填入测距起点 A" }));
-    expect(screen.getByTestId("coord-point-a-input")).toHaveValue("37.8197, -122.4786");
+    expect(screen.getByTestId("coord-point-a-input")).toHaveValue(
+      '{"type":"Point","coordinates":[-122.4786,37.8197]}',
+    );
 
     // 3. Verify near-antipodal benchmark and Point B specific error labeling
     await user.click(screen.getByRole("button", { name: "近对跖点示例" }));
@@ -126,6 +133,71 @@ describe("D10 CoordinateConverterWorkspace UI", () => {
 
     clipSpy.mockRestore();
   });
+
+  it.each([
+    {
+      targetSlot: "A" as const,
+      sendButtonName: "填入测距起点 A",
+      existingOtherPlainText: "10, 50", // under lon_lat => lon=10, lat=50
+    },
+    {
+      targetSlot: "B" as const,
+      sendButtonName: "填入测距终点 B",
+      existingOtherPlainText: "10, 50", // under lon_lat => lon=10, lat=50
+    },
+  ])(
+    "preserves both sent point (lat=40, lon=20) and existing plain-text endpoint when Distance tab uses lon_lat (target=$targetSlot)",
+    async ({ targetSlot, sendButtonName, existingOtherPlainText }) => {
+      const user = userEvent.setup();
+
+      render(
+        <I18nContext.Provider
+          value={{ locale: "zh-CN", t: MESSAGES["zh-CN"], setLocale: () => {} }}
+        >
+          <SessionStoreProvider>
+            <CoordinateConverterWorkspace />
+          </SessionStoreProvider>
+        </I18nContext.Provider>,
+      );
+
+      // 1. On Distance tab, set plain-text axis order to `经度, 纬度` (`lon_lat`) and put plain text in the OTHER slot
+      await user.click(screen.getByRole("tab", { name: "两点测距" }));
+      await user.click(screen.getByRole("button", { name: "经度, 纬度" }));
+
+      const otherInput =
+        targetSlot === "A"
+          ? screen.getByTestId("coord-point-b-input")
+          : screen.getByTestId("coord-point-a-input");
+      await user.clear(otherInput);
+      await user.type(otherInput, existingOtherPlainText);
+
+      // 2. Return to Convert tab (default `纬度, 经度` = `lat_lon`), enter `40, 20` (lat=40, lon=20), and send to targetSlot
+      await user.click(screen.getByRole("tab", { name: "坐标转换" }));
+      const singleInput = screen.getByTestId("coord-single-input");
+      await user.clear(singleInput);
+      await user.type(singleInput, "40, 20");
+
+      await user.click(screen.getByRole("button", { name: sendButtonName }));
+
+      // 3. Distance tab must keep `lon_lat` for the existing plain-text endpoint (lat=50, lon=10)
+      //    while parsing the sent structured point as (lat=40, lon=20), NOT flipped to (lat=20, lon=40)!
+      const expectedSentPt = createWgs84Point(40, 20);
+      const expectedOtherPt = createWgs84Point(50, 10);
+      expect(expectedSentPt.ok && expectedOtherPt.ok).toBe(true);
+      if (expectedSentPt.ok && expectedOtherPt.ok) {
+        const expectedDist = calculateWgs84EllipsoidDistance(
+          targetSlot === "A" ? expectedSentPt.point : expectedOtherPt.point,
+          targetSlot === "A" ? expectedOtherPt.point : expectedSentPt.point,
+        );
+        expect(expectedDist.ok).toBe(true);
+        if (expectedDist.ok) {
+          expect(screen.getByTestId("coord-distance-m")).toHaveTextContent(
+            `${expectedDist.meters.toFixed(3)} m`,
+          );
+        }
+      }
+    },
+  );
 
   it("exports batch CSV matching UI rows (including failed rows by default) and isolates stale batch Workers & save snapshots", async () => {
     vi.useFakeTimers();

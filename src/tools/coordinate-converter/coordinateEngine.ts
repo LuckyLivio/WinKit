@@ -195,6 +195,18 @@ function normalizeZero(n: number): number {
   return Object.is(n, -0) || n === 0 ? 0 : n;
 }
 
+/**
+ * Serializes an unrounded `Wgs84Point` as a compact RFC 7946 GeoJSON Point (`[longitude, latitude]`)
+ * using full IEEE-754 double precision so cross-tab transfers never depend on the target tab's
+ * plain-text axis order or display rounding settings.
+ */
+export function serializeUnroundedPointForTransfer(point: Wgs84Point): string {
+  return JSON.stringify({
+    type: "Point",
+    coordinates: [normalizeZero(point.longitude), normalizeZero(point.latitude)],
+  });
+}
+
 export function createWgs84Point(latitude: number, longitude: number): CoordinateParseResult {
   if (!Number.isFinite(latitude)) {
     return {
@@ -1144,8 +1156,85 @@ function parseHttpMapsUrl(trimmed: string): CoordinateParseResult {
 
   // 1. Official Apple Maps (`maps.apple.com` ONLY — rejects spoofed subdomains like `maps.apple.com.evil.example`)
   if (host === "maps.apple.com") {
-    const coordCandidates: Array<{ lat: number; lon: number }> = [];
-    let hasOnlineOnlyParam = false;
+    const normApplePath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname || "/";
+
+    // Online-only Apple Maps place/address/directions identifiers cannot be resolved offline
+    for (const { key, value } of entries) {
+      const k = key.toLowerCase();
+      if (
+        (k === "address" ||
+          k === "auid" ||
+          k === "muid" ||
+          k === "place-id" ||
+          k === "daddr" ||
+          k === "saddr") &&
+        value.trim().length > 0
+      ) {
+        return {
+          ok: false,
+          code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+          message:
+            "Apple Maps address, directions, or Place ID URLs cannot be resolved to coordinates offline.",
+        };
+      }
+    }
+
+    if (normApplePath === "/search") {
+      const queryEntries = entries.filter((e) => {
+        const k = e.key.toLowerCase();
+        return k === "query" || k === "q";
+      });
+      if (queryEntries.length === 0) {
+        return {
+          ok: false,
+          code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+          message:
+            "Apple Maps /search URL does not contain an explicit coordinate query parameter.",
+        };
+      }
+      const parsedQueries: Array<{ lat: number; lon: number }> = [];
+      for (const qe of queryEntries) {
+        const pair = parseStrictDecimalPairLatLon(qe.value);
+        if (!pair) {
+          return {
+            ok: false,
+            code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+            message:
+              "Apple Maps place/address search query cannot be geocoded offline (viewport parameters are never used as a fallback).",
+          };
+        }
+        parsedQueries.push(pair);
+      }
+      const firstQ = parsedQueries[0]!;
+      for (let i = 1; i < parsedQueries.length; i++) {
+        if (parsedQueries[i]!.lat !== firstQ.lat || parsedQueries[i]!.lon !== firstQ.lon) {
+          return {
+            ok: false,
+            code: "CONFLICTING_URL_COORDINATES",
+            message: "Apple Maps URL contains conflicting coordinate parameters.",
+          };
+        }
+      }
+      const validatedQ = createWgs84Point(firstQ.lat, firstQ.lon);
+      if (!validatedQ.ok) return validatedQ;
+      return {
+        ok: true,
+        point: validatedQ.point,
+        detectedFormat: "apple_maps_url",
+        axisOrderUsed: "lat_lon",
+      };
+    }
+
+    if (normApplePath !== "/" && normApplePath !== "/place") {
+      return {
+        ok: false,
+        code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+        message: `Apple Maps path "${pathname}" is not a supported offline coordinate pin URL.`,
+      };
+    }
+
+    const explicitPinCoords: Array<{ lat: number; lon: number }> = [];
+    const qValues: string[] = [];
 
     for (const { key, value } of entries) {
       const k = key.toLowerCase();
@@ -1158,25 +1247,72 @@ function parseHttpMapsUrl(trimmed: string): CoordinateParseResult {
             message: `Apple Maps parameter "${key}" does not contain a valid decimal latitude,longitude pair.`,
           };
         }
-        coordCandidates.push(pair);
-      } else if (k === "address" || k === "auid" || k === "muid" || k === "place-id" || k === "q") {
-        hasOnlineOnlyParam = true;
+        explicitPinCoords.push(pair);
+      } else if (k === "query") {
+        // On `/place` or `/`, a non-coordinate `query=` search string requires online lookup
+        const pair = parseStrictDecimalPairLatLon(value);
+        if (!pair) {
+          return {
+            ok: false,
+            code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+            message: "Apple Maps search query cannot be resolved to coordinates offline.",
+          };
+        }
+        explicitPinCoords.push(pair);
+      } else if (k === "q") {
+        qValues.push(value);
       }
     }
 
-    if (coordCandidates.length === 0) {
+    // Per Apple Map Links spec, on `/` `q` may serve as a pin display label when `ll`/`coordinate`
+    // explicitly defines the location; if `q` itself is a coordinate pair, verify consistency.
+    if (explicitPinCoords.length > 0) {
+      if (normApplePath === "/place" && qValues.length > 0) {
+        for (const qv of qValues) {
+          const qPair = parseStrictDecimalPairLatLon(qv);
+          if (!qPair) {
+            return {
+              ok: false,
+              code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+              message:
+                "Apple Maps /place URL mixes a search query parameter with coordinates; use name= for labels.",
+            };
+          }
+          explicitPinCoords.push(qPair);
+        }
+      } else {
+        for (const qv of qValues) {
+          const qPair = parseStrictDecimalPairLatLon(qv);
+          if (qPair) {
+            explicitPinCoords.push(qPair);
+          }
+        }
+      }
+    } else if (normApplePath === "/" && qValues.length > 0) {
+      for (const qv of qValues) {
+        const qPair = parseStrictDecimalPairLatLon(qv);
+        if (!qPair) {
+          return {
+            ok: false,
+            code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+            message: "Apple Maps search query cannot be resolved to coordinates offline.",
+          };
+        }
+        explicitPinCoords.push(qPair);
+      }
+    }
+
+    if (explicitPinCoords.length === 0) {
       return {
         ok: false,
         code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
-        message: hasOnlineOnlyParam
-          ? "Apple Maps address, search, or Place ID URLs cannot be resolved to coordinates offline."
-          : "Apple Maps URL does not contain an explicit coordinate= or ll= parameter.",
+        message: "Apple Maps URL does not contain an explicit coordinate= or ll= parameter.",
       };
     }
 
-    const first = coordCandidates[0]!;
-    for (let i = 1; i < coordCandidates.length; i++) {
-      if (coordCandidates[i]!.lat !== first.lat || coordCandidates[i]!.lon !== first.lon) {
+    const first = explicitPinCoords[0]!;
+    for (let i = 1; i < explicitPinCoords.length; i++) {
+      if (explicitPinCoords[i]!.lat !== first.lat || explicitPinCoords[i]!.lon !== first.lon) {
         return {
           ok: false,
           code: "CONFLICTING_URL_COORDINATES",
@@ -1202,55 +1338,80 @@ function parseHttpMapsUrl(trimmed: string): CoordinateParseResult {
       (pathname === "/maps" || pathname.startsWith("/maps/")));
 
   if (isGoogleMapsHost) {
-    // If `query_place_id` is present, Google Maps resolves the Place ID online rather than raw coordinates
-    if (
-      entries.some((e) => e.key.toLowerCase() === "query_place_id" && e.value.trim().length > 0)
-    ) {
-      return {
-        ok: false,
-        code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
-        message:
-          "Google Maps URL includes query_place_id, which requires online Place resolution and cannot be resolved offline.",
-      };
-    }
-
-    const coordCandidates: Array<{ lat: number; lon: number }> = [];
-    let sawNonCoordinateQuery = false;
-
+    // Place IDs, CIDs, FTIDs, and directions endpoints always require online resolution
     for (const { key, value } of entries) {
       const k = key.toLowerCase();
-      if (k === "query" || k === "q" || k === "ll") {
-        const pair = parseStrictDecimalPairLatLon(value);
-        if (pair) {
-          coordCandidates.push(pair);
-        } else if (k === "ll") {
-          return {
-            ok: false,
-            code: "INVALID_COORDINATE_SYNTAX",
-            message:
-              'Google Maps parameter "ll" does not contain a valid decimal latitude,longitude pair.',
-          };
-        } else {
-          sawNonCoordinateQuery = true;
-        }
-      }
-    }
-
-    if (coordCandidates.length === 0) {
-      if (sawNonCoordinateQuery) {
+      if (
+        (k === "query_place_id" ||
+          k === "place_id" ||
+          k === "ftid" ||
+          k === "cid" ||
+          k === "daddr" ||
+          k === "saddr" ||
+          k === "origin" ||
+          k === "destination") &&
+        value.trim().length > 0
+      ) {
         return {
           ok: false,
           code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
           message:
-            "Google Maps place/address query cannot be geocoded offline; only explicit coordinate links (such as ?api=1&query=lat,lon) are supported.",
+            "Google Maps Place ID or directions URL requires online resolution and cannot be resolved offline.",
         };
       }
-      if (pathname.includes("/@") || pathname.startsWith("/maps/place/")) {
+    }
+
+    if (pathname.includes("/@") || pathname.startsWith("/maps/place/")) {
+      return {
+        ok: false,
+        code: "MAPS_URL_VIEWPORT_OR_PLACE_UNSUPPORTED",
+        message:
+          "Google Maps '@lat,lon,zoom' viewport centers and /place/ pages are not treated as selected pin coordinates offline.",
+      };
+    }
+
+    const normGooglePath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname || "/";
+    const isGoogleSearchPath = normGooglePath === "/maps/search";
+    const isGoogleRootPath =
+      normGooglePath === "/maps" || (host === "maps.google.com" && normGooglePath === "/");
+
+    if (!isGoogleSearchPath && !isGoogleRootPath) {
+      return {
+        ok: false,
+        code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+        message: `Google Maps path "${pathname}" is not a supported offline coordinate search link.`,
+      };
+    }
+
+    // `map_action=map` / `map_action=pano` display a viewport/streetview camera without a target pin
+    if (entries.some((e) => e.key.toLowerCase() === "map_action" && e.value.trim().length > 0)) {
+      return {
+        ok: false,
+        code: "MAPS_URL_VIEWPORT_OR_PLACE_UNSUPPORTED",
+        message:
+          "Google Maps map_action viewport/streetview URLs do not specify a selected target coordinate.",
+      };
+    }
+
+    // On Google Maps Search (`/maps/search/?api=1&query=...`) and legacy root (`/maps?q=...`),
+    // ONLY `query` / `q` defines the search target; viewport hints (`ll`, `center`, `sll`) must
+    // NEVER substitute for a place/address search target or stand in as a pin by themselves.
+    const targetEntries = entries.filter((e) => {
+      const k = e.key.toLowerCase();
+      return isGoogleSearchPath ? k === "query" || k === "q" : k === "q" || k === "query";
+    });
+    const hasViewportOnlyParam = entries.some((e) => {
+      const k = e.key.toLowerCase();
+      return k === "ll" || k === "center" || k === "sll";
+    });
+
+    if (targetEntries.length === 0) {
+      if (hasViewportOnlyParam) {
         return {
           ok: false,
           code: "MAPS_URL_VIEWPORT_OR_PLACE_UNSUPPORTED",
           message:
-            "Google Maps '@lat,lon,zoom' viewport centers and /place/ pages are not treated as selected pin coordinates offline.",
+            "Google Maps viewport parameters (ll / center) without an explicit coordinate query are not treated as a target pin.",
         };
       }
       return {
@@ -1260,13 +1421,27 @@ function parseHttpMapsUrl(trimmed: string): CoordinateParseResult {
       };
     }
 
+    const coordCandidates: Array<{ lat: number; lon: number }> = [];
+    for (const { value } of targetEntries) {
+      const pair = parseStrictDecimalPairLatLon(value);
+      if (!pair) {
+        return {
+          ok: false,
+          code: "MAPS_URL_REQUIRES_ONLINE_LOOKUP",
+          message:
+            "Google Maps place/address query cannot be geocoded offline (viewport parameters such as ll are never used as a fallback).",
+        };
+      }
+      coordCandidates.push(pair);
+    }
+
     const first = coordCandidates[0]!;
     for (let i = 1; i < coordCandidates.length; i++) {
       if (coordCandidates[i]!.lat !== first.lat || coordCandidates[i]!.lon !== first.lon) {
         return {
           ok: false,
           code: "CONFLICTING_URL_COORDINATES",
-          message: "Google Maps URL contains conflicting coordinate parameters.",
+          message: "Google Maps URL contains conflicting coordinate query parameters.",
         };
       }
     }
