@@ -4,6 +4,7 @@ pub mod error;
 pub mod fs_guard;
 pub mod hasher;
 pub mod tasks;
+pub mod uuid_tool;
 
 use crate::beautifier::{
     export_beautified_png_cancellable, inspect_source_image, BeautifyExportParams,
@@ -25,6 +26,9 @@ use crate::hasher::{
 use crate::tasks::{
     ShutdownDrainResult, TaskLifecycleState, TaskProgressPayload, TaskRegistry,
     TaskRegistrySnapshot, TASK_PROGRESS_EVENT,
+};
+use crate::uuid_tool::{
+    generate_uuid_batch, inspect_uuid_string, UuidGenVersion, UuidInspectResult,
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -309,6 +313,16 @@ async fn codec_save_output<R: Runtime>(
 }
 
 #[tauri::command]
+fn generate_uuids(version: UuidGenVersion, count: usize) -> Result<Vec<String>, AppError> {
+    generate_uuid_batch(version, count)
+}
+
+#[tauri::command]
+fn inspect_uuid(input: String) -> Result<UuidInspectResult, AppError> {
+    inspect_uuid_string(&input)
+}
+
+#[tauri::command]
 async fn inspect_beautifier_image(path: String) -> Result<SourceImageInspection, AppError> {
     tauri::async_runtime::spawn_blocking(move || inspect_source_image(&path))
         .await
@@ -413,6 +427,8 @@ pub fn run() {
             codec_transform_file,
             codec_get_full_text,
             codec_save_output,
+            generate_uuids,
+            inspect_uuid,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,

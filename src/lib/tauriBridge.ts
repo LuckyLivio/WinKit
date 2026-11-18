@@ -17,6 +17,12 @@ import {
   type AlgorithmDigestEntry,
   type HashAlgorithm,
 } from "../tools/hash-generator/hashUtils";
+import {
+  generateUuidBatchClientFallback,
+  inspectUuidClientFallback,
+  type UuidGenVersion,
+  type UuidInspectResult,
+} from "../tools/uuid-generator/uuidEngine";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -395,6 +401,20 @@ export async function codecSaveOutput(params: {
   options: CodecOptions;
 }): Promise<SavedFileInfo> {
   return invoke<SavedFileInfo>("codec_save_output", params);
+}
+
+export async function generateUuidBatch(version: UuidGenVersion, count: number): Promise<string[]> {
+  if (!isTauriDesktop()) {
+    return generateUuidBatchClientFallback(version, count);
+  }
+  return invoke<string[]>("generate_uuids", { version, count });
+}
+
+export async function inspectUuidString(input: string): Promise<UuidInspectResult> {
+  if (!isTauriDesktop()) {
+    return inspectUuidClientFallback(input);
+  }
+  return invoke<UuidInspectResult>("inspect_uuid", { input });
 }
 
 export async function inspectBeautifierSourceImage(path: string): Promise<SourceImageInspection> {

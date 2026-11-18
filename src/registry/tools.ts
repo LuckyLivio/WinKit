@@ -4,6 +4,8 @@ import { CodecWorkspace } from "../tools/codec/CodecWorkspace";
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
 import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
+import { TimestampConverterWorkspace } from "../tools/timestamp-converter/TimestampConverterWorkspace";
+import { UuidGeneratorWorkspace } from "../tools/uuid-generator/UuidGeneratorWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image";
 export type ToolImplementationStatus = "full" | "partial";
@@ -124,6 +126,55 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "shield-check",
     implementationStatus: "partial",
     component: HashGeneratorWorkspace,
+  },
+  {
+    id: "D04",
+    category: "developer",
+    name: {
+      "zh-CN": "UUID 生成与解析",
+      "en-US": "UUID v4 / v7 Generator & Inspector",
+    },
+    summary: {
+      "zh-CN":
+        "基于密码学安全随机源批量生成 RFC 9562 UUID v4 与毫秒时间序 v7，支持大小写/连字符切换及版本、变体与 v7 时间解析",
+      "en-US":
+        "Generate RFC 9562 UUID v4 and time-ordered v7 batches via OS CSPRNG and inspect UUID version, variant, and v7 timestamps",
+    },
+    keywords: ["uuid", "guid", "v4", "v7", "rfc9562", "random", "identifier", "唯一标识符", "解析"],
+    icon: "fingerprint",
+    implementationStatus: "full",
+    component: UuidGeneratorWorkspace,
+  },
+  {
+    id: "D06",
+    category: "developer",
+    name: {
+      "zh-CN": "Unix 时间戳转换",
+      "en-US": "Unix Timestamp Converter",
+    },
+    summary: {
+      "zh-CN":
+        "基于 BigInt 精确整数运算转换秒/毫秒/微秒/纳秒与多时区 ISO 8601 日期，严格校验闰日并拦截夏令时缺失/歧义时刻",
+      "en-US":
+        "Lossless BigInt conversion across s/ms/µs/ns and UTC/local/IANA timezones with strict calendar and DST boundary validation",
+    },
+    keywords: [
+      "timestamp",
+      "epoch",
+      "unix",
+      "iso8601",
+      "timezone",
+      "iana",
+      "utc",
+      "nanosecond",
+      "时间戳",
+      "时区",
+      "毫秒",
+      "纳秒",
+    ],
+    icon: "clock",
+    implementationStatus: "partial",
+    component: TimestampConverterWorkspace,
   },
   {
     id: "I03",
