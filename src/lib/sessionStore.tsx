@@ -79,6 +79,20 @@ export interface TimestampSessionState {
   displayTimezone: string;
 }
 
+export interface DiffSessionState {
+  leftText: string;
+  rightText: string;
+  leftFilePath: string | null;
+  leftFileName: string | null;
+  rightFilePath: string | null;
+  rightFileName: string | null;
+  viewMode: "side_by_side" | "inline";
+  ignoreWhitespace: boolean;
+  ignoreCase: boolean;
+  dropTargetSide: "left" | "right";
+  inputsCollapsed: boolean;
+}
+
 export interface WordCounterSessionState {
   textInput: string;
 }
@@ -126,6 +140,7 @@ export interface SessionWorkspaces {
   uuid: UuidSessionState;
   jwt: JwtSessionState;
   timestamp: TimestampSessionState;
+  diff: DiffSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
@@ -192,6 +207,19 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     inputTimezone: "UTC",
     displayTimezone: "America/New_York",
   },
+  diff: {
+    leftText: "",
+    rightText: "",
+    leftFilePath: null,
+    leftFileName: null,
+    rightFilePath: null,
+    rightFileName: null,
+    viewMode: "side_by_side",
+    ignoreWhitespace: false,
+    ignoreCase: false,
+    dropTargetSide: "left",
+    inputsCollapsed: false,
+  },
   wordCounter: {
     textInput: "",
   },
@@ -223,6 +251,7 @@ interface SessionStoreContextValue {
   updateUuidSession: (patch: Partial<UuidSessionState>) => void;
   updateJwtSession: (patch: Partial<JwtSessionState>) => void;
   updateTimestampSession: (patch: Partial<TimestampSessionState>) => void;
+  updateDiffSession: (patch: Partial<DiffSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
@@ -258,6 +287,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, timestamp: { ...prev.timestamp, ...patch } }));
   };
 
+  const updateDiffSession = (patch: Partial<DiffSessionState>) => {
+    setSession((prev) => ({ ...prev, diff: { ...prev.diff, ...patch } }));
+  };
+
   const updateWordCounterSession = (patch: Partial<WordCounterSessionState>) => {
     setSession((prev) => ({ ...prev, wordCounter: { ...prev.wordCounter, ...patch } }));
   };
@@ -280,6 +313,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateUuidSession,
         updateJwtSession,
         updateTimestampSession,
+        updateDiffSession,
         updateWordCounterSession,
         updateCaseConverterSession,
         updateBeautifierSession,

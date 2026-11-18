@@ -938,3 +938,100 @@
     width: 160px;
   }
 }
+
+/* D07 Diff Viewer (Accessible + / - markers, responsive Side-by-Side & Inline) */
+.diff-viewport {
+  flex: 1;
+  min-height: 260px;
+  overflow: auto;
+  font-family: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  background: var(--bg-surface);
+}
+
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.diff-gutter-num {
+  width: 48px;
+  padding: 2px 6px;
+  text-align: right;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border-right: 1px solid var(--border-subtle);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-gutter-sym {
+  width: 24px;
+  padding: 2px 4px;
+  text-align: center;
+  font-weight: 700;
+  user-select: none;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.diff-cell-code {
+  padding: 2px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  vertical-align: top;
+}
+
+.diff-line-del {
+  background: var(--status-err-bg);
+}
+.diff-line-del .diff-gutter-sym {
+  color: var(--status-err);
+}
+
+.diff-line-ins {
+  background: var(--status-ok-bg);
+}
+.diff-line-ins .diff-gutter-sym {
+  color: var(--status-ok);
+}
+
+.diff-line-empty {
+  background: var(--bg-subtle);
+}
+
+.diff-span-del {
+  background: rgba(196, 43, 43, 0.22);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.diff-span-ins {
+  background: rgba(22, 121, 75, 0.22);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+[data-theme="dark"] .diff-span-del {
+  background: rgba(240, 106, 106, 0.28);
+}
+
+[data-theme="dark"] .diff-span-ins {
+  background: rgba(63, 185, 126, 0.28);
+}
+
+.diff-collapse-row td {
+  padding: 4px 12px;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: center;
+}
+
+.diff-hunk-active {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

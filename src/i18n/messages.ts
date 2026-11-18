@@ -412,6 +412,50 @@ export interface Messages {
       iat: string;
     };
   };
+  diffTool: {
+    scopeNote: string;
+    leftTitle: string;
+    rightTitle: string;
+    leftPlaceholder: string;
+    rightPlaceholder: string;
+    openLeftBtn: string;
+    openRightBtn: string;
+    swapBtn: string;
+    recompareBtn: string;
+    clearBtn: string;
+    toggleInputsShow: string;
+    toggleInputsHide: string;
+    dropSideLabel: string;
+    dropSideLeft: string;
+    dropSideRight: string;
+    droppedTwoFilesInfo: (leftName: string, rightName: string, extraIgnored: boolean) => string;
+    viewSideBySide: string;
+    viewInline: string;
+    ignoreWhitespaceLabel: string;
+    ignoreCaseLabel: string;
+    prevHunkBtn: string;
+    nextHunkBtn: string;
+    hunkIndicator: (current: number, total: number) => string;
+    copyPatchBtn: string;
+    copiedBadge: string;
+    savePatchBtn: string;
+    savedPatchSuccess: (path: string) => string;
+    overwriteConfirmTitle: string;
+    overwriteConfirmBody: (path: string) => string;
+    overwriteConfirmAccept: string;
+    cancel: string;
+    statusComputing: string;
+    statusExactIdentical: (lines: number) => string;
+    statusFilteredIdenticalRawDiffers: string;
+    statusDiffSummary: (hunks: number, added: number, deleted: number) => string;
+    filterPatchNotice: string;
+    fallbackLargeEditNotice: string;
+    expandContextBtn: (count: number) => string;
+    showMoreRowsBtn: (shown: number, total: number) => string;
+    noEofNewlineBadge: string;
+    bomBadge: string;
+    emptyDiffHint: string;
+  };
 }
 
 export const MESSAGES: Record<Locale, Messages> = {
@@ -882,6 +926,57 @@ export const MESSAGES: Record<Locale, Messages> = {
         nbf: "nbf · 生效时间 (Not Before)",
         iat: "iat · 签发时间 (Issued At)",
       },
+    },
+    diffTool: {
+      scopeNote:
+        "支持并排与内联逐行差异对比、词/字符级高亮与精确 Unified Diff 导出（单侧上限 4 MB / 50,000 行；本轮不向用户原文件自动执行补丁）。",
+      leftTitle: "左侧原文 (A)",
+      rightTitle: "右侧新文 (B)",
+      leftPlaceholder: "在此输入或粘贴原文 A，或打开/拖入本地 UTF-8 文本文件…",
+      rightPlaceholder: "在此输入或粘贴新文 B，或打开/拖入本地 UTF-8 文本文件…",
+      openLeftBtn: "打开左侧…",
+      openRightBtn: "打开右侧…",
+      swapBtn: "交换 A ↔ B",
+      recompareBtn: "重新比较",
+      clearBtn: "清空",
+      toggleInputsShow: "展开输入编辑区",
+      toggleInputsHide: "收起输入编辑区",
+      dropSideLabel: "单文件拖放目标",
+      dropSideLeft: "导入左侧 A",
+      dropSideRight: "导入右侧 B",
+      droppedTwoFilesInfo: (leftName, rightName, extraIgnored) =>
+        `已按顺序载入两个拖放文件：左侧 A = ${leftName}，右侧 B = ${rightName}${extraIgnored ? "（其余文件已忽略）" : ""}。`,
+      viewSideBySide: "并排视图",
+      viewInline: "内联视图",
+      ignoreWhitespaceLabel: "忽略空白与行尾符",
+      ignoreCaseLabel: "忽略大小写",
+      prevHunkBtn: "上一处差异",
+      nextHunkBtn: "下一处差异",
+      hunkIndicator: (current, total) => `差异块 ${current} / ${total}`,
+      copyPatchBtn: "复制精确 Unified Diff",
+      copiedBadge: "已复制补丁",
+      savePatchBtn: "另存 .patch…",
+      savedPatchSuccess: (path) => `已保存精确补丁文件：${path}`,
+      overwriteConfirmTitle: "目标补丁文件已存在",
+      overwriteConfirmBody: (path) =>
+        `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖左侧或右侧源文件）？`,
+      overwriteConfirmAccept: "确认覆盖",
+      cancel: "取消",
+      statusComputing: "正在后台计算差异…",
+      statusExactIdentical: (lines) => `两侧内容完全一致（共 ${lines} 行，字节级无差异）。`,
+      statusFilteredIdenticalRawDiffers:
+        "在当前忽略空白/大小写规则下无可见差异；但原始 A/B 仍存在空白、大小写或换行符差异，仍可复制/另存精确补丁。",
+      statusDiffSummary: (hunks, added, deleted) =>
+        `共 ${hunks} 处差异块 · 新增 +${added} 行 · 删除 -${deleted} 行`,
+      filterPatchNotice:
+        "提示：当前对比视图已启用忽略空白/大小写过滤，两侧原文未被修改；复制与另存的 Unified Diff 始终从原始 A/B 生成，可精确从 A 还原 B。",
+      fallbackLargeEditNotice:
+        "提示：两侧差异跨度超过精细回溯预算（6,000 步），中间段已按分块替换展示，导出的精确补丁仍完整有效。",
+      expandContextBtn: (count) => `展开中间隐藏的 ${count} 行未改动上下文`,
+      showMoreRowsBtn: (shown, total) => `继续加载后续行（当前已渲染 ${shown} / ${total} 项）`,
+      noEofNewlineBadge: "末尾无换行",
+      bomBadge: "UTF-8 BOM",
+      emptyDiffHint: "两侧均为空文本（0 行）。输入或打开两个文本文件后在此查看行级与词级差异。",
     },
   },
   "en-US": {
@@ -1362,6 +1457,58 @@ export const MESSAGES: Record<Locale, Messages> = {
         nbf: "nbf · Not Before",
         iat: "iat · Issued At",
       },
+    },
+    diffTool: {
+      scopeNote:
+        "Side-by-side and inline line/word diff with exact Unified Diff export (up to 4 MB / 50,000 lines per side; WinKit never applies patches to user files).",
+      leftTitle: "Original (A)",
+      rightTitle: "Modified (B)",
+      leftPlaceholder: "Paste or type original text A, or open/drop a UTF-8 text file…",
+      rightPlaceholder: "Paste or type modified text B, or open/drop a UTF-8 text file…",
+      openLeftBtn: "Open Left…",
+      openRightBtn: "Open Right…",
+      swapBtn: "Swap A ↔ B",
+      recompareBtn: "Recompare",
+      clearBtn: "Clear",
+      toggleInputsShow: "Show Input Editors",
+      toggleInputsHide: "Collapse Input Editors",
+      dropSideLabel: "Single-File Drop Target",
+      dropSideLeft: "Left (A)",
+      dropSideRight: "Right (B)",
+      droppedTwoFilesInfo: (leftName, rightName, extraIgnored) =>
+        `Loaded dropped files in order: Left (A) = ${leftName}, Right (B) = ${rightName}${extraIgnored ? " (extra files ignored)" : ""}.`,
+      viewSideBySide: "Side-by-Side",
+      viewInline: "Inline",
+      ignoreWhitespaceLabel: "Ignore Whitespace & EOL",
+      ignoreCaseLabel: "Ignore Case",
+      prevHunkBtn: "Prev Diff",
+      nextHunkBtn: "Next Diff",
+      hunkIndicator: (current, total) => `Hunk ${current} / ${total}`,
+      copyPatchBtn: "Copy Exact Unified Diff",
+      copiedBadge: "Copied Patch",
+      savePatchBtn: "Save .patch…",
+      savedPatchSuccess: (path) => `Saved exact Unified Diff patch: ${path}`,
+      overwriteConfirmTitle: "Patch File Already Exists",
+      overwriteConfirmBody: (path) =>
+        `"${path}" already exists. Replace it (neither Left nor Right source file can ever be overwritten)?`,
+      overwriteConfirmAccept: "Replace File",
+      cancel: "Cancel",
+      statusComputing: "Computing diff in background…",
+      statusExactIdentical: (lines) => `Both sides are byte-for-byte identical (${lines} lines).`,
+      statusFilteredIdenticalRawDiffers:
+        "No visible differences under current ignore whitespace/case filters; raw A and B still differ in whitespace, case, or line endings (exact patch remains available).",
+      statusDiffSummary: (hunks, added, deleted) =>
+        `${hunks} diff hunk${hunks === 1 ? "" : "s"} · +${added} added · -${deleted} deleted`,
+      filterPatchNotice:
+        "Note: Display view is filtered by Ignore Whitespace/Case without mutating A or B; copied/saved Unified Diff is always generated from exact raw A/B so applying the patch reconstructs B.",
+      fallbackLargeEditNotice:
+        "Note: Edit distance exceeded the 6,000-step fine backtrack budget; middle block is shown as chunked replacement while the exact Unified Diff remains valid.",
+      expandContextBtn: (count) => `Expand ${count} unchanged context lines`,
+      showMoreRowsBtn: (shown, total) => `Load more rows (${shown} / ${total} rendered)`,
+      noEofNewlineBadge: "No EOF newline",
+      bomBadge: "UTF-8 BOM",
+      emptyDiffHint:
+        "Both sides are empty (0 lines). Paste text or open two UTF-8 files to inspect line and word differences.",
     },
   },
 };

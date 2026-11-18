@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import type { Locale } from "../i18n/messages";
 import { CaseConverterWorkspace } from "../tools/case-converter/CaseConverterWorkspace";
 import { CodecWorkspace } from "../tools/codec/CodecWorkspace";
+import { DiffCheckerWorkspace } from "../tools/diff-checker/DiffCheckerWorkspace";
 import { HashGeneratorWorkspace } from "../tools/hash-generator/HashGeneratorWorkspace";
 import { JsonFormatterWorkspace } from "../tools/json-formatter/JsonFormatterWorkspace";
 import { JwtDecoderWorkspace } from "../tools/jwt-decoder/JwtDecoderWorkspace";
@@ -214,6 +215,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "clock",
     implementationStatus: "partial",
     component: TimestampConverterWorkspace,
+  },
+  {
+    id: "D07",
+    category: "developer",
+    name: {
+      "zh-CN": "文本与文件差异对比",
+      "en-US": "Text & File Diff Checker",
+    },
+    summary: {
+      "zh-CN":
+        "支持并排或内联逐行差异对比、行内词/字符高亮、忽略空白与大小写、上下文折叠及精确 Unified Diff 导出",
+      "en-US":
+        "Compare texts or UTF-8 files side-by-side or inline with word-level highlights, context folding, and exact Unified Diff export",
+    },
+    keywords: [
+      "diff",
+      "compare",
+      "patch",
+      "unified",
+      "merge",
+      "line",
+      "差异",
+      "对比",
+      "比较",
+      "补丁",
+    ],
+    icon: "git-compare",
+    implementationStatus: "partial",
+    component: DiffCheckerWorkspace,
   },
   {
     id: "T08",

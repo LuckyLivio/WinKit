@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_TEXT_FILE_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB ceiling for interactive JSON editor files
+const MAX_DIFF_FILE_BYTES: u64 = 4 * 1024 * 1024; // 4 MiB per-side ceiling for interactive line/word diff
 const WRITE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
@@ -15,6 +16,16 @@ pub struct TextFilePayload {
     pub path: String,
     pub file_name: String,
     pub byte_length: usize,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffTextFilePayload {
+    pub path: String,
+    pub file_name: String,
+    pub byte_length: usize,
+    pub has_utf8_bom: bool,
     pub content: String,
 }
 
@@ -281,6 +292,58 @@ pub fn read_utf8_text_file_bounded(raw_path: &str) -> Result<TextFilePayload, Ap
     })
 }
 
+/// Reads a UTF-8 text file for exact diff / Unicode inspection without stripping UTF-8 BOM or
+/// normalizing line endings, while explicitly rejecting binary files (NUL bytes), UTF-16 BOMs,
+/// and non-UTF-8 encodings instead of inserting U+FFFD replacement characters.
+pub fn read_strict_diff_text_file(raw_path: &str) -> Result<DiffTextFilePayload, AppError> {
+    let (path, len) = validate_existing_input_file(raw_path)?;
+    if len > MAX_DIFF_FILE_BYTES {
+        return Err(AppError::size_limit(format!(
+            "File exceeds the 4 MB per-side diff limit ({:.2} MB).",
+            len as f64 / (1024.0 * 1024.0)
+        )));
+    }
+
+    let mut file =
+        fs::File::open(&path).map_err(|e| AppError::from_io(e, "Unable to open input file"))?;
+    let mut buf = Vec::with_capacity(len as usize);
+    file.read_to_end(&mut buf)
+        .map_err(|e| AppError::from_io(e, "Unable to read input file"))?;
+
+    if buf.starts_with(&[0xFF, 0xFE]) || buf.starts_with(&[0xFE, 0xFF]) {
+        return Err(AppError::decode_failed(
+            "UTF-16 encoded file detected; only UTF-8 text files are supported in this phase.",
+        ));
+    }
+
+    if buf.contains(&0u8) {
+        return Err(AppError::decode_failed(
+            "Binary file detected (contains NUL bytes); cannot compare as plain UTF-8 text.",
+        ));
+    }
+
+    let raw_byte_length = buf.len();
+    let has_utf8_bom = buf.starts_with(&[0xEF, 0xBB, 0xBF]);
+    let content = String::from_utf8(buf).map_err(|_| {
+        AppError::decode_failed(
+            "File is not valid UTF-8 text (unsupported legacy encoding or binary data).",
+        )
+    })?;
+
+    let file_name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    Ok(DiffTextFilePayload {
+        path: path.to_string_lossy().into_owned(),
+        file_name,
+        byte_length: raw_byte_length,
+        has_utf8_bom,
+        content,
+    })
+}
+
 /// Suggests a non-colliding sibling output path such as `dir/name_framed.png` or `dir/name_framed (2).png`.
 pub fn suggest_safe_output_path(
     input_raw: &str,
@@ -366,5 +429,33 @@ mod tests {
         let second = suggest_safe_output_path(&src.to_string_lossy(), "_beautified", "png")
             .expect("suggest 2");
         assert!(second.ends_with("capture_beautified (2).png"));
+    }
+
+    #[test]
+    fn strict_diff_reader_preserves_bom_and_crlf_and_rejects_binary_or_non_utf8() {
+        let dir = tempdir().expect("tempdir");
+        let bom_crlf = dir.path().join("bom_crlf.txt");
+        fs::write(&bom_crlf, b"\xEF\xBB\xBFline1\r\nline2").expect("write bom_crlf");
+
+        let loaded = read_strict_diff_text_file(&bom_crlf.to_string_lossy()).expect("load bom");
+        assert!(loaded.has_utf8_bom);
+        assert_eq!(loaded.content, "\u{feff}line1\r\nline2");
+
+        let bin_file = dir.path().join("sample.bin");
+        fs::write(&bin_file, b"ABC\x00DEF").expect("write bin");
+        let bin_err = read_strict_diff_text_file(&bin_file.to_string_lossy()).unwrap_err();
+        assert_eq!(bin_err.code, "DECODE_FAILED");
+        assert!(bin_err.message.contains("Binary file"));
+
+        let utf16_file = dir.path().join("utf16.txt");
+        fs::write(&utf16_file, [0xFF, 0xFE, b'a', 0x00]).expect("write utf16");
+        let utf16_err = read_strict_diff_text_file(&utf16_file.to_string_lossy()).unwrap_err();
+        assert_eq!(utf16_err.code, "DECODE_FAILED");
+        assert!(utf16_err.message.contains("UTF-16"));
+
+        let invalid_utf8 = dir.path().join("gbk.txt");
+        fs::write(&invalid_utf8, [0xC4, 0xE3, 0xBA, 0xC3, 0xFF]).expect("write non-utf8");
+        let enc_err = read_strict_diff_text_file(&invalid_utf8.to_string_lossy()).unwrap_err();
+        assert_eq!(enc_err.code, "DECODE_FAILED");
     }
 }

@@ -49,6 +49,14 @@ export interface TextFilePayload {
   content: string;
 }
 
+export interface DiffTextFilePayload {
+  path: string;
+  fileName: string;
+  byteLength: number;
+  hasUtf8Bom: boolean;
+  content: string;
+}
+
 export interface SavedFileInfo {
   path: string;
   byteLength: number;
@@ -261,20 +269,29 @@ export async function readLocalTextFile(path: string): Promise<TextFilePayload> 
   return invoke<TextFilePayload>("read_text_file", { path });
 }
 
+export async function readDiffTextFile(path: string, toolId = "D07"): Promise<DiffTextFilePayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<DiffTextFilePayload>("read_diff_text_file", { path, toolId });
+}
+
 export async function saveLocalTextFile(params: {
   outputPath: string;
   sourcePath: string | null;
+  secondarySourcePath?: string | null;
   content: string;
   overwrite: boolean;
   toolId?: string;
 }): Promise<SavedFileInfo> {
   assertFrontendNotShuttingDown();
   return invoke<SavedFileInfo>("save_text_file", {
-    outputPath: params.outputPath,
-    sourcePath: params.sourcePath,
-    content: params.content,
-    overwrite: params.overwrite,
-    toolId: params.toolId ?? "D01",
+    params: {
+      outputPath: params.outputPath,
+      sourcePath: params.sourcePath,
+      secondarySourcePath: params.secondarySourcePath ?? null,
+      content: params.content,
+      overwrite: params.overwrite,
+      toolId: params.toolId ?? "D01",
+    },
   });
 }
 

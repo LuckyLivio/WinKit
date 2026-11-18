@@ -17,8 +17,9 @@ use crate::codec::{
 };
 use crate::error::AppError;
 use crate::fs_guard::{
-    read_utf8_text_file_bounded, suggest_safe_output_path, validate_user_path,
-    write_output_bytes_cancellable, SavedFileInfo, TextFilePayload,
+    paths_refer_to_same_location, read_strict_diff_text_file, read_utf8_text_file_bounded,
+    suggest_safe_output_path, validate_user_path, write_output_bytes_cancellable,
+    DiffTextFilePayload, SavedFileInfo, TextFilePayload,
 };
 use crate::hasher::{
     compute_text_hashes, execute_file_hash_with_guard, prepare_file_hash_task, HashAlgorithm,
@@ -77,6 +78,29 @@ pub fn execute_save_text_with_guard<E>(
 where
     E: FnMut(&TaskProgressPayload),
 {
+    execute_save_text_multi_source_with_guard(
+        guard,
+        output_path,
+        source_path,
+        None,
+        content,
+        overwrite,
+        &mut on_event,
+    )
+}
+
+pub fn execute_save_text_multi_source_with_guard<E>(
+    guard: TaskTokenGuard,
+    output_path: &str,
+    source_path: Option<&str>,
+    secondary_source_path: Option<&str>,
+    content: &str,
+    overwrite: bool,
+    mut on_event: E,
+) -> Result<SavedFileInfo, AppError>
+where
+    E: FnMut(&TaskProgressPayload),
+{
     let task_id = guard.task_id().to_string();
     let tool_id = guard.tool_id().to_string();
     let total_bytes = Some(content.len() as u64);
@@ -89,10 +113,17 @@ where
 
     let cancel_flag = guard.cancel_flag();
     let res = (|| {
+        let out_buf = validate_user_path(output_path, "Output")?;
         let src_buf = match source_path {
             Some(raw) if !raw.trim().is_empty() => Some(validate_user_path(raw, "Source")?),
             _ => None,
         };
+        if let Some(raw_sec) = secondary_source_path.filter(|s| !s.trim().is_empty()) {
+            let sec_buf = validate_user_path(raw_sec, "Secondary source")?;
+            if paths_refer_to_same_location(&sec_buf, &out_buf) {
+                return Err(AppError::same_input_output());
+            }
+        }
         write_output_bytes_cancellable(
             output_path,
             src_buf.as_deref(),
@@ -271,23 +302,49 @@ async fn read_text_file(
 }
 
 #[tauri::command]
-async fn save_text_file<R: Runtime>(
-    app: AppHandle<R>,
+async fn read_diff_text_file(
     registry: State<'_, TaskRegistry>,
+    path: String,
+    tool_id: Option<String>,
+) -> Result<DiffTextFilePayload, AppError> {
+    let resolved_tool = sanitize_tool_id(tool_id.as_deref(), "D07")?;
+    let task_id = next_internal_task_id("read-diff");
+    let guard = registry.register_checked(&task_id, &resolved_tool, true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = read_strict_diff_text_file(&path);
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background diff file reader failed."))?
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveTextFileParams {
     output_path: String,
     source_path: Option<String>,
+    secondary_source_path: Option<String>,
     content: String,
     overwrite: bool,
     tool_id: Option<String>,
+}
+
+#[tauri::command]
+async fn save_text_file<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    params: SaveTextFileParams,
 ) -> Result<SavedFileInfo, AppError> {
-    let guard = prepare_save_text_task(registry.inner(), tool_id.as_deref())?;
+    let guard = prepare_save_text_task(registry.inner(), params.tool_id.as_deref())?;
     tauri::async_runtime::spawn_blocking(move || {
-        execute_save_text_with_guard(
+        execute_save_text_multi_source_with_guard(
             guard,
-            &output_path,
-            source_path.as_deref(),
-            &content,
-            overwrite,
+            &params.output_path,
+            params.source_path.as_deref(),
+            params.secondary_source_path.as_deref(),
+            &params.content,
+            params.overwrite,
             |payload| {
                 let _ = app.emit(TASK_PROGRESS_EVENT, payload);
             },
@@ -508,6 +565,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
             read_text_file,
+            read_diff_text_file,
             save_text_file,
             suggest_output_path,
             hash_text_multi,
