@@ -16,6 +16,7 @@ import type {
   PassphraseSeparator,
   SecretStrengthEstimate,
 } from "../tools/password-generator/passwordEngine";
+import type { ConversionDirection, CsvDelimiter } from "../tools/csv-json/csvJsonEngine";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -150,6 +151,16 @@ export interface PasswordGeneratorSessionState {
   isStale: boolean;
 }
 
+export interface CsvJsonSessionState {
+  inputText: string;
+  direction: ConversionDirection;
+  delimiter: CsvDelimiter;
+  firstRowHeaders: boolean;
+  detectTypes: boolean;
+  formulaProtection: boolean;
+  outputText: string;
+}
+
 export interface WordCounterSessionState {
   textInput: string;
 }
@@ -203,6 +214,7 @@ export interface SessionWorkspaces {
   cleanLinks: CleanLinksSessionState;
   loremIpsum: LoremIpsumSessionState;
   passwordGenerator: PasswordGeneratorSessionState;
+  csvJson: CsvJsonSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
@@ -325,6 +337,15 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     generatedStrength: null,
     isStale: false,
   },
+  csvJson: {
+    inputText: "",
+    direction: "csv_to_json",
+    delimiter: "auto",
+    firstRowHeaders: true,
+    detectTypes: false,
+    formulaProtection: false,
+    outputText: "",
+  },
   wordCounter: {
     textInput: "",
   },
@@ -362,6 +383,7 @@ interface SessionStoreContextValue {
   updateCleanLinksSession: (patch: Partial<CleanLinksSessionState>) => void;
   updateLoremIpsumSession: (patch: Partial<LoremIpsumSessionState>) => void;
   updatePasswordGeneratorSession: (patch: Partial<PasswordGeneratorSessionState>) => void;
+  updateCsvJsonSession: (patch: Partial<CsvJsonSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
@@ -424,6 +446,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const updateCsvJsonSession = (patch: Partial<CsvJsonSessionState>) => {
+    setSession((prev) => ({ ...prev, csvJson: { ...prev.csvJson, ...patch } }));
+  };
+
   const updateWordCounterSession = (patch: Partial<WordCounterSessionState>) => {
     setSession((prev) => ({ ...prev, wordCounter: { ...prev.wordCounter, ...patch } }));
   };
@@ -452,6 +478,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateCleanLinksSession,
         updateLoremIpsumSession,
         updatePasswordGeneratorSession,
+        updateCsvJsonSession,
         updateWordCounterSession,
         updateCaseConverterSession,
         updateBeautifierSession,
