@@ -43,11 +43,16 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 - `@tauri-apps/cli` — Apache-2.0 OR MIT
 - `tempfile` (Rust dev-dependency) — Apache-2.0 OR MIT
 
-## Embedded Wordlist Data (`D13` Passphrase Generator)
+## Embedded Wordlist & Local Rule Data (`D09`, `D12`, `D13`)
 
-- **Source**: EFF Long Wordlist (`eff_large_wordlist.txt`, 2016, SHA-256 `addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e`), © Electronic Frontier Foundation (`https://www.eff.org/dice`).
-- **License**: Creative Commons Attribution 3.0 United States (`CC-BY-3.0-US`, `https://creativecommons.org/licenses/by/3.0/us/`).
-- **Modifications**: Dice roll prefixes were removed, entries were normalized to lowercase ASCII and verified for case-insensitive uniqueness, and the 4 hyphenated entries (`drop-down`, `felt-tip`, `t-shirt`, `yo-yo`) were excluded so all `7,772` retained words (`eff_wordlist_7772.txt`) match `^[a-z]+$` and remain collision-free under `-`, `_`, `.`, and space separators.
+- **`D13` Passphrase Wordlist (`eff_wordlist_7772.txt`)**:
+  - **Source**: EFF Long Wordlist (`eff_large_wordlist.txt`, 2016, SHA-256 `addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e`), © Electronic Frontier Foundation (`https://www.eff.org/dice`).
+  - **License**: Creative Commons Attribution 3.0 United States (`CC-BY-3.0-US`, `https://creativecommons.org/licenses/by/3.0/us/`).
+  - **Modifications**: Dice roll prefixes were removed, entries were normalized to lowercase ASCII and verified for case-insensitive uniqueness, and the 4 hyphenated entries (`drop-down`, `felt-tip`, `t-shirt`, `yo-yo`) were excluded so all `7,772` retained words match `^[a-z]+$` and remain collision-free under `-`, `_`, `.`, and space separators.
+- **`D12` Lorem Ipsum Vocabulary (`src/tools/lorem-ipsum/loremEngine.ts`)**:
+  - Curated directly for WinKit from classical antiquity Latin vocabulary in Marcus Tullius Cicero's _De finibus bonorum et malorum_ (45 BC).
+- **`D09` Link Tracking & Redirect Rule Catalog (`src/tools/clean-links/linkRules.ts`, `2026.11-r1`)**:
+  - Authored directly for WinKit from publicly documented query-parameter specifications of Google Analytics/Ads (`utm_*`, `gclid`, `_ga`), Meta (`fbclid`, `igsh`), Microsoft Advertising (`msclkid`), Mailchimp, HubSpot, Marketo, Matomo, Amazon, YouTube, Spotify, TikTok, X, LinkedIn, Reddit, and Outlook Safe Links.
 
 ## Application Icons & Visual Assets
 
