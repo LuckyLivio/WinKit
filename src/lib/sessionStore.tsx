@@ -156,6 +156,7 @@ export interface PasswordGeneratorSessionState {
   includeNumber: boolean;
   generatedItems: string[];
   generatedStrength: SecretStrengthEstimate | null;
+  generatedConfigSignature: string | null;
   isStale: boolean;
 }
 
@@ -352,6 +353,7 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     includeNumber: false,
     generatedItems: [],
     generatedStrength: null,
+    generatedConfigSignature: null,
     isStale: false,
   },
   csvJson: {

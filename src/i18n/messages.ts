@@ -760,6 +760,7 @@ export interface Messages {
     depthCappedNotice: (count: number, maxDepth: number) => string;
     singleObjectNotice: string;
     savedSuccess: (path: string, bytes: number) => string;
+    saveAbortedInputChanged: string;
     overwriteConfirmTitle: string;
     overwriteConfirmBody: (path: string) => string;
     overwriteConfirmAccept: string;
@@ -1639,6 +1640,8 @@ export const MESSAGES: Record<Locale, Messages> = {
       singleObjectNotice: "输入根为单个 JSON 对象，已按 1 行记录转换。",
       savedSuccess: (path, bytes) =>
         `已安全保存完整结果（${bytes.toLocaleString()} 字节）：${path}`,
+      saveAbortedInputChanged:
+        "输入或转换选项在另存对话框打开期间已变更，本次保存已取消以避免混用旧内容。",
       overwriteConfirmTitle: "目标文件已存在",
       overwriteConfirmBody: (path) =>
         `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖原输入文件）？`,
@@ -2543,6 +2546,8 @@ export const MESSAGES: Record<Locale, Messages> = {
       singleObjectNotice: "JSON root was a single object and was converted as a 1-row record.",
       savedSuccess: (path, bytes) =>
         `Saved complete output (${bytes.toLocaleString()} bytes): ${path}`,
+      saveAbortedInputChanged:
+        "Input or conversion options changed while the Save dialog was open; save cancelled to prevent mixing stale content.",
       overwriteConfirmTitle: "Destination File Exists",
       overwriteConfirmBody: (path) =>
         `"${path}" already exists. Replace it (your source input file can never be overwritten)?`,

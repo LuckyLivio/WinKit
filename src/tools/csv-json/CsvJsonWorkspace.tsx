@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useI18n } from "../../i18n/I18nContext";
 import { useSessionStore } from "../../lib/sessionStore";
+import { isFrontendShuttingDown } from "../../lib/shutdownGate";
 import {
   bindDisposableListener,
   formatLocalizedError,
@@ -80,12 +81,27 @@ export function CsvJsonWorkspace({
     controllerRef.current = new CancellableTabularController(workerFactory);
   }
 
+  const evalGenRef = useRef(0);
+  const mountedRef = useRef(true);
+  const sourceFilePathRef = useRef<string | null>(state.sourceFilePath);
+  sourceFilePathRef.current = state.sourceFilePath;
+
   const [evalPhase, setEvalPhase] = useState<"idle" | "running" | "cancelled" | "done">("idle");
-  const [result, setResult] = useState<TabularConversionResult | null>(null);
+  const [boundEval, setBoundEval] = useState<{
+    gen: number;
+    options: CsvJsonOptions;
+    sourceFilePath: string | null;
+    result: TabularConversionResult;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
   const [dropHovering, setDropHovering] = useState(false);
   const [ioBanner, setIoBanner] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  const [pendingOverwritePath, setPendingOverwritePath] = useState<string | null>(null);
+  const [pendingOverwriteSnapshot, setPendingOverwriteSnapshot] = useState<{
+    gen: number;
+    targetPath: string;
+    fullOutput: string;
+    sourceFilePath: string | null;
+  } | null>(null);
 
   const optionsObj = useMemo(
     (): CsvJsonOptions => ({
@@ -119,46 +135,74 @@ export function CsvJsonWorkspace({
   );
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      evalGenRef.current += 1;
       controllerRef.current?.dispose();
     };
   }, []);
 
   useEffect(() => {
+    // Immediately invalidate any previous Worker or pending debounce before scheduling new evaluation
+    controllerRef.current?.cancelCurrent();
+    const myGen = ++evalGenRef.current;
+    setPendingOverwriteSnapshot(null);
+
     const stripped =
       state.inputText.charCodeAt(0) === 0xfeff ? state.inputText.slice(1) : state.inputText;
     if (stripped.length === 0) {
-      controllerRef.current?.cancelCurrent();
       setEvalPhase("idle");
-      setResult(null);
+      setBoundEval(null);
       return;
     }
 
+    const inputSnapshot = state.inputText;
+    const optionsSnapshot = optionsObj;
+    const sourcePathSnapshot = sourceFilePathRef.current;
+
     setEvalPhase("running");
-    setResult(null);
-    const delayMs = state.inputText.length > 32_768 ? 140 : 0;
+    setBoundEval(null);
+    const delayMs = inputSnapshot.length > 32_768 ? 140 : 0;
 
     const timer = window.setTimeout(() => {
-      void controllerRef.current?.runConversion(state.inputText, optionsObj).then((outcome) => {
+      if (!mountedRef.current || isFrontendShuttingDown() || myGen !== evalGenRef.current) {
+        return;
+      }
+      void controllerRef.current?.runConversion(inputSnapshot, optionsSnapshot).then((outcome) => {
+        if (!mountedRef.current || isFrontendShuttingDown() || myGen !== evalGenRef.current) {
+          return;
+        }
         if (outcome.kind === "cancelled") {
           return;
         }
         if (outcome.kind === "worker_error") {
           setEvalPhase("done");
-          setResult({
-            status: "error",
-            code: "WORKER_ERROR",
-            message: outcome.message,
+          setBoundEval({
+            gen: myGen,
+            options: optionsSnapshot,
+            sourceFilePath: sourcePathSnapshot,
+            result: {
+              status: "error",
+              code: "WORKER_ERROR",
+              message: outcome.message,
+            },
           });
           return;
         }
         setEvalPhase("done");
-        setResult(outcome.result);
+        setBoundEval({
+          gen: myGen,
+          options: optionsSnapshot,
+          sourceFilePath: sourcePathSnapshot,
+          result: outcome.result,
+        });
       });
     }, delayMs);
 
     return () => {
       window.clearTimeout(timer);
+      controllerRef.current?.cancelCurrent();
     };
   }, [state.inputText, optionsObj]);
 
@@ -167,6 +211,9 @@ export function CsvJsonWorkspace({
     setCopied(false);
     try {
       const payload = await readTabularTextFile(filePath);
+      if (!mountedRef.current || isFrontendShuttingDown()) {
+        return;
+      }
       const lowerName = payload.fileName.toLowerCase();
       let nextDirection = state.direction;
       if (lowerName.endsWith(".json")) {
@@ -184,6 +231,9 @@ export function CsvJsonWorkspace({
         direction: nextDirection,
       });
     } catch (err) {
+      if (!mountedRef.current || isFrontendShuttingDown()) {
+        return;
+      }
       setIoBanner({
         kind: "err",
         text: formatLocalizedError(err, t),
@@ -218,43 +268,74 @@ export function CsvJsonWorkspace({
   };
 
   const handleCancelRunning = () => {
+    evalGenRef.current += 1;
     controllerRef.current?.cancelCurrent();
+    setPendingOverwriteSnapshot(null);
     setEvalPhase("cancelled");
-    setResult(null);
+    setBoundEval(null);
   };
 
+  const currentEvalMatches = boundEval !== null && boundEval.gen === evalGenRef.current;
+  const result = currentEvalMatches ? boundEval.result : null;
   const canExport = evalPhase === "done" && result !== null && result.status === "ok";
 
   const handleCopyFull = async () => {
-    if (!canExport || result.status !== "ok") return;
+    if (!canExport || !boundEval || boundEval.result.status !== "ok") return;
+    const outputSnapshot = boundEval.result.fullOutput;
+    const genSnapshot = boundEval.gen;
     try {
-      await writeSystemClipboardText(result.fullOutput);
+      await writeSystemClipboardText(outputSnapshot);
+      if (!mountedRef.current || isFrontendShuttingDown() || evalGenRef.current !== genSnapshot) {
+        return;
+      }
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      window.setTimeout(() => {
+        if (mountedRef.current) setCopied(false);
+      }, 1500);
     } catch (err) {
+      if (!mountedRef.current || isFrontendShuttingDown()) return;
       setIoBanner({ kind: "err", text: formatLocalizedError(err, t) });
     }
   };
 
-  const executeSaveOutput = async (targetPath: string, overwrite: boolean) => {
-    if (!canExport || result.status !== "ok") return;
+  const executeSaveOutput = async (
+    targetPath: string,
+    overwrite: boolean,
+    snapshot: { gen: number; fullOutput: string; sourceFilePath: string | null },
+  ) => {
+    if (!mountedRef.current || isFrontendShuttingDown()) return;
+    if (evalGenRef.current !== snapshot.gen) {
+      setIoBanner({ kind: "err", text: t.csvJsonTool.saveAbortedInputChanged });
+      return;
+    }
     setIoBanner(null);
     try {
       const saved = await saveLocalTextFile({
         outputPath: targetPath,
-        sourcePath: state.sourceFilePath,
-        content: result.fullOutput,
+        sourcePath: snapshot.sourceFilePath,
+        content: snapshot.fullOutput,
         overwrite,
         toolId: "D14",
       });
+      if (!mountedRef.current || isFrontendShuttingDown()) return;
       setIoBanner({
         kind: "ok",
         text: t.csvJsonTool.savedSuccess(saved.path, saved.byteLength),
       });
     } catch (err) {
+      if (!mountedRef.current || isFrontendShuttingDown()) return;
       const parsed = parseBackendError(err);
       if (parsed.code === "TARGET_ALREADY_EXISTS" && !overwrite) {
-        setPendingOverwritePath(targetPath);
+        if (evalGenRef.current !== snapshot.gen) {
+          setIoBanner({ kind: "err", text: t.csvJsonTool.saveAbortedInputChanged });
+          return;
+        }
+        setPendingOverwriteSnapshot({
+          gen: snapshot.gen,
+          targetPath,
+          fullOutput: snapshot.fullOutput,
+          sourceFilePath: snapshot.sourceFilePath,
+        });
         return;
       }
       setIoBanner({
@@ -265,28 +346,43 @@ export function CsvJsonWorkspace({
   };
 
   const handleSaveAs = async () => {
-    if (!canExport || result.status !== "ok") return;
-    const outExt =
-      state.direction === "csv_to_json"
-        ? "json"
-        : state.direction === "json_to_csv"
-          ? state.delimiter === "\t"
-            ? "tsv"
-            : "csv"
-          : "md";
-    const defaultPath = state.sourceFilePath
-      ? ((await suggestSafeSiblingPath(state.sourceFilePath, "_converted", outExt)) ??
-        `converted.${outExt}`)
-      : `converted.${outExt}`;
+    if (!canExport || !boundEval || boundEval.result.status !== "ok") return;
+    const snapshot = {
+      gen: boundEval.gen,
+      fullOutput: boundEval.result.fullOutput,
+      sourceFilePath: boundEval.sourceFilePath,
+      outExt:
+        boundEval.options.direction === "csv_to_json"
+          ? "json"
+          : boundEval.options.direction === "json_to_csv"
+            ? boundEval.options.delimiter === "\t"
+              ? "tsv"
+              : "csv"
+            : "md",
+    } as const;
+
+    const defaultPath = snapshot.sourceFilePath
+      ? ((await suggestSafeSiblingPath(snapshot.sourceFilePath, "_converted", snapshot.outExt)) ??
+        `converted.${snapshot.outExt}`)
+      : `converted.${snapshot.outExt}`;
+
+    if (!mountedRef.current || isFrontendShuttingDown()) return;
+    if (evalGenRef.current !== snapshot.gen) {
+      setIoBanner({ kind: "err", text: t.csvJsonTool.saveAbortedInputChanged });
+      return;
+    }
 
     const chosen = await pickSaveFilePath({
       title: t.csvJsonTool.saveBtn,
       defaultPath,
-      filters: [{ name: outExt.toUpperCase(), extensions: [outExt] }],
+      filters: [{ name: snapshot.outExt.toUpperCase(), extensions: [snapshot.outExt] }],
     });
-    if (chosen) {
-      await executeSaveOutput(chosen, false);
+    if (!chosen || !mountedRef.current || isFrontendShuttingDown()) return;
+    if (evalGenRef.current !== snapshot.gen) {
+      setIoBanner({ kind: "err", text: t.csvJsonTool.saveAbortedInputChanged });
+      return;
     }
+    await executeSaveOutput(chosen, false, snapshot);
   };
 
   const formatDelimName = (d: ConcreteDelimiter): string => {
@@ -866,17 +962,17 @@ export function CsvJsonWorkspace({
       </div>
 
       <ConfirmDialog
-        open={pendingOverwritePath !== null}
+        open={pendingOverwriteSnapshot !== null}
         title={t.csvJsonTool.overwriteConfirmTitle}
-        body={t.csvJsonTool.overwriteConfirmBody(pendingOverwritePath ?? "")}
+        body={t.csvJsonTool.overwriteConfirmBody(pendingOverwriteSnapshot?.targetPath ?? "")}
         confirmLabel={t.csvJsonTool.overwriteConfirmAccept}
         cancelLabel={t.csvJsonTool.cancel}
-        onCancel={() => setPendingOverwritePath(null)}
+        onCancel={() => setPendingOverwriteSnapshot(null)}
         onConfirm={async () => {
-          const target = pendingOverwritePath;
-          setPendingOverwritePath(null);
-          if (target) {
-            await executeSaveOutput(target, true);
+          const snap = pendingOverwriteSnapshot;
+          setPendingOverwriteSnapshot(null);
+          if (snap) {
+            await executeSaveOutput(snap.targetPath, true, snap);
           }
         }}
       />

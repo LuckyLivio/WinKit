@@ -1,7 +1,8 @@
 import { Check, Copy, Eraser, Eye, EyeOff, RefreshCw } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n/I18nContext";
 import { useSessionStore } from "../../lib/sessionStore";
+import { isFrontendShuttingDown } from "../../lib/shutdownGate";
 import {
   formatLocalizedError,
   generateSecretsBatch,
@@ -24,6 +25,30 @@ function maskSecretForDisplay(secret: string): string {
   return "•".repeat(Math.min(Math.max(len, 8), 36));
 }
 
+export function buildSecretRequestSignature(req: SecretGenRequest): string {
+  if (req.mode === "password") {
+    return JSON.stringify([
+      "password",
+      req.length,
+      req.count,
+      req.uppercase,
+      req.lowercase,
+      req.digits,
+      req.symbols,
+      req.excludeLookAlikes,
+      req.requireEachSelectedClass,
+    ]);
+  }
+  return JSON.stringify([
+    "passphrase",
+    req.wordCount,
+    req.count,
+    req.separator,
+    req.capitalizeWords,
+    req.includeNumber,
+  ]);
+}
+
 export function PasswordGeneratorWorkspace() {
   const { t } = useI18n();
   const { session, updatePasswordGeneratorSession } = useSessionStore();
@@ -39,6 +64,17 @@ export function PasswordGeneratorWorkspace() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+
+  const requestSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestSeqRef.current += 1;
+    };
+  }, []);
 
   const parsedValidation = useMemo(():
     | {
@@ -139,49 +175,81 @@ export function PasswordGeneratorWorkspace() {
   }, [state, t]);
 
   const markConfigEdited = (patch: Parameters<typeof updatePasswordGeneratorSession>[0]) => {
+    requestSeqRef.current += 1;
+    setIsGenerating(false);
     setCopiedKey(null);
     setRuntimeError(null);
     updatePasswordGeneratorSession({
       ...patch,
-      isStale: state.generatedItems.length > 0 ? true : state.isStale,
+      isStale: state.generatedItems.length > 0,
     });
   };
 
   const handleGenerate = async () => {
     if (!parsedValidation.ok || isGenerating) return;
+    const reqSnapshot = parsedValidation.request;
+    const sigSnapshot = buildSecretRequestSignature(reqSnapshot);
+    const reqId = ++requestSeqRef.current;
+
     setIsGenerating(true);
     setRuntimeError(null);
     setCopiedKey(null);
     try {
-      const resp = await generateSecretsBatch(parsedValidation.request);
+      const resp = await generateSecretsBatch(reqSnapshot);
+      if (!mountedRef.current || isFrontendShuttingDown() || reqId !== requestSeqRef.current) {
+        return;
+      }
       updatePasswordGeneratorSession({
         generatedItems: resp.items,
         generatedStrength: resp.strength,
+        generatedConfigSignature: sigSnapshot,
         isStale: false,
       });
     } catch (err) {
+      if (!mountedRef.current || isFrontendShuttingDown() || reqId !== requestSeqRef.current) {
+        return;
+      }
       setRuntimeError(formatLocalizedError(err, t));
     } finally {
-      setIsGenerating(false);
+      if (mountedRef.current && reqId === requestSeqRef.current) {
+        setIsGenerating(false);
+      }
     }
   };
 
+  const currentConfigSignature = parsedValidation.ok
+    ? buildSecretRequestSignature(parsedValidation.request)
+    : null;
+  const hasCurrentValidBatch =
+    parsedValidation.ok &&
+    !state.isStale &&
+    state.generatedItems.length > 0 &&
+    state.generatedStrength !== null &&
+    state.generatedConfigSignature !== null &&
+    state.generatedConfigSignature === currentConfigSignature;
+  const canCopyCurrent = hasCurrentValidBatch && !isGenerating;
+  const activeStrength = hasCurrentValidBatch
+    ? state.generatedStrength
+    : parsedValidation.ok
+      ? parsedValidation.preview.strength
+      : null;
+  const hasStaleItems = state.generatedItems.length > 0 && !hasCurrentValidBatch;
+
   const handleCopy = async (text: string, key: string) => {
-    if (state.isStale || !parsedValidation.ok) return;
+    if (!canCopyCurrent) return;
     try {
       await writeSystemClipboardText(text);
+      if (!mountedRef.current || isFrontendShuttingDown()) return;
       setCopiedKey(key);
       window.setTimeout(() => {
+        if (!mountedRef.current) return;
         setCopiedKey((prev) => (prev === key ? null : prev));
       }, 1500);
     } catch (err) {
+      if (!mountedRef.current || isFrontendShuttingDown()) return;
       setRuntimeError(formatLocalizedError(err, t));
     }
   };
-
-  const activeStrength = parsedValidation.ok ? parsedValidation.preview.strength : null;
-  const canCopyCurrent =
-    parsedValidation.ok && !state.isStale && state.generatedItems.length > 0 && !isGenerating;
 
   return (
     <div className="tool-workspace">
@@ -300,14 +368,17 @@ export function PasswordGeneratorWorkspace() {
           <button
             type="button"
             className="btn"
-            disabled={state.generatedItems.length === 0}
+            disabled={state.generatedItems.length === 0 && !isGenerating}
             onClick={() => {
+              requestSeqRef.current += 1;
+              setIsGenerating(false);
               setCopiedKey(null);
               setRuntimeError(null);
               setRevealed(false);
               updatePasswordGeneratorSession({
                 generatedItems: [],
                 generatedStrength: null,
+                generatedConfigSignature: null,
                 isStale: false,
               });
             }}
@@ -330,7 +401,7 @@ export function PasswordGeneratorWorkspace() {
         </div>
       )}
 
-      {parsedValidation.ok && state.isStale && state.generatedItems.length > 0 && (
+      {parsedValidation.ok && hasStaleItems && (
         <div className="status-banner is-warn" data-testid="password-stale-banner">
           <span>{t.passwordTool.staleBanner}</span>
         </div>
@@ -537,7 +608,7 @@ export function PasswordGeneratorWorkspace() {
                       borderRadius: "8px",
                       border: "1px solid var(--border-subtle)",
                       background: "var(--bg-subtle)",
-                      opacity: state.isStale ? 0.58 : 1,
+                      opacity: hasCurrentValidBatch ? 1 : 0.58,
                     }}
                   >
                     <code
