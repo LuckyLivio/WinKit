@@ -6,12 +6,13 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 
 ### Frontend (npm)
 
-| Package                     | License           | Purpose                                  |
-| :-------------------------- | :---------------- | :--------------------------------------- |
-| `react`, `react-dom`        | MIT               | UI component rendering                   |
-| `@tauri-apps/api`           | Apache-2.0 OR MIT | Tauri IPC, window and drag-drop bindings |
-| `@tauri-apps/plugin-dialog` | Apache-2.0 OR MIT | Native Windows file open/save dialogs    |
-| `lucide-react`              | ISC               | Consistent linear stroke icons           |
+| Package                     | License           | Purpose                                                                             |
+| :-------------------------- | :---------------- | :---------------------------------------------------------------------------------- |
+| `react`, `react-dom`        | MIT               | UI component rendering                                                              |
+| `@tauri-apps/api`           | Apache-2.0 OR MIT | Tauri IPC, window and drag-drop bindings                                            |
+| `@tauri-apps/plugin-dialog` | Apache-2.0 OR MIT | Native Windows file open/save dialogs                                               |
+| `lucide-react`              | ISC               | Consistent linear stroke icons                                                      |
+| `geographiclib-geodesic`    | MIT               | Bundled offline Karney WGS 84 ellipsoid geodesic routines (`2.2.0`, Charles Karney) |
 
 ### Backend (Rust / Crates.io)
 
