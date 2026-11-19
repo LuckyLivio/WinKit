@@ -85,6 +85,45 @@ export interface MultiFileHashResult {
   digests: AlgorithmDigestEntry[];
 }
 
+export interface BatchHashInputItem {
+  itemId: string;
+  path: string;
+}
+
+export type BatchItemLifecycleState = "running" | "completed" | "cancelled" | "error";
+
+export interface HashBatchItemProgressPayload {
+  batchId: string;
+  itemId: string;
+  index: number;
+  totalItems: number;
+  state: BatchItemLifecycleState;
+  processedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+  byteLength: number | null;
+  digests: AlgorithmDigestEntry[] | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface BatchFileItemResult {
+  itemId: string;
+  path: string;
+  fileName: string;
+  status: BatchItemLifecycleState;
+  byteLength: number | null;
+  digests: AlgorithmDigestEntry[] | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface MultiFileBatchHashResult {
+  batchId: string;
+  cancelled: boolean;
+  items: BatchFileItemResult[];
+}
+
 export interface SourceImageInspection {
   path: string;
   fileName: string;
@@ -280,6 +319,28 @@ export async function pickSingleFile(options: {
   return null;
 }
 
+export async function pickMultipleFiles(options: {
+  title?: string;
+  filters?: DialogFilter[];
+}): Promise<string[]> {
+  if (!isTauriDesktop()) {
+    return [];
+  }
+  const selected = await open({
+    multiple: true,
+    directory: false,
+    title: options.title,
+    filters: options.filters,
+  });
+  if (Array.isArray(selected)) {
+    return selected.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof selected === "string") {
+    return [selected];
+  }
+  return [];
+}
+
 export async function pickSaveFilePath(options: {
   title?: string;
   defaultPath?: string;
@@ -320,6 +381,7 @@ export async function saveLocalTextFile(params: {
   outputPath: string;
   sourcePath: string | null;
   secondarySourcePath?: string | null;
+  forbiddenSourcePaths?: string[];
   content: string;
   overwrite: boolean;
   toolId?: string;
@@ -330,6 +392,7 @@ export async function saveLocalTextFile(params: {
       outputPath: params.outputPath,
       sourcePath: params.sourcePath,
       secondarySourcePath: params.secondarySourcePath ?? null,
+      forbiddenSourcePaths: params.forbiddenSourcePaths ?? [],
       content: params.content,
       overwrite: params.overwrite,
       toolId: params.toolId ?? "D01",
@@ -454,6 +517,30 @@ export async function computeFileHashes(
 ): Promise<MultiFileHashResult> {
   assertFrontendNotShuttingDown();
   return invoke<MultiFileHashResult>("hash_file_multi", { taskId, path, algorithms });
+}
+
+export async function computeBatchFileHashes(
+  batchId: string,
+  items: readonly BatchHashInputItem[],
+  algorithms: readonly HashAlgorithm[],
+): Promise<MultiFileBatchHashResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<MultiFileBatchHashResult>("hash_files_batch", {
+    batchId,
+    items,
+    algorithms,
+  });
+}
+
+export async function subscribeHashBatchItemProgress(
+  handler: (payload: HashBatchItemProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<HashBatchItemProgressPayload>("winkit://hash-batch-item", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function codecTransformText(

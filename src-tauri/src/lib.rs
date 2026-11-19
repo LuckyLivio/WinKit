@@ -25,8 +25,9 @@ use crate::fs_guard::{
     TextFilePayload,
 };
 use crate::hasher::{
-    compute_text_hashes, execute_file_hash_with_guard, prepare_file_hash_task, HashAlgorithm,
-    MultiFileHashResult, MultiTextHashResult,
+    compute_text_hashes, execute_batch_hash_with_guard, execute_file_hash_with_guard,
+    prepare_batch_hash_task, prepare_file_hash_task, BatchHashInputItem, HashAlgorithm,
+    MultiFileBatchHashResult, MultiFileHashResult, MultiTextHashResult, HASH_BATCH_ITEM_EVENT,
 };
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
 use crate::password_gen::{generate_secrets_with_os_rng, SecretGenRequest, SecretGenResponse};
@@ -90,17 +91,20 @@ where
         output_path,
         source_path,
         None,
+        &[],
         content,
         overwrite,
         &mut on_event,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute_save_text_multi_source_with_guard<E>(
     guard: TaskTokenGuard,
     output_path: &str,
     source_path: Option<&str>,
     secondary_source_path: Option<&str>,
+    extra_forbidden_sources: &[String],
     content: &str,
     overwrite: bool,
     mut on_event: E,
@@ -129,6 +133,14 @@ where
             let sec_buf = validate_user_path(raw_sec, "Secondary source")?;
             if paths_refer_to_same_location(&sec_buf, &out_buf) {
                 return Err(AppError::same_input_output());
+            }
+        }
+        for extra in extra_forbidden_sources {
+            if !extra.trim().is_empty() {
+                let extra_buf = validate_user_path(extra, "Batch source")?;
+                if paths_refer_to_same_location(&extra_buf, &out_buf) {
+                    return Err(AppError::same_input_output());
+                }
             }
         }
         write_output_bytes_cancellable(
@@ -407,6 +419,7 @@ struct SaveTextFileParams {
     output_path: String,
     source_path: Option<String>,
     secondary_source_path: Option<String>,
+    forbidden_source_paths: Option<Vec<String>>,
     content: String,
     overwrite: bool,
     tool_id: Option<String>,
@@ -419,12 +432,14 @@ async fn save_text_file<R: Runtime>(
     params: SaveTextFileParams,
 ) -> Result<SavedFileInfo, AppError> {
     let guard = prepare_save_text_task(registry.inner(), params.tool_id.as_deref())?;
+    let extra_sources = params.forbidden_source_paths.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         execute_save_text_multi_source_with_guard(
             guard,
             &params.output_path,
             params.source_path.as_deref(),
             params.secondary_source_path.as_deref(),
+            &extra_sources,
             &params.content,
             params.overwrite,
             |payload| {
@@ -469,6 +484,38 @@ async fn hash_file_multi<R: Runtime>(
     })
     .await
     .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background hash worker failed."))?
+}
+
+#[tauri::command]
+async fn hash_files_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    batch_id: String,
+    items: Vec<BatchHashInputItem>,
+    algorithms: Vec<HashAlgorithm>,
+) -> Result<MultiFileBatchHashResult, AppError> {
+    let (guard, normalized) =
+        prepare_batch_hash_task(registry.inner(), &batch_id, &items, &algorithms)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(execute_batch_hash_with_guard(
+            guard,
+            &items,
+            &normalized,
+            |task_ev| {
+                let _ = app.emit(TASK_PROGRESS_EVENT, task_ev);
+            },
+            |item_ev| {
+                let _ = app.emit(HASH_BATCH_ITEM_EVENT, item_ev);
+            },
+        ))
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background batch hash worker failed.",
+        )
+    })?
 }
 
 #[tauri::command]
@@ -682,6 +729,7 @@ pub fn run() {
             suggest_output_path,
             hash_text_multi,
             hash_file_multi,
+            hash_files_batch,
             codec_transform_text,
             codec_transform_file,
             codec_get_full_text,

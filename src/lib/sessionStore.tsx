@@ -1,11 +1,15 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import type {
   Base64WrapWidth,
   CodecFormat,
   CodecOperation,
   CodecTransformResponse,
 } from "../tools/codec/codecEngine";
-import type { AlgorithmDigestEntry, HashAlgorithm } from "../tools/hash-generator/hashUtils";
+import type {
+  AlgorithmDigestEntry,
+  HashAlgorithm,
+  HashBatchState,
+} from "../tools/hash-generator/hashUtils";
 import type { JwtExpectedAlgChoice, JwtSecretEncoding } from "../tools/jwt-decoder/jwtEngine";
 import {
   DEFAULT_UNICODE_SANITIZE_OPTIONS,
@@ -44,17 +48,14 @@ export interface JsonSessionState {
 export interface HashSessionState {
   mode: "text" | "file";
   selectedAlgorithms: HashAlgorithm[];
-  textInput: string;
-  filePath: string | null;
-  fileName: string | null;
-  fileSize: number | null;
-  digests: AlgorithmDigestEntry[] | null;
-  needsRecompute: boolean;
   uppercase: boolean;
-  expectedHash: string;
-  status: "idle" | "running" | "completed" | "cancelled" | "error";
-  progressPercent: number | null;
-  errorMessage: string | null;
+  textInput: string;
+  textDigests: AlgorithmDigestEntry[] | null;
+  textStatus: "idle" | "completed" | "error";
+  textErrorMessage: string | null;
+  textExpectedHash: string;
+  batch: HashBatchState | null;
+  csvFormulaProtection: boolean;
 }
 
 export interface CodecSessionState {
@@ -275,17 +276,14 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
   hash: {
     mode: "text",
     selectedAlgorithms: ["SHA-256"],
-    textInput: "",
-    filePath: null,
-    fileName: null,
-    fileSize: null,
-    digests: null,
-    needsRecompute: false,
     uppercase: false,
-    expectedHash: "",
-    status: "idle",
-    progressPercent: null,
-    errorMessage: null,
+    textInput: "",
+    textDigests: null,
+    textStatus: "idle",
+    textErrorMessage: null,
+    textExpectedHash: "",
+    batch: null,
+    csvFormulaProtection: false,
   },
   codec: {
     inputMode: "text",
@@ -446,7 +444,9 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
 interface SessionStoreContextValue {
   session: SessionWorkspaces;
   updateJsonSession: (patch: Partial<JsonSessionState>) => void;
-  updateHashSession: (patch: Partial<HashSessionState>) => void;
+  updateHashSession: (
+    patchOrUpdater: Partial<HashSessionState> | ((prev: HashSessionState) => HashSessionState),
+  ) => void;
   updateCodecSession: (patch: Partial<CodecSessionState>) => void;
   updateUuidSession: (patch: Partial<UuidSessionState>) => void;
   updateJwtSession: (patch: Partial<JwtSessionState>) => void;
@@ -474,9 +474,20 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, json: { ...prev.json, ...patch } }));
   };
 
-  const updateHashSession = (patch: Partial<HashSessionState>) => {
-    setSession((prev) => ({ ...prev, hash: { ...prev.hash, ...patch } }));
-  };
+  const updateHashSession = useCallback(
+    (
+      patchOrUpdater: Partial<HashSessionState> | ((prev: HashSessionState) => HashSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        hash:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.hash)
+            : { ...prev.hash, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
 
   const updateCodecSession = (patch: Partial<CodecSessionState>) => {
     setSession((prev) => ({ ...prev, codec: { ...prev.codec, ...patch } }));

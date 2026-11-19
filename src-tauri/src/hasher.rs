@@ -12,6 +12,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const STREAM_CHUNK_BYTES: usize = 256 * 1024; // 256 KiB fixed streaming buffer
+pub const MAX_HASH_BATCH_ITEMS: usize = 1_000;
+pub const HASH_BATCH_ITEM_EVENT: &str = "winkit://hash-batch-item";
+
+#[cfg(windows)]
+const WINDOWS_FILE_SHARE_READ_ONLY: u32 = 0x0000_0001; // FILE_SHARE_READ (denies concurrent write/delete)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HashAlgorithm {
@@ -82,6 +87,60 @@ pub struct MultiFileHashResult {
     pub digests: Vec<AlgorithmDigestEntry>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchHashInputItem {
+    pub item_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BatchItemLifecycleState {
+    Running,
+    Completed,
+    Cancelled,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashBatchItemProgressPayload {
+    pub batch_id: String,
+    pub item_id: String,
+    pub index: usize,
+    pub total_items: usize,
+    pub state: BatchItemLifecycleState,
+    pub processed_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub percent: Option<f64>,
+    pub byte_length: Option<u64>,
+    pub digests: Option<Vec<AlgorithmDigestEntry>>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchFileItemResult {
+    pub item_id: String,
+    pub path: String,
+    pub file_name: String,
+    pub status: BatchItemLifecycleState,
+    pub byte_length: Option<u64>,
+    pub digests: Option<Vec<AlgorithmDigestEntry>>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiFileBatchHashResult {
+    pub batch_id: String,
+    pub cancelled: bool,
+    pub items: Vec<BatchFileItemResult>,
+}
+
 fn to_lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -90,6 +149,14 @@ fn to_lower_hex(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
+}
+
+fn extract_display_file_name(raw_path: &str) -> String {
+    Path::new(raw_path.trim())
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| raw_path.trim().to_string())
 }
 
 pub fn normalize_algorithms(algorithms: &[HashAlgorithm]) -> Result<Vec<HashAlgorithm>, AppError> {
@@ -201,6 +268,18 @@ pub fn compute_text_hashes(
     })
 }
 
+fn open_readonly_denying_write(path: &Path) -> Result<std::fs::File, AppError> {
+    let mut opts = OpenOptions::new();
+    opts.read(true).write(false);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.share_mode(WINDOWS_FILE_SHARE_READ_ONLY);
+    }
+    opts.open(path)
+        .map_err(|e| AppError::from_io(e, "Unable to open file for hashing"))
+}
+
 /// Streams `path` in fixed 256 KiB chunks in a SINGLE pass, updating all selected digest states
 /// per chunk and checking `cancel_flag` on every iteration.
 pub fn stream_file_hashes<F>(
@@ -227,7 +306,7 @@ where
 fn stream_file_hashes_tracked<F>(
     path: &Path,
     algorithms: &[HashAlgorithm],
-    expected_total: u64,
+    _expected_total_hint: u64,
     cancel_flag: &AtomicBool,
     processed_out: &mut u64,
     mut on_progress: F,
@@ -241,13 +320,25 @@ where
         return Err(AppError::cancelled());
     }
 
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(false)
-        .open(path)
-        .map_err(|e| AppError::from_io(e, "Unable to open file for hashing"))?;
+    let mut file = open_readonly_denying_write(path)?;
+    let meta_before = file
+        .metadata()
+        .map_err(|e| AppError::from_io(e, "Unable to query open file metadata"))?;
+    if meta_before.is_dir() {
+        return Err(AppError::new(
+            "IS_DIRECTORY",
+            "Selected input path is a directory, not a file.",
+        ));
+    }
+    if !meta_before.is_file() {
+        return Err(AppError::invalid_param(
+            "Selected input path is not a regular file.",
+        ));
+    }
 
-    let total_opt = Some(expected_total);
+    let handle_len_before = meta_before.len();
+    let mtime_before = meta_before.modified().ok();
+    let total_opt = Some(handle_len_before);
     on_progress(0, total_opt);
 
     let mut hasher = MultiHasher::new(&normalized);
@@ -283,8 +374,21 @@ where
     }
 
     let processed = *processed_out;
-    let final_total = Some(processed.max(expected_total));
-    on_progress(processed, final_total);
+    let meta_after = file
+        .metadata()
+        .map_err(|e| AppError::from_io(e, "Unable to verify file metadata after reading"))?;
+    // Release the OS file handle promptly before finalizing digests or advancing a batch queue.
+    drop(file);
+
+    let mtime_changed = mtime_before.is_some() && meta_after.modified().ok() != mtime_before;
+    if processed != handle_len_before || meta_after.len() != handle_len_before || mtime_changed {
+        return Err(AppError::new(
+            "FILE_MODIFIED_DURING_READ",
+            "File size or modification time changed while reading; digest aborted.",
+        ));
+    }
+
+    on_progress(processed, Some(processed));
     Ok((processed, hasher.finalize()))
 }
 
@@ -398,10 +502,320 @@ where
     execute_file_hash_with_guard(guard, raw_path, &normalized, on_event)
 }
 
+pub fn prepare_batch_hash_task(
+    registry: &TaskRegistry,
+    batch_id: &str,
+    items: &[BatchHashInputItem],
+    algorithms: &[HashAlgorithm],
+) -> Result<(TaskTokenGuard, Vec<HashAlgorithm>), AppError> {
+    if batch_id.trim().is_empty() {
+        return Err(AppError::invalid_param("batch_id must not be empty."));
+    }
+    if items.is_empty() {
+        return Err(AppError::invalid_param(
+            "At least one file item is required for batch hashing.",
+        ));
+    }
+    if items.len() > MAX_HASH_BATCH_ITEMS {
+        return Err(AppError::size_limit(format!(
+            "Batch exceeds the {MAX_HASH_BATCH_ITEMS}-file limit ({} items).",
+            items.len()
+        )));
+    }
+    for item in items {
+        if item.item_id.trim().is_empty() {
+            return Err(AppError::invalid_param(
+                "Each batch item must carry a non-empty itemId.",
+            ));
+        }
+    }
+    let normalized = normalize_algorithms(algorithms)?;
+    // A single TaskTokenGuard spans the entire sequential batch attempt so there is NEVER a
+    // between-file `active_count == 0` shutdown gap while queued items remain.
+    let guard = registry.register_checked(batch_id, "D03", true)?;
+    Ok((guard, normalized))
+}
+
+pub fn execute_batch_hash_with_guard<ETask, EItem>(
+    guard: TaskTokenGuard,
+    items: &[BatchHashInputItem],
+    normalized: &[HashAlgorithm],
+    on_task_event: ETask,
+    on_item_event: EItem,
+) -> MultiFileBatchHashResult
+where
+    ETask: FnMut(&TaskProgressPayload),
+    EItem: FnMut(&HashBatchItemProgressPayload),
+{
+    execute_batch_hash_internal(
+        guard,
+        items,
+        normalized,
+        on_task_event,
+        on_item_event,
+        |_, _| {},
+    )
+}
+
+fn execute_batch_hash_internal<ETask, EItem, HBetween>(
+    guard: TaskTokenGuard,
+    items: &[BatchHashInputItem],
+    normalized: &[HashAlgorithm],
+    mut on_task_event: ETask,
+    mut on_item_event: EItem,
+    mut on_between_files: HBetween,
+) -> MultiFileBatchHashResult
+where
+    ETask: FnMut(&TaskProgressPayload),
+    EItem: FnMut(&HashBatchItemProgressPayload),
+    HBetween: FnMut(usize, &AtomicBool),
+{
+    let batch_id = guard.task_id().to_string();
+    let cancel_flag = guard.cancel_flag();
+    let total_items = items.len();
+    let mut results = Vec::with_capacity(total_items);
+    let mut cumulative_bytes = 0u64;
+    let mut cancelled = false;
+
+    on_task_event(&TaskProgressPayload::running(&batch_id, "D03", None));
+
+    for (idx, item) in items.iter().enumerate() {
+        if idx > 0 {
+            on_between_files(idx, &cancel_flag);
+        }
+
+        if cancel_flag.load(Ordering::Relaxed) {
+            cancelled = true;
+            for rem in &items[idx..] {
+                results.push(BatchFileItemResult {
+                    item_id: rem.item_id.clone(),
+                    path: rem.path.clone(),
+                    file_name: extract_display_file_name(&rem.path),
+                    status: BatchItemLifecycleState::Cancelled,
+                    byte_length: None,
+                    digests: None,
+                    error_code: Some("TASK_CANCELLED".to_string()),
+                    error_message: Some("Operation was cancelled by user.".to_string()),
+                });
+            }
+            break;
+        }
+
+        let display_name = extract_display_file_name(&item.path);
+        let (path_buf, file_len) = match validate_existing_input_file(&item.path) {
+            Ok(v) => v,
+            Err(err) => {
+                on_item_event(&HashBatchItemProgressPayload {
+                    batch_id: batch_id.clone(),
+                    item_id: item.item_id.clone(),
+                    index: idx,
+                    total_items,
+                    state: BatchItemLifecycleState::Error,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: None,
+                    byte_length: None,
+                    digests: None,
+                    error_code: Some(err.code.to_string()),
+                    error_message: Some(err.message.clone()),
+                });
+                results.push(BatchFileItemResult {
+                    item_id: item.item_id.clone(),
+                    path: item.path.clone(),
+                    file_name: display_name,
+                    status: BatchItemLifecycleState::Error,
+                    byte_length: None,
+                    digests: None,
+                    error_code: Some(err.code.to_string()),
+                    error_message: Some(err.message),
+                });
+                continue;
+            }
+        };
+
+        let resolved_name = path_buf
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(display_name);
+        let resolved_path = path_buf.to_string_lossy().into_owned();
+
+        let mut item_processed = 0u64;
+        let stream_res = stream_file_hashes_tracked(
+            &path_buf,
+            normalized,
+            file_len,
+            &cancel_flag,
+            &mut item_processed,
+            |processed, total| {
+                let item_pct = match total {
+                    Some(0) => Some(100.0),
+                    Some(t) => Some(((processed as f64 / t as f64) * 100.0).clamp(0.0, 100.0)),
+                    None => None,
+                };
+                let batch_pct = Some(
+                    (((idx as f64) + item_pct.unwrap_or(0.0) / 100.0) / (total_items as f64)
+                        * 100.0)
+                        .clamp(0.0, 99.99),
+                );
+                on_item_event(&HashBatchItemProgressPayload {
+                    batch_id: batch_id.clone(),
+                    item_id: item.item_id.clone(),
+                    index: idx,
+                    total_items,
+                    state: BatchItemLifecycleState::Running,
+                    processed_bytes: processed,
+                    total_bytes: total,
+                    percent: item_pct,
+                    byte_length: total,
+                    digests: None,
+                    error_code: None,
+                    error_message: None,
+                });
+                on_task_event(&TaskProgressPayload {
+                    task_id: batch_id.clone(),
+                    tool_id: "D03".to_string(),
+                    state: TaskLifecycleState::Running,
+                    processed_bytes: cumulative_bytes.saturating_add(processed),
+                    total_bytes: None,
+                    percent: batch_pct,
+                    error_code: None,
+                    error_message: None,
+                });
+            },
+        );
+
+        match stream_res {
+            Ok((actual_bytes, digests)) => {
+                cumulative_bytes = cumulative_bytes.saturating_add(actual_bytes);
+                on_item_event(&HashBatchItemProgressPayload {
+                    batch_id: batch_id.clone(),
+                    item_id: item.item_id.clone(),
+                    index: idx,
+                    total_items,
+                    state: BatchItemLifecycleState::Completed,
+                    processed_bytes: actual_bytes,
+                    total_bytes: Some(actual_bytes),
+                    percent: Some(100.0),
+                    byte_length: Some(actual_bytes),
+                    digests: Some(digests.clone()),
+                    error_code: None,
+                    error_message: None,
+                });
+                results.push(BatchFileItemResult {
+                    item_id: item.item_id.clone(),
+                    path: resolved_path,
+                    file_name: resolved_name,
+                    status: BatchItemLifecycleState::Completed,
+                    byte_length: Some(actual_bytes),
+                    digests: Some(digests),
+                    error_code: None,
+                    error_message: None,
+                });
+            }
+            Err(err) if err.code == "TASK_CANCELLED" => {
+                cancelled = true;
+                on_item_event(&HashBatchItemProgressPayload {
+                    batch_id: batch_id.clone(),
+                    item_id: item.item_id.clone(),
+                    index: idx,
+                    total_items,
+                    state: BatchItemLifecycleState::Cancelled,
+                    processed_bytes: item_processed,
+                    total_bytes: Some(file_len),
+                    percent: None,
+                    byte_length: Some(file_len),
+                    digests: None,
+                    error_code: Some(err.code.to_string()),
+                    error_message: Some(err.message.clone()),
+                });
+                results.push(BatchFileItemResult {
+                    item_id: item.item_id.clone(),
+                    path: resolved_path,
+                    file_name: resolved_name,
+                    status: BatchItemLifecycleState::Cancelled,
+                    byte_length: Some(file_len),
+                    digests: None,
+                    error_code: Some(err.code.to_string()),
+                    error_message: Some(err.message),
+                });
+                // Do NOT open or schedule any subsequent waiting files after cancellation
+                for rem in &items[(idx + 1)..] {
+                    results.push(BatchFileItemResult {
+                        item_id: rem.item_id.clone(),
+                        path: rem.path.clone(),
+                        file_name: extract_display_file_name(&rem.path),
+                        status: BatchItemLifecycleState::Cancelled,
+                        byte_length: None,
+                        digests: None,
+                        error_code: Some("TASK_CANCELLED".to_string()),
+                        error_message: Some("Operation was cancelled by user.".to_string()),
+                    });
+                }
+                break;
+            }
+            Err(err) => {
+                on_item_event(&HashBatchItemProgressPayload {
+                    batch_id: batch_id.clone(),
+                    item_id: item.item_id.clone(),
+                    index: idx,
+                    total_items,
+                    state: BatchItemLifecycleState::Error,
+                    processed_bytes: item_processed,
+                    total_bytes: Some(file_len),
+                    percent: None,
+                    byte_length: Some(file_len),
+                    digests: None,
+                    error_code: Some(err.code.to_string()),
+                    error_message: Some(err.message.clone()),
+                });
+                results.push(BatchFileItemResult {
+                    item_id: item.item_id.clone(),
+                    path: resolved_path,
+                    file_name: resolved_name,
+                    status: BatchItemLifecycleState::Error,
+                    byte_length: Some(file_len),
+                    digests: None,
+                    error_code: Some(err.code.to_string()),
+                    error_message: Some(err.message),
+                });
+            }
+        }
+    }
+
+    // Drop the batch guard BEFORE emitting final event so TaskRegistry reaches 0 active count immediately
+    drop(guard);
+
+    if cancelled {
+        let cancel_err = AppError::cancelled();
+        on_task_event(&TaskProgressPayload::failed_or_cancelled(
+            &batch_id,
+            "D03",
+            cumulative_bytes,
+            None,
+            &cancel_err,
+        ));
+    } else {
+        on_task_event(&TaskProgressPayload::completed(
+            &batch_id,
+            "D03",
+            cumulative_bytes,
+            Some(cumulative_bytes),
+        ));
+    }
+
+    MultiFileBatchHashResult {
+        batch_id,
+        cancelled,
+        items: results,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::mpsc;
+    use std::thread;
     use tempfile::tempdir;
 
     #[test]
@@ -492,27 +906,26 @@ mod tests {
         assert_eq!(res.byte_length, 1_000_000);
         assert_eq!(states.last(), Some(&TaskLifecycleState::Completed));
         assert_eq!(res.digests.len(), 5);
-        // NIST known 1,000,000 'a' digests:
         assert_eq!(
             res.digests[0].digest_hex,
             "7707d6ae4e027c70eea2a935c2296f21"
-        ); // MD5
+        );
         assert_eq!(
             res.digests[1].digest_hex,
             "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
-        ); // SHA-1
+        );
         assert_eq!(
             res.digests[2].digest_hex,
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
-        ); // SHA-256
+        );
         assert_eq!(
             res.digests[3].digest_hex,
             "9d0e1809716474cb086e834e310a4a1ced149e9c00f248527972cec5704c2a5b07b8b3dc38ecc4ebae97ddd87f3d8985"
-        ); // SHA-384
+        );
         assert_eq!(
             res.digests[4].digest_hex,
             "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b"
-        ); // SHA-512
+        );
         assert_eq!(
             fs::read(&file_path).expect("verify intact").len(),
             1_000_000
@@ -545,5 +958,231 @@ mod tests {
 
         assert_eq!(err.code, "TASK_CANCELLED");
         assert!(progress_calls >= 1);
+    }
+
+    #[test]
+    fn batch_handles_zero_byte_unicode_same_basename_bad_items_and_windows_write_share_conflict() {
+        let dir = tempdir().expect("tempdir");
+        let dir_a = dir.path().join("目录A 🔑");
+        let dir_b = dir.path().join("目录B 🚀");
+        fs::create_dir_all(&dir_a).expect("mkdir a");
+        fs::create_dir_all(&dir_b).expect("mkdir b");
+
+        // 1. Zero-byte file + two identically named files in different directories
+        let zero_file = dir_a.join("empty 零字节.bin");
+        let same_a = dir_a.join("payload.bin");
+        let same_b = dir_b.join("payload.bin");
+        let locked_file = dir_b.join("write_locked.bin");
+        let missing_file = dir_b.join("does_not_exist.bin");
+
+        fs::write(&zero_file, b"").expect("write zero");
+        fs::write(&same_a, b"abc").expect("write same_a");
+        fs::write(&same_b, b"xyz").expect("write same_b");
+        fs::write(&locked_file, b"in-flight writer").expect("write locked");
+
+        // Hold an open write handle on `locked_file`; on Windows, `FILE_SHARE_READ`-only open must fail with `FILE_LOCKED`
+        let open_writer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&locked_file)
+            .expect("open writer");
+
+        let items = vec![
+            BatchHashInputItem {
+                item_id: "i-zero".to_string(),
+                path: zero_file.to_string_lossy().into_owned(),
+            },
+            BatchHashInputItem {
+                item_id: "i-same-a".to_string(),
+                path: same_a.to_string_lossy().into_owned(),
+            },
+            BatchHashInputItem {
+                item_id: "i-dir".to_string(),
+                path: dir_a.to_string_lossy().into_owned(),
+            },
+            BatchHashInputItem {
+                item_id: "i-missing".to_string(),
+                path: missing_file.to_string_lossy().into_owned(),
+            },
+            BatchHashInputItem {
+                item_id: "i-locked".to_string(),
+                path: locked_file.to_string_lossy().into_owned(),
+            },
+            BatchHashInputItem {
+                item_id: "i-same-b".to_string(),
+                path: same_b.to_string_lossy().into_owned(),
+            },
+        ];
+
+        let registry = TaskRegistry::default();
+        let (guard, normalized) =
+            prepare_batch_hash_task(&registry, "batch-mixed-1", &items, &[HashAlgorithm::Sha256])
+                .expect("prepare batch");
+
+        let batch_res = execute_batch_hash_with_guard(guard, &items, &normalized, |_| {}, |_| {});
+        drop(open_writer);
+
+        assert!(!batch_res.cancelled);
+        assert_eq!(batch_res.items.len(), 6);
+        assert_eq!(registry.running_count(), 0);
+
+        // Zero-byte succeeded
+        assert_eq!(
+            batch_res.items[0].status,
+            BatchItemLifecycleState::Completed
+        );
+        assert_eq!(batch_res.items[0].byte_length, Some(0));
+        assert_eq!(
+            batch_res.items[0].digests.as_ref().unwrap()[0].digest_hex,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        // Same basename in dir_a ("abc") vs dir_b ("xyz") remain distinct and both succeed
+        assert_eq!(
+            batch_res.items[1].status,
+            BatchItemLifecycleState::Completed
+        );
+        assert_eq!(
+            batch_res.items[5].status,
+            BatchItemLifecycleState::Completed
+        );
+        assert_eq!(batch_res.items[1].file_name, "payload.bin");
+        assert_eq!(batch_res.items[5].file_name, "payload.bin");
+        assert_ne!(batch_res.items[1].path, batch_res.items[5].path);
+        assert_eq!(
+            batch_res.items[1].digests.as_ref().unwrap()[0].digest_hex,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_ne!(
+            batch_res.items[1].digests.as_ref().unwrap()[0].digest_hex,
+            batch_res.items[5].digests.as_ref().unwrap()[0].digest_hex
+        );
+
+        // Directory & missing errors isolated without aborting later items
+        assert_eq!(batch_res.items[2].status, BatchItemLifecycleState::Error);
+        assert_eq!(
+            batch_res.items[2].error_code.as_deref(),
+            Some("IS_DIRECTORY")
+        );
+        assert_eq!(batch_res.items[3].status, BatchItemLifecycleState::Error);
+        assert_eq!(
+            batch_res.items[3].error_code.as_deref(),
+            Some("FILE_NOT_FOUND")
+        );
+
+        #[cfg(windows)]
+        {
+            assert_eq!(batch_res.items[4].status, BatchItemLifecycleState::Error);
+            assert_eq!(
+                batch_res.items[4].error_code.as_deref(),
+                Some("FILE_LOCKED")
+            );
+        }
+    }
+
+    #[test]
+    fn batch_eliminates_between_file_shutdown_gap_releases_handles_and_never_prelocks_queue() {
+        let dir = tempdir().expect("tempdir");
+        let file1 = dir.path().join("first.bin");
+        let file2 = dir.path().join("second.bin");
+        fs::write(&file1, b"abc").expect("write 1");
+        fs::write(&file2, b"def").expect("write 2");
+
+        let items = vec![
+            BatchHashInputItem {
+                item_id: "f1".to_string(),
+                path: file1.to_string_lossy().into_owned(),
+            },
+            BatchHashInputItem {
+                item_id: "f2".to_string(),
+                path: file2.to_string_lossy().into_owned(),
+            },
+        ];
+
+        let registry = TaskRegistry::default();
+        let (guard, normalized) =
+            prepare_batch_hash_task(&registry, "batch-gapless", &items, &[HashAlgorithm::Sha256])
+                .expect("prepare");
+
+        // 1. Before worker starts file 1: close request MUST see active task (no pre-dispatch gap)
+        let pre_decision = registry.evaluate_close_request();
+        assert!(!pre_decision.immediate_close_allowed);
+        assert_eq!(pre_decision.snapshot.active_count, 1);
+
+        let (at_transition_tx, at_transition_rx) = mpsc::channel::<()>();
+        let (resume_transition_tx, resume_transition_rx) = mpsc::channel::<()>();
+
+        let items_clone = items.clone();
+        let worker = thread::spawn(move || {
+            execute_batch_hash_internal(
+                guard,
+                &items_clone,
+                &normalized,
+                |_| {},
+                |_| {},
+                |idx, _flag| {
+                    if idx == 1 {
+                        at_transition_tx.send(()).expect("signal between files");
+                        resume_transition_rx.recv().expect("wait at transition");
+                    }
+                },
+            )
+        });
+
+        // Wait until file 1 has finished and closed its handle, BEFORE file 2 is opened
+        at_transition_rx.recv().expect("parked between files");
+
+        // 2. Verify on Windows that BOTH file 1 (finished) AND file 2 (queued) are NOT locked!
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let ex1 = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&file1)
+                .expect("file1 handle must already be released");
+            drop(ex1);
+
+            let ex2 = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&file2)
+                .expect("queued file2 must NOT be pre-locked before its turn");
+            drop(ex2);
+        }
+
+        // 3. Evaluate close request AT THE EXACT BETWEEN-FILE BOUNDARY: active_count MUST still be 1!
+        let mid_decision = registry.evaluate_close_request();
+        assert!(!mid_decision.immediate_close_allowed);
+        assert_eq!(mid_decision.snapshot.active_count, 1);
+        assert!(!mid_decision.snapshot.shutting_down);
+
+        // 4. Begin graceful shutdown -> sets cancel_flag and drains once worker drops guard
+        let reg_drain = registry.clone();
+        let drain_thread =
+            thread::spawn(move || reg_drain.begin_shutdown_and_drain(Duration::from_secs(2)));
+
+        // Wait briefly until begin_shutdown_and_drain sets shutting_down == true, then release transition
+        while !registry.snapshot().shutting_down {
+            thread::sleep(Duration::from_millis(2));
+        }
+        resume_transition_tx.send(()).expect("release worker");
+
+        let batch_res = worker.join().expect("worker joined");
+        let drain_res = drain_thread.join().expect("drain joined");
+
+        assert!(drain_res.ready_to_close);
+        assert!(batch_res.cancelled);
+        assert_eq!(
+            batch_res.items[0].status,
+            BatchItemLifecycleState::Completed
+        );
+        assert_eq!(
+            batch_res.items[1].status,
+            BatchItemLifecycleState::Cancelled
+        );
+        assert_eq!(registry.running_count(), 0);
     }
 }

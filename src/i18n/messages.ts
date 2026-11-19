@@ -82,6 +82,7 @@ export interface Messages {
     TARGET_ALREADY_EXISTS: string;
     PERMISSION_DENIED: string;
     FILE_LOCKED: string;
+    FILE_MODIFIED_DURING_READ: string;
     DISK_FULL: string;
     SIZE_LIMIT_EXCEEDED: string;
     DECODE_FAILED: string;
@@ -135,19 +136,59 @@ export interface Messages {
     selectedFileLabel: string;
     fileSizeLabel: string;
     computeBtn: string;
+    recomputeWithNewAlgsBtn: string;
     cancelBtn: string;
+    resumeIncompleteBtn: (count: number) => string;
+    retryFailedBtn: (count: number) => string;
+    saveCsvBtn: string;
+    formulaProtectionLabel: string;
     uppercaseLabel: string;
     digestLabel: string;
     copyBtn: string;
     copyAllBtn: string;
+    copyBatchBtn: (count: number) => string;
     copiedBadge: string;
     clearBtn: string;
     staleNotice: string;
+    batchAlgSnapshotLabel: (algs: string) => string;
+    batchOverflowNotice: (limit: number, skipped: number) => string;
+    batchResumeRuleNote: string;
+    batchSummaryCounts: (
+      total: number,
+      done: number,
+      running: number,
+      pending: number,
+      errors: number,
+      cancelled: number,
+    ) => string;
+    filterAll: string;
+    filterIncomplete: string;
+    filterError: string;
+    filterCompleted: string;
+    pageInfo: (start: number, end: number, total: number) => string;
+    prevPageBtn: string;
+    nextPageBtn: string;
+    itemStatusLabels: {
+      pending: string;
+      running: string;
+      completed: string;
+      error: string;
+      cancelled: string;
+    };
+    compareRowBadges: {
+      match: string;
+      mismatch: string;
+      uncomputed: string;
+      ambiguous: string;
+      invalid: string;
+    };
     emptyDigestsHint: string;
     compareLabel: string;
     comparePlaceholder: string;
     compareIdle: string;
     compareInvalidFormat: string;
+    comparePrefixMismatch: string;
+    compareAmbiguousFormat: string;
     compareUncomputedCandidate: (alg: string, hexLen: number) => string;
     compareMatch: (alg: string, hexLen: number) => string;
     compareMismatch: (alg: string, hexLen: number) => string;
@@ -157,6 +198,12 @@ export interface Messages {
     statusCompleted: (count: number) => string;
     statusCancelled: string;
     statusError: string;
+    savedCsvSuccess: (path: string, bytes: number) => string;
+    saveAbortedChanged: string;
+    overwriteConfirmTitle: string;
+    overwriteConfirmBody: (path: string) => string;
+    overwriteConfirmAccept: string;
+    cancel: string;
   };
   codecTool: {
     scopeNote: string;
@@ -971,6 +1018,8 @@ export const MESSAGES: Record<Locale, Messages> = {
       TARGET_ALREADY_EXISTS: "目标位置已存在同名文件，请确认覆盖或另选文件名。",
       PERMISSION_DENIED: "权限不足或目标文件夹为只读，请选择可写目录。",
       FILE_LOCKED: "文件正被其他程序占用，请关闭占用程序后重试。",
+      FILE_MODIFIED_DURING_READ:
+        "读取文件期间检测到大小或修改时间发生变化，已中止摘要计算以防结果失真。",
       DISK_FULL: "目标磁盘剩余空间不足，无法完成写入。",
       SIZE_LIMIT_EXCEEDED: "输入体积、输出预估或画布像素超出安全上限。",
       DECODE_FAILED: "编码内容或图像格式无法解析。",
@@ -1014,11 +1063,11 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     hashTool: {
       modeText: "UTF-8 文本",
-      modeFile: "本地文件",
+      modeFile: "本地文件（支持多选批处理）",
       algorithmsLabel: "摘要算法",
       scopeNote:
-        "支持单遍流式计算 MD5、SHA-1、SHA-256、SHA-384、SHA-512（多文件批处理见阶段 2C 规划）。",
-      compatNote: "仅用于文件兼容性校验，不适用于密码存储或安全签名",
+        "支持 UTF-8 文本与最多 1,000 个本地文件单遍流式计算 MD5、SHA-1、SHA-256、SHA-384、SHA-512（不递归扫描文件夹；同会话可暂停后继续未完成项）。",
+      compatNote: "仅用于文件兼容性校验，不适用于密码存储、数字签名或来源认证",
       textInputLabel: "待计算文本",
       textPlaceholder: "输入或粘贴任意文本…",
       exactBytesNote:
@@ -1026,38 +1075,86 @@ export const MESSAGES: Record<Locale, Messages> = {
       byteCount: (bytes) => `${bytes.toLocaleString()} UTF-8 字节`,
       selectFileBtn: "选择本地文件…",
       dropFileHint:
-        "也可直接将文件从资源管理器拖入此工作区（单次分块流式读取更新所选全部算法，不改动原文件）",
-      selectedFileLabel: "当前文件",
+        "支持多选或从资源管理器一次拖入多个文件（每批上限 1,000 项，每个文件单遍 256 KiB 流式读取并更新本批全部算法，不改动原文件）",
+      selectedFileLabel: "当前选中文件",
       fileSizeLabel: "文件大小",
       computeBtn: "重新计算",
-      cancelBtn: "取消计算",
+      recomputeWithNewAlgsBtn: "按当前算法重算本批",
+      cancelBtn: "取消批次",
+      resumeIncompleteBtn: (count) => `继续未完成项 (${count})`,
+      retryFailedBtn: (count) => `重试失败项 (${count})`,
+      saveCsvBtn: "保存 CSV…",
+      formulaProtectionLabel: "CSV 公式保护",
       uppercaseLabel: "大写十六进制",
       digestLabel: "摘要计算结果",
       copyBtn: "复制",
       copyAllBtn: "复制全部",
+      copyBatchBtn: (count) => `复制本批摘要 (${count})`,
       copiedBadge: "已复制",
       clearBtn: "清空",
-      staleNotice: "所选摘要算法已变更，请点击“重新计算”以单遍读取文件生成最新摘要。",
-      emptyDigestsHint: "输入文本或选择本地文件后在此显示所选算法的摘要值。",
-      compareLabel: "期望摘要比对（可选）",
+      staleNotice:
+        "工具栏所选算法与本批实际计算的算法快照不同（下方仍按本批实际已计算算法展示）；如需补算新算法，请点击“按当前算法重算本批”。",
+      batchAlgSnapshotLabel: (algs) => `本批算法快照：${algs}`,
+      batchOverflowNotice: (limit, skipped) =>
+        `单批最多处理 ${limit.toLocaleString()} 个文件：已接收前 ${limit.toLocaleString()} 项，超出上限的 ${skipped.toLocaleString()} 个文件未加入本批，请分批添加。`,
+      batchResumeRuleNote:
+        "本次会话可继续：继续时保留本会话已完成文件的摘要，仅从头重新读取未完成文件（不跨进程保存中间哈希状态）。",
+      batchSummaryCounts: (total, done, running, pending, errors, cancelled) =>
+        `共 ${total} 项 · 完成 ${done} · 读取中 ${running} · 等待 ${pending} · 失败 ${errors} · 已取消 ${cancelled}`,
+      filterAll: "全部",
+      filterIncomplete: "待完成 / 已取消",
+      filterError: "失败",
+      filterCompleted: "已完成",
+      pageInfo: (start, end, total) => `第 ${start}–${end} / 共 ${total} 项`,
+      prevPageBtn: "上一页",
+      nextPageBtn: "下一页",
+      itemStatusLabels: {
+        pending: "等待中",
+        running: "读取中",
+        completed: "已完成",
+        error: "失败",
+        cancelled: "已取消",
+      },
+      compareRowBadges: {
+        match: "一致",
+        mismatch: "不一致",
+        uncomputed: "待算算法",
+        ambiguous: "格式歧义",
+        invalid: "格式无效",
+      },
+      emptyDigestsHint: "输入文本，或选择 / 拖入本地文件后在此查看选中项的摘要详情与比对状态。",
+      compareLabel: "期望摘要比对（绑定当前项，可选）",
       comparePlaceholder:
-        "粘贴期望摘要（支持 md5:/sha256: 等前缀、shasum 行格式、大小写或冒号/空格分隔）",
+        "粘贴期望摘要（支持分组 SHA-256、md5:/sha256: 前缀、标准 shasum 双空格 / *文件名、大小写或冒号分隔）",
       compareIdle:
-        "输入期望摘要后将检查十六进制格式与长度（长度仅提供候选算法参考，不能证明摘要真实来源）",
+        "输入期望摘要后检查格式并比对相等性（长度仅代表候选算法，匹配结果不构成数字签名或文件来源认证）",
       compareInvalidFormat:
         "期望值格式无效：需为合法十六进制，且长度为 32 (MD5)、40 (SHA-1)、64 (SHA-256)、96 (SHA-384) 或 128 (SHA-512) 位",
+      comparePrefixMismatch:
+        "算法前缀与摘要十六进制长度矛盾（例如标为 SHA-256 但仅提供 32 位十六进制），请核对前缀与摘要。",
+      compareAmbiguousFormat:
+        "期望值存在格式歧义：同时包含有效长度摘要与额外内容，无法确认是分组摘要还是非标准文件名后缀。请仅保留纯摘要，或使用明确前缀（如 SHA-256:）及标准 shasum 格式（双空格或 *文件名）。",
       compareUncomputedCandidate: (alg, hexLen) =>
-        `按 ${hexLen} 位十六进制长度推断候选算法为 ${alg}（仅代表长度匹配），但当前未勾选或尚未完成 ${alg} 计算；请勾选 ${alg} 并重新计算后再比对`,
+        `按 ${hexLen} 位十六进制长度推断候选算法为 ${alg}（仅代表长度匹配），但当前批次未计算 ${alg}；请勾选 ${alg} 并重新计算后再比对`,
       compareMatch: (alg, hexLen) =>
         `一致：与当前计算的 ${alg}（${hexLen} 位十六进制）摘要完全匹配`,
       compareMismatch: (alg, hexLen) =>
         `不一致：按 ${hexLen} 位长度比对当前计算的 ${alg} 摘要，结果不匹配`,
       statusIdle: "尚未计算",
-      statusStale: "待重新计算",
+      statusStale: "算法配置已变更",
       statusRunning: (pct) => `正在单遍流式读取（${pct}）…`,
       statusCompleted: (count) => `已完成 ${count} 项摘要`,
-      statusCancelled: "计算已取消（未生成有效结果）",
+      statusCancelled: "计算已取消（可在本会话内继续未完成项）",
       statusError: "计算失败",
+      savedCsvSuccess: (path, bytes) =>
+        `已安全导出批次哈希 CSV（${bytes.toLocaleString()} 字节）：${path}`,
+      saveAbortedChanged:
+        "批次内容或导出选项在另存对话框打开期间已变更，本次保存已取消以避免混用旧快照。",
+      overwriteConfirmTitle: "目标文件已存在",
+      overwriteConfirmBody: (path) =>
+        `路径 "${path}" 已存在同名文件，是否确认覆盖（绝不允许覆盖批次中的任何源文件）？`,
+      overwriteConfirmAccept: "确认覆盖",
+      cancel: "取消",
     },
     codecTool: {
       scopeNote:
@@ -1980,6 +2077,8 @@ export const MESSAGES: Record<Locale, Messages> = {
       TARGET_ALREADY_EXISTS: "A file already exists at the destination path.",
       PERMISSION_DENIED: "Permission denied or destination directory is read-only.",
       FILE_LOCKED: "The file is currently locked by another process.",
+      FILE_MODIFIED_DURING_READ:
+        "The file size or modification timestamp changed while reading; digest aborted.",
       DISK_FULL: "Insufficient disk space on the target drive.",
       SIZE_LIMIT_EXCEEDED:
         "Input size, estimated output, or canvas dimensions exceed safety limits.",
@@ -2025,51 +2124,99 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     hashTool: {
       modeText: "UTF-8 Text",
-      modeFile: "Local File",
+      modeFile: "Local Files (Batch)",
       algorithmsLabel: "Algorithms",
       scopeNote:
-        "Single-pass streaming MD5, SHA-1, SHA-256, SHA-384, and SHA-512 checksums (multi-file batching scheduled for Phase 2C).",
+        "Single-pass streaming MD5, SHA-1, SHA-256, SHA-384, and SHA-512 checksums for text and up to 1,000 local files (non-recursive; pause & resume incomplete files within this session).",
       compatNote:
-        "For compatibility checksums only; not suitable for password storage or security signatures",
+        "For compatibility checksums only; not suitable for password storage, digital signatures, or origin authentication",
       textInputLabel: "Input Text",
       textPlaceholder: "Type or paste text to hash…",
       exactBytesNote:
         "Hashed as exact UTF-8 bytes: all leading/trailing spaces, tabs, and line breaks are preserved with no implicit trimming.",
       byteCount: (bytes) => `${bytes.toLocaleString()} UTF-8 bytes`,
-      selectFileBtn: "Choose File…",
+      selectFileBtn: "Choose Files…",
       dropFileHint:
-        "Or drop a file from File Explorer (updates all selected digests in a single read-only pass)",
+        "Select or drop multiple files from File Explorer (up to 1,000 files per batch; single 256 KiB streaming pass per file)",
       selectedFileLabel: "Selected File",
       fileSizeLabel: "File Size",
       computeBtn: "Recompute",
-      cancelBtn: "Cancel",
+      recomputeWithNewAlgsBtn: "Recompute Batch with Selected Algorithms",
+      cancelBtn: "Cancel Batch",
+      resumeIncompleteBtn: (count) => `Resume Incomplete (${count})`,
+      retryFailedBtn: (count) => `Retry Failed (${count})`,
+      saveCsvBtn: "Save CSV…",
+      formulaProtectionLabel: "CSV formula protection",
       uppercaseLabel: "Uppercase hex",
       digestLabel: "Computed Digests",
       copyBtn: "Copy",
       copyAllBtn: "Copy All",
+      copyBatchBtn: (count) => `Copy Batch Digests (${count})`,
       copiedBadge: "Copied",
       clearBtn: "Clear",
       staleNotice:
-        "Selected algorithms changed — click Recompute to update digests in a single pass.",
-      emptyDigestsHint: "Enter text or select a local file to compute selected digests.",
-      compareLabel: "Compare Expected Digest (Optional)",
+        "Toolbar algorithm selection differs from this batch's frozen snapshot (results below show the batch's actual computed algorithms). Click Recompute Batch to include new algorithms.",
+      batchAlgSnapshotLabel: (algs) => `Batch snapshot: ${algs}`,
+      batchOverflowNotice: (limit, skipped) =>
+        `Batch limit is ${limit.toLocaleString()} files: accepted the first ${limit.toLocaleString()} items and skipped ${skipped.toLocaleString()} excess file(s). Please run excess files in a separate batch.`,
+      batchResumeRuleNote:
+        "Resumable in this session: completed file digests are kept while incomplete files are re-read from byte 0 (digest internal state is not persisted across restarts).",
+      batchSummaryCounts: (total, done, running, pending, errors, cancelled) =>
+        `${total} total · ${done} done · ${running} reading · ${pending} queued · ${errors} failed · ${cancelled} cancelled`,
+      filterAll: "All",
+      filterIncomplete: "Queued / Cancelled",
+      filterError: "Failed",
+      filterCompleted: "Completed",
+      pageInfo: (start, end, total) => `Items ${start}–${end} of ${total}`,
+      prevPageBtn: "Prev",
+      nextPageBtn: "Next",
+      itemStatusLabels: {
+        pending: "Queued",
+        running: "Reading",
+        completed: "Done",
+        error: "Failed",
+        cancelled: "Cancelled",
+      },
+      compareRowBadges: {
+        match: "Match",
+        mismatch: "Mismatch",
+        uncomputed: "Uncomputed",
+        ambiguous: "Ambiguous",
+        invalid: "Invalid",
+      },
+      emptyDigestsHint:
+        "Enter text or select/drop local files to view digests and expected checksum comparison for the selected item.",
+      compareLabel: "Compare Expected Digest (Bound to Current Item, Optional)",
       comparePlaceholder:
-        "Paste expected digest (accepts md5:/sha256: prefixes, shasum lines, uppercase, spaces, or colons)",
+        "Paste expected digest (grouped SHA-256, md5:/sha256: prefixes, standard two-space / *filename shasum, colons)",
       compareIdle:
-        "Enter an expected hex digest to verify (hex length suggests a candidate algorithm only and does not prove digest origin)",
+        "Enter an expected hex digest to verify equality (hex length suggests a candidate algorithm only and does not authenticate file origin)",
       compareInvalidFormat:
         "Invalid expected digest: must contain 32 (MD5), 40 (SHA-1), 64 (SHA-256), 96 (SHA-384), or 128 (SHA-512) hex characters",
+      comparePrefixMismatch:
+        "Declared algorithm prefix contradicts digest hex length (e.g. SHA-256 prefix with a 32-hex digest).",
+      compareAmbiguousFormat:
+        "Ambiguous expected digest: contains a valid-length hex prefix plus trailing tokens that could be either grouped hex or a non-standard filename. Paste the digest alone, add an explicit prefix (e.g. SHA-256:), or use standard shasum format (two spaces or *filename).",
       compareUncomputedCandidate: (alg, hexLen) =>
-        `Hex length (${hexLen} chars) corresponds to candidate algorithm ${alg}, which is not currently computed — select ${alg} and recompute to compare`,
+        `Hex length (${hexLen} chars) corresponds to candidate algorithm ${alg}, which was not computed for this item — select ${alg} and recompute to compare`,
       compareMatch: (alg, hexLen) => `Match: equals computed ${alg} (${hexLen}-hex) digest`,
       compareMismatch: (alg, hexLen) =>
         `Mismatch: does not match computed ${alg} (${hexLen}-hex) digest`,
       statusIdle: "Ready",
-      statusStale: "Recompute needed",
+      statusStale: "Algorithms changed",
       statusRunning: (pct) => `Streaming single pass (${pct})…`,
       statusCompleted: (count) => `${count} digest${count === 1 ? "" : "s"} ready`,
-      statusCancelled: "Cancelled (no valid digest retained)",
+      statusCancelled: "Cancelled (incomplete items can be resumed in this session)",
       statusError: "Hash computation failed",
+      savedCsvSuccess: (path, bytes) =>
+        `Saved batch hash CSV (${bytes.toLocaleString()} bytes): ${path}`,
+      saveAbortedChanged:
+        "Batch items or export options changed while the Save dialog was open; save cancelled to prevent writing stale data.",
+      overwriteConfirmTitle: "Destination File Exists",
+      overwriteConfirmBody: (path) =>
+        `"${path}" already exists. Replace it (no source file in the batch can ever be overwritten)?`,
+      overwriteConfirmAccept: "Replace File",
+      cancel: "Cancel",
     },
     codecTool: {
       scopeNote:

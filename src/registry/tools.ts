@@ -123,9 +123,9 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     },
     summary: {
       "zh-CN":
-        "单遍分块流式计算 UTF-8 文本与本地文件 MD5、SHA-1、SHA-256、SHA-384、SHA-512 摘要，支持真实进度、取消与期望值比对",
+        "单遍分块流式计算 UTF-8 文本与批量本地文件 MD5、SHA-1、SHA-256、SHA-384、SHA-512 摘要，支持多文件队列、暂停继续、逐文件比对与 CSV 导出",
       "en-US":
-        "Single-pass streaming MD5, SHA-1, SHA-256, SHA-384, and SHA-512 checksums for text and local files with progress and verification",
+        "Single-pass streaming MD5, SHA-1, SHA-256, SHA-384, and SHA-512 checksums for text and multi-file batches with session resume, verification, and CSV export",
     },
     keywords: [
       "hash",
@@ -139,12 +139,14 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
       "checksum",
       "digest",
       "shasum",
+      "batch",
       "哈希",
       "校验和",
       "摘要",
+      "批量",
     ],
     icon: "shield-check",
-    implementationStatus: "partial",
+    implementationStatus: "full",
     component: HashGeneratorWorkspace,
   },
   {
