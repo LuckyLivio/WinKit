@@ -891,19 +891,10 @@ export function HashGeneratorWorkspace() {
   };
 
   const handleClear = () => {
-    textReqSeqRef.current += 1;
-    if (activeAttemptIdRef.current) {
-      void cancelBackendTask(activeAttemptIdRef.current);
-      activeAttemptIdRef.current = null;
-    }
-    batchGenRef.current = ++hashBatchGenSeq;
     setCopiedKey(null);
     setIoBanner(null);
-    setPendingOverwrite(null);
-    setBatchFilter("all");
-    setPageIndex(0);
-
     if (mode === "text") {
+      textReqSeqRef.current += 1;
       updateHashSession({
         textInput: "",
         textDigests: null,
@@ -911,11 +902,18 @@ export function HashGeneratorWorkspace() {
         textErrorMessage: null,
         textExpectedHash: "",
       });
-    } else {
-      updateHashSession({
-        batch: null,
-      });
+      return;
     }
+
+    if (activeAttemptIdRef.current) {
+      void cancelBackendTask(activeAttemptIdRef.current);
+      activeAttemptIdRef.current = null;
+    }
+    batchGenRef.current = ++hashBatchGenSeq;
+    setPendingOverwrite(null);
+    setBatchFilter("all");
+    setPageIndex(0);
+    updateHashSession({ batch: null });
   };
 
   const handleUpdateExpectedHash = (val: string) => {

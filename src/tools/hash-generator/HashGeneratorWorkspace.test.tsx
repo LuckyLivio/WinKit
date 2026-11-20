@@ -203,6 +203,49 @@ describe("D03 HashGeneratorWorkspace UI (multi-algorithm & multi-file batch)", (
     expect(savedPayloads[0]!.content).toContain("FILE_NOT_FOUND");
   });
 
+  it("finishes an active file batch after clearing the text workspace", async () => {
+    const user = userEvent.setup();
+    const pending = createDeferred<tauriBridge.MultiFileBatchHashResult>();
+    const path = "report.bin";
+    const digest = "abcd".repeat(16);
+    vi.spyOn(tauriBridge, "pickMultipleFiles").mockResolvedValue([path]);
+    const compute = vi
+      .spyOn(tauriBridge, "computeBatchFileHashes")
+      .mockReturnValue(pending.promise);
+    const cancel = vi.spyOn(tauriBridge, "cancelBackendTask").mockResolvedValue(true);
+
+    renderHashWorkspace();
+    await user.click(screen.getByRole("button", { name: /本地文件/ }));
+    await user.click(screen.getAllByRole("button", { name: "选择本地文件…" })[0]!);
+    const [batchId, items] = compute.mock.calls[0]!;
+    await user.click(screen.getByRole("button", { name: "UTF-8 文本" }));
+    await user.type(screen.getByLabelText("待计算文本"), "abc");
+    await user.click(screen.getByRole("button", { name: "清空" }));
+    expect(screen.getByLabelText("待计算文本")).toHaveValue("");
+    expect(cancel).not.toHaveBeenCalled();
+    await act(async () => {
+      pending.resolve({
+        batchId,
+        cancelled: false,
+        items: [
+          {
+            ...items[0]!,
+            fileName: path,
+            status: "completed",
+            byteLength: 3,
+            digests: [{ algorithm: "SHA-256", hexLength: 64, digestHex: digest }],
+            errorCode: null,
+            errorMessage: null,
+          },
+        ],
+      });
+    });
+    await user.click(screen.getByRole("button", { name: /本地文件/ }));
+    expect(screen.getByRole("option")).toHaveTextContent(path);
+    expect(screen.getByText(/共 1 项 · 完成 1/)).toBeInTheDocument();
+    expect(screen.getByTestId("digest-SHA-256")).toHaveTextContent(digest);
+  });
+
   it("resumes only incomplete items after batch cancellation and discards stale callbacks after Clear or new batch", async () => {
     const user = userEvent.setup();
     const calls: Array<{
