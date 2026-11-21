@@ -17,7 +17,7 @@ tauri-build = { version = "2", features = [] }
 arboard = "3"
 base64 = "0.22"
 hmac = "0.12"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
 md-5 = "0.10"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
@@ -33,6 +33,10 @@ unicode-security = "0.1"
 unicode-segmentation = "1"
 unicode_names2 = "1"
 uuid = { version = "1", features = ["v4", "v7"] }
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win = "5"
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3"

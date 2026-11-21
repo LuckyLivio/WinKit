@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { assertFrontendNotShuttingDown } from "./shutdownGate";
-import { isTauriDesktop } from "./tauriBridge";
+import { cancelBackendTask, isTauriDesktop } from "./tauriBridge";
 
 const maxFileBytes = 16 * 1024 * 1024;
 
@@ -20,12 +20,23 @@ function blobBase64(data: Blob): Promise<string> {
   });
 }
 
-export async function readQrImageFile(path: string): Promise<Blob> {
+export async function readQrImageFile(path: string, signal?: AbortSignal): Promise<Blob> {
   assertFrontendNotShuttingDown();
-  const data = await invoke<ArrayBuffer>("qr_read_image_file", { path });
-  const header = new Uint8Array(data, 0, Math.min(data.byteLength, 12));
-  const mime = header[0] === 0x89 ? "image/png" : header[0] === 0xff ? "image/jpeg" : "image/webp";
-  return new Blob([data], { type: mime });
+  signal?.throwIfAborted();
+  const taskId = `qr-read-${crypto.randomUUID()}`;
+  const cancel = () => {
+    void cancelBackendTask(taskId).catch(() => {});
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    const data = await invoke<ArrayBuffer>("qr_read_image_file", { path, taskId });
+    signal?.throwIfAborted();
+    const [first] = new Uint8Array(data, 0, 1);
+    const mime = first === 0x89 ? "image/png" : first === 0xff ? "image/jpeg" : "image/webp";
+    return new Blob([data], { type: mime });
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 export async function readQrClipboardImage(): Promise<Blob> {
@@ -71,7 +82,11 @@ export async function saveQrImage(
 export async function openQrHttpUrl(raw: string): Promise<void> {
   assertFrontendNotShuttingDown();
   const url = new URL(raw);
-  if (!/^https?:$/.test(url.protocol) || !url.hostname || /[\u0000-\u001f\u007f]/u.test(raw)) {
+  if (
+    !/^https?:$/.test(url.protocol) ||
+    !url.hostname ||
+    Array.from(raw).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+  ) {
     throw new Error("Only HTTP and HTTPS links can be opened.");
   }
   if (isTauriDesktop()) return invoke("qr_open_http_url", { url: url.href });

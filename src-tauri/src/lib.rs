@@ -5,6 +5,7 @@ pub mod fs_guard;
 pub mod hasher;
 pub mod jwt;
 pub mod password_gen;
+mod qr;
 pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
@@ -739,6 +740,12 @@ pub fn run() {
             generate_secrets,
             verify_jwt_hmac,
             inspect_unicode_text,
+            qr::qr_read_image_file,
+            qr::qr_read_clipboard_image,
+            qr::qr_copy_image,
+            qr::qr_copy_text,
+            qr::qr_save_image,
+            qr::qr_open_http_url,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,
@@ -761,7 +768,7 @@ mod tests {
     use crate::codec::{Base64WrapWidth, CodecFormat, CodecOperation, CodecOptions};
     use crate::hasher::{execute_file_hash_task, HashAlgorithm};
     use crate::tasks::{TaskLifecycleState, TaskProgressPayload, TaskRegistry};
-    use std::fs::{self, OpenOptions};
+    use std::fs;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -826,7 +833,7 @@ mod tests {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            let exclusive = OpenOptions::new()
+            let exclusive = fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .share_mode(0)

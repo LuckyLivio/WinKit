@@ -4784,6 +4784,7 @@ version = "0.5.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "clipboard-win",
  "hmac",
  "image",
  "md-5",
@@ -4803,6 +4804,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode_names2",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

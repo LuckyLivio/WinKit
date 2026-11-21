@@ -60,6 +60,9 @@ jobs:
       - name: Run Rust unit & integration tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Verify Windows image clipboard pixel round trip
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib qr::tests::windows_clipboard_roundtrip -- --exact --ignored
+
       - name: Build Rust Tauri binary
         run: cargo build --manifest-path src-tauri/Cargo.toml
 
