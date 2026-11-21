@@ -80,7 +80,7 @@ type ReadRow = { name: string } & (
 );
 interface Source {
   name: string;
-  load: () => Promise<Blob>;
+  load: (signal: AbortSignal) => Promise<Blob>;
   clipboard?: boolean;
 }
 
@@ -101,21 +101,26 @@ function failure(err: unknown, clipboard: boolean): ReadFailure {
   }
 }
 
-// Native reads cannot be interrupted by the webview. Release the queue and ignore a late reply.
+// Release the queue even when an outstanding clipboard operation cannot be interrupted.
 async function loadSource(source: Source, signal: AbortSignal): Promise<Blob> {
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  const read = new AbortController();
   let abort!: () => void;
   let timer!: ReturnType<typeof setTimeout>;
   const interrupted = new Promise<never>((_, reject) => {
-    abort = () => reject(new DOMException("Aborted", "AbortError"));
+    const interrupt = (reason: unknown) => {
+      reject(reason);
+      read.abort(reason);
+    };
+    abort = () => interrupt(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
     timer = setTimeout(
-      () => reject({ code: "timeout", message: "Read timed out" }),
+      () => interrupt({ code: "timeout", message: "Read timed out" }),
       QR_READ_LIMITS.timeoutMs,
     );
   });
   try {
-    return await Promise.race([source.load(), interrupted]);
+    return await Promise.race([source.load(read.signal), interrupted]);
   } finally {
     clearTimeout(timer);
     signal.removeEventListener("abort", abort);
@@ -208,7 +213,7 @@ export function QrReadView() {
       void run(
         paths.map((path) => ({
           name: path.split(/[\\/]/u).pop() || path,
-          load: () => readQrImageFile(path),
+          load: (signal) => readQrImageFile(path, signal),
         })),
       );
     },

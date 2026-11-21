@@ -101,7 +101,9 @@ describe("F01 image reader", () => {
     await screen.findByText("new");
     await act(async () => first.resolve(scanned("obsolete")));
     expect(screen.queryByText("obsolete")).toBeNull();
-    expect(bridge.readQrImageFile).not.toHaveBeenCalledWith("unused.jpg");
+    expect(vi.mocked(bridge.readQrImageFile).mock.calls.map(([path]) => path)).not.toContain(
+      "unused.jpg",
+    );
 
     act(() => drop(["busy.jpg"]));
     await waitFor(() => expect(decoder.decodeImage).toHaveBeenCalledTimes(3));
@@ -109,6 +111,44 @@ describe("F01 image reader", () => {
     await act(async () => last.resolve(scanned("cancelled data")));
     expect(screen.queryByText("cancelled data")).toBeNull();
     expect(screen.getByText("已取消识别。")).toBeVisible();
+  });
+
+  it("interrupts the active native file read on replacement, timeout, cancellation and unmount", async () => {
+    vi.useFakeTimers();
+    const nativeRead = vi.mocked(bridge.readQrImageFile);
+    nativeRead.mockImplementation(
+      (_path, signal) =>
+        new Promise<Blob>((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Cancelled", "AbortError")),
+            { once: true },
+          );
+        }),
+    );
+    const decode = vi.spyOn(decoder, "decodeImage");
+    const view = render(<QrReadView />);
+    act(() => drop(["old.jpg", "queued.jpg"]));
+    const first = nativeRead.mock.calls[0]![1]!;
+    act(() => drop(["slow.png"]));
+    const slow = nativeRead.mock.calls[1]![1]!;
+    expect(first.aborted).toBe(true);
+    expect(slow.aborted).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(decoder.QR_READ_LIMITS.timeoutMs);
+    });
+    expect(slow.aborted).toBe(true);
+    expect(screen.getByText("图片读取或识别超时。")).toBeVisible();
+    act(() => drop(["cancel.png"]));
+    const cancelled = nativeRead.mock.calls[2]![1]!;
+    fireEvent.click(screen.getByRole("button", { name: "取消识别" }));
+    expect(cancelled.aborted).toBe(true);
+    act(() => drop(["unmount.png"]));
+    const last = nativeRead.mock.calls[3]![1]!;
+    view.unmount();
+    expect(last.aborted).toBe(true);
+    expect(nativeRead.mock.calls.map(([path]) => path)).not.toContain("queued.jpg");
+    expect(decode).not.toHaveBeenCalled();
   });
 
   it("rejects oversized batches before file I/O, and reports bounded clipboard and file failures", async () => {
