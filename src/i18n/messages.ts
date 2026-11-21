@@ -15,6 +15,7 @@ export interface Messages {
     developer: string;
     text: string;
     image: string;
+    file: string;
   };
   topbar: {
     searchPlaceholder: string;
@@ -943,6 +944,7 @@ export const MESSAGES: Record<Locale, Messages> = {
       developer: "开发者",
       text: "文本与语音",
       image: "图片",
+      file: "文件",
     },
     topbar: {
       searchPlaceholder: "搜索可用工具…",
@@ -1999,6 +2001,7 @@ export const MESSAGES: Record<Locale, Messages> = {
       developer: "Developer",
       text: "Text & Speech",
       image: "Images",
+      file: "Files",
     },
     topbar: {
       searchPlaceholder: "Search tools…",

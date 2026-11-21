@@ -11,6 +11,7 @@ import {
   KeyRound,
   Link2,
   LockKeyhole,
+  QrCode,
   Regex,
   ScanText,
   ShieldCheck,
@@ -21,6 +22,8 @@ import type { ToolIconName } from "../registry/tools";
 
 export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: number }) {
   switch (name) {
+    case "qr-code":
+      return <QrCode size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "braces":
       return <Braces size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "binary":
