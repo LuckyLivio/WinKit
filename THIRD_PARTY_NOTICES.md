@@ -6,13 +6,17 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 
 ### Frontend (npm)
 
-| Package                     | License           | Purpose                                                                             |
-| :-------------------------- | :---------------- | :---------------------------------------------------------------------------------- |
-| `react`, `react-dom`        | MIT               | UI component rendering                                                              |
-| `@tauri-apps/api`           | Apache-2.0 OR MIT | Tauri IPC, window and drag-drop bindings                                            |
-| `@tauri-apps/plugin-dialog` | Apache-2.0 OR MIT | Native Windows file open/save dialogs                                               |
-| `lucide-react`              | ISC               | Consistent linear stroke icons                                                      |
-| `geographiclib-geodesic`    | MIT               | Bundled offline Karney WGS 84 ellipsoid geodesic routines (`2.2.0`, Charles Karney) |
+| Package                     | License                                                   | Purpose                                                                             |
+| :-------------------------- | :-------------------------------------------------------- | :---------------------------------------------------------------------------------- |
+| `react`, `react-dom`        | MIT                                                       | UI component rendering                                                              |
+| `@tauri-apps/api`           | Apache-2.0 OR MIT                                         | Tauri IPC, window and drag-drop bindings                                            |
+| `@tauri-apps/plugin-dialog` | Apache-2.0 OR MIT                                         | Native Windows file open/save dialogs                                               |
+| `lucide-react`              | ISC                                                       | Consistent linear stroke icons                                                      |
+| `geographiclib-geodesic`    | MIT                                                       | Bundled offline Karney WGS 84 ellipsoid geodesic routines (`2.2.0`, Charles Karney) |
+| `qrcode`, `dijkstrajs`      | MIT                                                       | QR symbol encoding and segment selection                                            |
+| `zxing-wasm/reader`         | MIT (JavaScript), Apache-2.0 (ZXing-C++ and C++ bindings) | Offline barcode recognition in a local Worker                                       |
+
+F01 bundles the reader WASM from `zxing-wasm@3.1.7`. It contains ZXing-C++ at commit `f19f7c6e0509fe0eeb822bf35c41b0f637dec290`, the reader bindings, libzueci character conversion, stb image loading and Emscripten runtime code. The QR encoder is `qrcode@1.5.4`, based on Kazuhiko Arase's QRCode for JavaScript. Copyright notices and license texts for these components and the Windows integration are included in the desktop distribution. [F01 licenses](./licenses/F01.txt)
 
 ### Backend (Rust / Crates.io)
 
@@ -20,7 +24,7 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 | :---------------------------------------------------------------------------------------------------------------- | :--------------------------------------- | :-------------------------------------------------------------------------------------------------------- |
 | `tauri`, `tauri-build`                                                                                            | Apache-2.0 OR MIT                        | Desktop application framework and WebView2 host                                                           |
 | `tauri-plugin-dialog`                                                                                             | Apache-2.0 OR MIT                        | Native file dialog bridge                                                                                 |
-| `arboard`                                                                                                         | MIT OR Apache-2.0                        | User-initiated local clipboard text read/write (no background monitoring)                                 |
+| `arboard`                                                                                                         | MIT OR Apache-2.0                        | User-initiated local clipboard text and image transfers                                                   |
 | `serde`, `serde_json`                                                                                             | Apache-2.0 OR MIT                        | Structured IPC serialization                                                                              |
 | `md-5`                                                                                                            | MIT OR Apache-2.0                        | Pure-Rust RFC 1321 MD5 compatibility checksums                                                            |
 | `sha1`                                                                                                            | MIT OR Apache-2.0                        | Pure-Rust SHA-1 compatibility checksums                                                                   |
@@ -33,6 +37,8 @@ WinKit uses open-source libraries in its frontend (npm) and desktop backend (Car
 | `image`                                                                                                           | Apache-2.0 OR MIT                        | Pure-Rust PNG and JPEG decoding and encoding                                                              |
 | `base64`                                                                                                          | Apache-2.0 OR MIT                        | RFC 4648 Standard and URL-safe Base64 encoding and decoding                                               |
 | `thiserror`                                                                                                       | Apache-2.0 OR MIT                        | Structured error derivation                                                                               |
+| `clipboard-win`                                                                                                   | BSL-1.0                                  | Windows clipboard image access                                                                            |
+| `windows-sys`                                                                                                     | MIT OR Apache-2.0                        | Windows Shell API bindings for opening user-selected web links                                            |
 
 ## Development & Test Dependencies
 
