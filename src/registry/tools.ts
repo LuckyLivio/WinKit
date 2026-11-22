@@ -18,7 +18,9 @@ import { UnicodeInspectorWorkspace } from "../tools/unicode-inspector/UnicodeIns
 import { UuidGeneratorWorkspace } from "../tools/uuid-generator/UuidGeneratorWorkspace";
 import { WordCounterWorkspace } from "../tools/word-counter/WordCounterWorkspace";
 
-export type ToolCategory = "developer" | "text" | "image";
+import { QrWorkspace } from "../tools/qr-code/QrWorkspace";
+
+export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
 export type ToolIconName =
   | "braces"
@@ -37,6 +39,7 @@ export type ToolIconName =
   | "table-2"
   | "file-text"
   | "case-sensitive"
+  | "qr-code"
   | "frame";
 
 export interface RegisteredTool {
@@ -592,6 +595,33 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "frame",
     implementationStatus: "partial",
     component: ScreenshotBeautifierWorkspace,
+  },
+  {
+    id: "F01",
+    category: "file",
+    name: { "zh-CN": "二维码生成与识别", "en-US": "QR Code Generator & Reader" },
+    summary: {
+      "zh-CN": "为链接、文本或 Wi-Fi 生成二维码，从本地图片读取二维码和条形码。",
+      "en-US":
+        "Create QR codes for links, text or Wi-Fi, and read QR codes and barcodes from local images.",
+    },
+    keywords: [
+      "qr",
+      "qrcode",
+      "barcode",
+      "code 128",
+      "ean-13",
+      "wi-fi",
+      "wifi",
+      "二维码",
+      "条形码",
+      "条码",
+      "扫描",
+      "识别",
+    ],
+    icon: "qr-code",
+    implementationStatus: "full",
+    component: QrWorkspace,
   },
 ];
 

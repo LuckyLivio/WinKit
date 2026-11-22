@@ -66,7 +66,7 @@ export function HomeView({
             {(
               [
                 "all",
-                ...(["developer", "text", "image"] as const).filter((cat) =>
+                ...(["developer", "text", "image", "file"] as const).filter((cat) =>
                   tools.some((item) => item.category === cat),
                 ),
               ] as const
