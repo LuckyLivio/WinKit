@@ -38,7 +38,7 @@ F01 bundles the reader WASM from `zxing-wasm@3.1.7`. It contains ZXing-C++ at co
 | `base64`                                                                                                          | Apache-2.0 OR MIT                        | RFC 4648 Standard and URL-safe Base64 encoding and decoding                                               |
 | `thiserror`                                                                                                       | Apache-2.0 OR MIT                        | Structured error derivation                                                                               |
 | `clipboard-win`                                                                                                   | BSL-1.0                                  | Windows clipboard image access                                                                            |
-| `windows-sys`                                                                                                     | MIT OR Apache-2.0                        | Windows Shell API bindings for opening user-selected web links                                            |
+| `windows`, `windows-core`, `windows-sys`                                                                          | MIT OR Apache-2.0                        | Windows Win32 filesystem, COM `IFileOperation` Recycle Bin, and Shell API bindings                        |
 
 ## Development & Test Dependencies
 

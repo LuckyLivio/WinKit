@@ -20,6 +20,7 @@ import { WordCounterWorkspace } from "../tools/word-counter/WordCounterWorkspace
 
 import { QrWorkspace } from "../tools/qr-code/QrWorkspace";
 import { BatchRenameWorkspace } from "../tools/batch-rename/BatchRenameWorkspace";
+import { FindDuplicatesWorkspace } from "../tools/find-duplicates/FindDuplicatesWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -42,6 +43,7 @@ export type ToolIconName =
   | "case-sensitive"
   | "qr-code"
   | "file-pen-line"
+  | "folder-search"
   | "frame";
 
 export interface RegisteredTool {
@@ -655,6 +657,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "file-pen-line",
     implementationStatus: "full",
     component: BatchRenameWorkspace,
+  },
+  {
+    id: "F03",
+    category: "file",
+    name: { "zh-CN": "重复文件查找", "en-US": "Find Duplicates" },
+    summary: {
+      "zh-CN":
+        "跨多个文件夹按大小、首尾 64 KiB 与整文件 SHA-256 三级流式查找相同文件，强制每组至少保留一份并仅移入 Windows 回收站",
+      "en-US":
+        "Scan multiple folders recursively via size, head/tail 64 KiB, and streaming SHA-256, keeping at least one copy per group and moving extras to the Windows Recycle Bin",
+    },
+    keywords: [
+      "duplicate",
+      "duplicates",
+      "dedup",
+      "deduplicate",
+      "find duplicates",
+      "recycle bin",
+      "trash",
+      "same file",
+      "重复文件",
+      "去重",
+      "查重",
+      "回收站",
+      "释放空间",
+    ],
+    icon: "folder-search",
+    implementationStatus: "full",
+    component: FindDuplicatesWorkspace,
   },
 ];
 

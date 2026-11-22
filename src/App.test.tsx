@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 19 active tools with unique IDs, complete bilingual metadata, and Coordinate Picker search aliases", () => {
+  it("registers all 20 active tools with unique IDs, complete bilingual metadata, and Coordinate Picker search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -114,6 +114,7 @@ describe("WinKit desktop workbench shell", () => {
       "I03",
       "F01",
       "F02",
+      "F03",
     ]);
     for (const query of ["二维码", "barcode", "Wi-Fi"]) {
       expect(
@@ -124,6 +125,11 @@ describe("WinKit desktop workbench shell", () => {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "file" }).map((tool) => tool.id),
       ).toEqual(["F02"]);
+    }
+    for (const query of ["重复文件", "find duplicates", "查重"]) {
+      expect(
+        filterTools(REGISTERED_TOOLS, { query, category: "file" }).map((tool) => tool.id),
+      ).toEqual(["F03"]);
     }
     for (const tool of REGISTERED_TOOLS) {
       expect(tool.name["zh-CN"].length).toBeGreaterThan(0);
