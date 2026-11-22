@@ -2717,5 +2717,56 @@ mod tests {
             0,
             "staging directory must be cleaned up when written limit is exceeded"
         );
+
+        // 4) Mid-extraction cancellation cleans up staging directory and leaves original intact
+        let big_zip = dir.path().join("cancel_me.zip");
+        {
+            let mut z = ZipWriter::new(File::create(&big_zip).unwrap());
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            for i in 0..8 {
+                z.start_file(format!("chunk_{i}.bin"), opts).unwrap();
+                z.write_all(&vec![b'K'; 64 * 1024]).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        let orig_hash = sha256_file(&big_zip);
+        let cancel_out = dir.path().join("cancel_out");
+        fs::create_dir_all(&cancel_out).expect("mkdir cancel_out");
+        let mid_cancel = AtomicBool::new(false);
+        let cancel_res = extract_archives_batch_with_limit(
+            "test-cancel",
+            &ExtractArchivesRequest {
+                archive_paths: vec![
+                    zip_b.to_string_lossy().into_owned(),
+                    big_zip.to_string_lossy().into_owned(),
+                ],
+                output_parent_dir: cancel_out.to_string_lossy().into_owned(),
+                passwords: HashMap::new(),
+                skip_macos_metadata: true,
+                conflict_policy: ExtractConflictPolicy::UniqueFolder,
+            },
+            DEFAULT_MAX_EXTRACT_BYTES_PER_ARCHIVE,
+            &mid_cancel,
+            |prog| {
+                // Cancel once archive #2's staging directory has already been created.
+                if prog.current_index == 2 {
+                    mid_cancel.store(true, Ordering::SeqCst);
+                }
+            },
+        )
+        .expect("cancel batch");
+        assert!(cancel_res.cancelled);
+        assert_eq!(cancel_res.items[0].status, ArchiveExtractStatus::Extracted);
+        assert_eq!(cancel_res.items[1].status, ArchiveExtractStatus::Cancelled);
+        let entries_after_cancel: Vec<String> = fs::read_dir(&cancel_out)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            entries_after_cancel,
+            vec!["pack".to_string()],
+            "staging directory for cancelled archive #2 must be completely removed"
+        );
+        assert_eq!(sha256_file(&big_zip), orig_hash);
     }
 }

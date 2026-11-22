@@ -54,11 +54,24 @@ import type {
   DuplicateScanProgressPayload,
   DuplicateScanResult,
 } from "../tools/find-duplicates/findDuplicatesEngine";
+import type {
+  ArchiveCreateFormat,
+  ArchivePreviewResponse,
+  ArchiveProgressPayload,
+  CreateArchiveRequest,
+  CreateArchiveResponse,
+  ExtractArchivesBatchResponse,
+  ExtractArchivesRequest,
+  ExtractConflictPolicy,
+} from "../tools/archive/archiveModel";
 import {
   bindDisposableListener,
   cancelBackendTask,
+  createArchive,
+  extractArchivesBatch,
   parseBackendError,
   scanDuplicateFolders,
+  subscribeArchiveProgress,
   subscribeDuplicateScanProgress,
   type BatchRenameSkippedItem,
 } from "./tauriBridge";
@@ -301,6 +314,26 @@ export interface FindDuplicatesSessionState {
   errorMessage: string | null;
 }
 
+export interface ArchiveSessionState {
+  activeTab: "extract" | "create";
+  extractPaths: string[];
+  extractPreviews: Record<string, ArchivePreviewResponse>;
+  extractInspectErrors: Record<string, string>;
+  selectedPreviewPath: string | null;
+  outputParentDir: string;
+  skipMacosMetadata: boolean;
+  conflictPolicy: ExtractConflictPolicy;
+  createSourcePaths: string[];
+  createFormat: ArchiveCreateFormat;
+  createOutputPath: string;
+  status: "idle" | "extracting" | "creating";
+  activeTaskId: string | null;
+  liveProgress: ArchiveProgressPayload | null;
+  lastExtractReport: ExtractArchivesBatchResponse | null;
+  lastCreateReport: CreateArchiveResponse | null;
+  errorMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -321,6 +354,7 @@ export interface SessionWorkspaces {
   beautifier: BeautifierSessionState;
   batchRename: BatchRenameSessionState;
   findDuplicates: FindDuplicatesSessionState;
+  archive: ArchiveSessionState;
 }
 
 const INITIAL_SESSION_STATE: SessionWorkspaces = {
@@ -520,6 +554,25 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     lastRecycleReport: null,
     errorMessage: null,
   },
+  archive: {
+    activeTab: "extract",
+    extractPaths: [],
+    extractPreviews: {},
+    extractInspectErrors: {},
+    selectedPreviewPath: null,
+    outputParentDir: "",
+    skipMacosMetadata: true,
+    conflictPolicy: "unique_folder",
+    createSourcePaths: [],
+    createFormat: "zip",
+    createOutputPath: "",
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastExtractReport: null,
+    lastCreateReport: null,
+    errorMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -558,6 +611,19 @@ interface SessionStoreContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<void>;
   cancelDuplicateScan: () => Promise<void>;
+  updateArchiveSession: (
+    patchOrUpdater:
+      Partial<ArchiveSessionState> | ((prev: ArchiveSessionState) => ArchiveSessionState),
+  ) => void;
+  startArchiveExtract: (
+    request: ExtractArchivesRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<ExtractArchivesBatchResponse | null>;
+  startArchiveCreate: (
+    request: CreateArchiveRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<{ result: CreateArchiveResponse | null; errorCode: string | null }>;
+  cancelArchiveTask: () => Promise<void>;
 }
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
@@ -791,6 +857,180 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     await cancelBackendTask(taskId);
   }, []);
 
+  const archiveTaskSeqRef = useRef(1);
+  const activeArchiveTaskRef = useRef<string | null>(null);
+
+  const updateArchiveSession = useCallback(
+    (
+      patchOrUpdater:
+        Partial<ArchiveSessionState> | ((prev: ArchiveSessionState) => ArchiveSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        archive:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.archive)
+            : { ...prev.archive, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return bindDisposableListener(
+      () =>
+        subscribeArchiveProgress((payload) => {
+          setSession((prev) => {
+            if (prev.archive.activeTaskId !== payload.taskId) {
+              return prev;
+            }
+            return {
+              ...prev,
+              archive: {
+                ...prev.archive,
+                liveProgress: payload,
+              },
+            };
+          });
+        }),
+      "f04-session-archive-progress",
+    );
+  }, []);
+
+  const startArchiveExtract = useCallback(
+    async (
+      request: ExtractArchivesRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<ExtractArchivesBatchResponse | null> => {
+      if (activeArchiveTaskRef.current) return null;
+      const taskId = `f04-extract-${Date.now()}-${archiveTaskSeqRef.current++}`;
+      activeArchiveTaskRef.current = taskId;
+
+      setSession((prev) => ({
+        ...prev,
+        archive: {
+          ...prev.archive,
+          status: "extracting",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            operation: "extract",
+            currentIndex: 1,
+            totalItems: request.archivePaths.length,
+            currentItem: request.archivePaths[0] ?? "",
+            processedBytes: 0,
+            totalBytes: null,
+          },
+          errorMessage: null,
+        },
+      }));
+
+      try {
+        const result = await extractArchivesBatch(taskId, request);
+        if (activeArchiveTaskRef.current !== taskId) return null;
+        activeArchiveTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          archive: {
+            ...prev.archive,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastExtractReport: result,
+            errorMessage: null,
+          },
+        }));
+        return result;
+      } catch (err) {
+        if (activeArchiveTaskRef.current !== taskId) return null;
+        activeArchiveTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          archive: {
+            ...prev.archive,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const startArchiveCreate = useCallback(
+    async (
+      request: CreateArchiveRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<{ result: CreateArchiveResponse | null; errorCode: string | null }> => {
+      if (activeArchiveTaskRef.current) return { result: null, errorCode: null };
+      const taskId = `f04-create-${Date.now()}-${archiveTaskSeqRef.current++}`;
+      activeArchiveTaskRef.current = taskId;
+
+      setSession((prev) => ({
+        ...prev,
+        archive: {
+          ...prev.archive,
+          status: "creating",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            operation: "create",
+            currentIndex: 0,
+            totalItems: request.sourcePaths.length,
+            currentItem: request.sourcePaths[0] ?? "",
+            processedBytes: 0,
+            totalBytes: null,
+          },
+          lastCreateReport: null,
+          errorMessage: null,
+        },
+      }));
+
+      try {
+        const result = await createArchive(taskId, request);
+        if (activeArchiveTaskRef.current !== taskId) return { result: null, errorCode: null };
+        activeArchiveTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          archive: {
+            ...prev.archive,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastCreateReport: result,
+            errorMessage: null,
+          },
+        }));
+        return { result, errorCode: null };
+      } catch (err) {
+        if (activeArchiveTaskRef.current !== taskId) return { result: null, errorCode: null };
+        activeArchiveTaskRef.current = null;
+        const parsed = parseBackendError(err);
+        setSession((prev) => ({
+          ...prev,
+          archive: {
+            ...prev.archive,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: parsed.code === "TARGET_ALREADY_EXISTS" ? null : formatError(err),
+          },
+        }));
+        return { result: null, errorCode: parsed.code };
+      }
+    },
+    [],
+  );
+
+  const cancelArchiveTask = useCallback(async () => {
+    const taskId = activeArchiveTaskRef.current;
+    if (!taskId) return;
+    await cancelBackendTask(taskId);
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -816,6 +1056,10 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateFindDuplicatesSession,
         startDuplicateScan,
         cancelDuplicateScan,
+        updateArchiveSession,
+        startArchiveExtract,
+        startArchiveCreate,
+        cancelArchiveTask,
       }}
     >
       {children}

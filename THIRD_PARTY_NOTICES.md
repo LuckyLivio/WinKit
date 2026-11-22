@@ -39,6 +39,14 @@ F01 bundles the reader WASM from `zxing-wasm@3.1.7`. It contains ZXing-C++ at co
 | `thiserror`                                                                                                       | Apache-2.0 OR MIT                        | Structured error derivation                                                                               |
 | `clipboard-win`                                                                                                   | BSL-1.0                                  | Windows clipboard image access                                                                            |
 | `windows`, `windows-core`, `windows-sys`                                                                          | MIT OR Apache-2.0                        | Windows Win32 filesystem, COM `IFileOperation` Recycle Bin, and Shell API bindings                        |
+| `zip`                                                                                                             | MIT                                      | Pure-Rust ZIP archive reading, extraction, and creation (Deflate, AES-256, ZipCrypto)                     |
+| `sevenz-rust2`                                                                                                    | Apache-2.0                               | Pure-Rust 7z archive listing and extraction (including AES-256 password support)                          |
+| `unrar-rs`                                                                                                        | Apache-2.0 (with UnRAR restriction)      | Pure-Rust read-only RAR4/RAR5 archive listing and extraction                                              |
+| `tar`, `flate2`, `lzma-rust2`, `bzip2-rs`                                                                         | MIT OR Apache-2.0 / Apache-2.0           | Pure-Rust TAR, GZIP, XZ/LZMA2, and BZIP2 archive and single-stream codecs                                 |
+
+F04 uses `unrar-rs` (`0.16.x`, read-only extraction) under its Apache-2.0 license with the upstream UnRAR read-only restriction. Full license text is bundled in the desktop distribution ([F04 unrar-rs license](./licenses/F04-unrar-rs.txt)):
+
+> UnRAR source code may be used in any software to handle RAR archives without limitations free of charge, but cannot be used to develop RAR (WinRAR) compatible archiver and to re-create RAR compression algorithm, which is proprietary. Distribution of modified UnRAR source code in separate form or as a part of other software is permitted, provided that full text of this paragraph, starting from "UnRAR source code" words, is included in license, or in documentation if license is not available, and in source code comments of resulting package.
 
 ## Development & Test Dependencies
 

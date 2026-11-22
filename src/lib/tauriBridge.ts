@@ -47,6 +47,14 @@ import type {
   DuplicateScanResult,
   RecycleGroupPlan,
 } from "../tools/find-duplicates/findDuplicatesEngine";
+import type {
+  ArchivePreviewResponse,
+  ArchiveProgressPayload,
+  CreateArchiveRequest,
+  CreateArchiveResponse,
+  ExtractArchivesBatchResponse,
+  ExtractArchivesRequest,
+} from "../tools/archive/archiveModel";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -383,6 +391,18 @@ export async function pickMultipleFiles(options: {
     return [selected];
   }
   return [];
+}
+
+export async function pickSingleDirectory(options: { title?: string }): Promise<string | null> {
+  if (!isTauriDesktop()) {
+    return null;
+  }
+  const selected = await open({
+    multiple: false,
+    directory: true,
+    title: options.title,
+  });
+  return typeof selected === "string" ? selected : null;
 }
 
 export async function pickMultipleDirectories(options: { title?: string }): Promise<string[]> {
@@ -767,6 +787,57 @@ export async function subscribeDuplicateScanProgress(
     return () => {};
   }
   return listen<DuplicateScanProgressPayload>("winkit://duplicates-scan-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function inspectArchive(
+  path: string,
+  password?: string | null,
+): Promise<ArchivePreviewResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<ArchivePreviewResponse>("inspect_archive", {
+    path,
+    password: password ?? null,
+  });
+}
+
+export async function extractArchivesBatch(
+  taskId: string,
+  request: ExtractArchivesRequest,
+): Promise<ExtractArchivesBatchResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<ExtractArchivesBatchResponse>("extract_archives_batch", {
+    taskId,
+    request,
+  });
+}
+
+export async function createArchive(
+  taskId: string,
+  request: CreateArchiveRequest,
+): Promise<CreateArchiveResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<CreateArchiveResponse>("create_archive", {
+    taskId,
+    request,
+  });
+}
+
+export async function openLocalDirectory(path: string): Promise<void> {
+  if (!isTauriDesktop()) {
+    return;
+  }
+  await invoke<void>("open_local_directory", { path });
+}
+
+export async function subscribeArchiveProgress(
+  handler: (payload: ArchiveProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<ArchiveProgressPayload>("winkit://archive-progress", (event) => {
     handler(event.payload);
   });
 }
