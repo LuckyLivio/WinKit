@@ -1,3 +1,4 @@
+pub mod batch_rename;
 pub mod beautifier;
 pub mod codec;
 pub mod error;
@@ -10,6 +11,11 @@ pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
 
+use crate::batch_rename::{
+    execute_batch_rename_impl, inspect_sources_impl, undo_last_batch_rename_impl,
+    BatchRenameExecuteResponse, BatchRenameInspectResponse, BatchRenameState,
+    BatchRenameUndoStatus, RenamePairInput,
+};
 use crate::beautifier::{
     export_beautified_png_cancellable, inspect_source_image, BeautifyExportParams,
     BeautifyExportResult, SourceImageInspection,
@@ -677,6 +683,116 @@ async fn export_beautified_png<R: Runtime>(
 }
 
 #[tauri::command]
+async fn inspect_batch_rename_sources(
+    registry: State<'_, TaskRegistry>,
+    paths: Vec<String>,
+) -> Result<BatchRenameInspectResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || inspect_sources_impl(&paths))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "INTERNAL_JOIN_ERROR",
+                "Background batch rename source inspector failed.",
+            )
+        })?
+}
+
+#[tauri::command]
+async fn execute_batch_rename<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    rename_state: State<'_, BatchRenameState>,
+    operations: Vec<RenamePairInput>,
+    current_paths: Vec<String>,
+) -> Result<BatchRenameExecuteResponse, AppError> {
+    let task_id = next_internal_task_id("rename-f02");
+    let guard = registry.register_checked(&task_id, "F02", false)?;
+    let state_clone = rename_state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let total = Some(operations.len() as u64);
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, total),
+        );
+        let res = execute_batch_rename_impl(&state_clone, &operations, &current_paths);
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                let n = done.renamed_count as u64;
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, total, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background batch renamer failed."))?
+}
+
+#[tauri::command]
+async fn undo_last_batch_rename<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    rename_state: State<'_, BatchRenameState>,
+    current_paths: Vec<String>,
+) -> Result<BatchRenameExecuteResponse, AppError> {
+    let task_id = next_internal_task_id("undo-f02");
+    let guard = registry.register_checked(&task_id, "F02", false)?;
+    let state_clone = rename_state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = undo_last_batch_rename_impl(&state_clone, &current_paths);
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                let n = done.renamed_count as u64;
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background batch rename undo failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+fn get_batch_rename_undo_status(
+    rename_state: State<'_, BatchRenameState>,
+) -> BatchRenameUndoStatus {
+    rename_state.status()
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -717,6 +833,7 @@ fn abort_graceful_shutdown(registry: State<'_, TaskRegistry>) {
 pub fn run() {
     tauri::Builder::default()
         .manage(TaskRegistry::default())
+        .manage(BatchRenameState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
@@ -746,6 +863,10 @@ pub fn run() {
             qr::qr_copy_text,
             qr::qr_save_image,
             qr::qr_open_http_url,
+            inspect_batch_rename_sources,
+            execute_batch_rename,
+            undo_last_batch_rename,
+            get_batch_rename_undo_status,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,
