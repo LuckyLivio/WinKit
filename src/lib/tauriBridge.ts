@@ -307,7 +307,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.6.0",
+      version: "0.7.0",
       platform: "web-test",
       arch: "x86_64",
     };
