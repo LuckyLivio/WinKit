@@ -13,7 +13,7 @@ WinKit/
 │   ├── lib/                    # 偏好持久化、会话内存态、前端退出门控与 Worker 协调、Tauri IPC
 │   ├── registry/               # 轻量工具注册表 src/registry/tools.ts（稳定编号、分类、关键词、真实实现状态）
 │   ├── styles/                 # 语义色彩令牌与桌面自适应布局样式
-│   └── tools/                  # 当前真实上线的 19 个工具工作区、独立 Worker 与测试
+│   └── tools/                  # 当前真实上线的 20 个工具工作区、独立 Worker 与测试
 ├── src-tauri/                  # Rust 后端与桌面宿主配置
 │   ├── capabilities/           # 最小权限声明（core:default、core:window:allow-destroy、dialog 打开/保存）
 │   ├── icons/                  # 原创应用图标资源
@@ -61,6 +61,7 @@ WinKit/
 - **`D03` 哈希校验工具**：支持 `MD5`、`SHA-1`、`SHA-256`、`SHA-384`、`SHA-512` 单选或多选；文件模式在**单次 256 KB 分块流式读取**中同步更新全部选中摘要状态，避免重复读盘；`MD5`/`SHA-1` 明确标注仅用于兼容性校验；期望值比对按十六进制长度给出可解释候选算法提示。
 - **`F01` 二维码生成与识别**。生成结果绑定内容和样式，预览与图像输出共享二维码矩阵。读取前校验输入大小与图像尺寸，逐图在本地 Worker 中调用随应用分发的 ZXing-C++ WASM。识别得到的地址作为文本展示，打开浏览器来自单独的用户操作。
 - **`F02` 批量重命名**。前后端双重校验 Windows 文件名合法性与大小写不敏感槽位冲突；Rust 后端通过不带 `MOVEFILE_REPLACE_EXISTING` 标志的 Win32 `MoveFileExW(..., 0)` 执行 `原路径 -> 唯一临时路径 -> 目标路径` 两阶段事务，天然支持仅改大小写与互换循环，并在异常时按“已提交目标退回暂存名 → 暂存名退回原名”两步逆序回滚，杜绝静默覆盖外部文件。
+- **`F03` 重复文件查找**。扫描阶段采用显式目录栈与只读共享句柄（`FILE_SHARE_READ | WRITE | DELETE`），结合 `FILE_ID_INFO` / `BY_HANDLE_FILE_INFORMATION` 过滤指向同一物理分配的硬链接，按字节大小、首尾 64 KiB 指纹与 256 KiB 流式 SHA-256 三级收敛；移除阶段先复核保留副本与待移除项的物理标识及完整 SHA-256，再于独立 COM STA 线程执行带 `BitBucket` 策略预检和 `IFileOperationProgressSink::PreDeleteItem`（校验 `TSF_DELETE_RECYCLE_IF_POSSIBLE`）守护的 `IFileOperation`，从根源阻断任何向永久删除退化的路径。
 - **`D04` UUID 生成与解析**：使用操作系统 CSPRNG（Rust `uuid` crate / WebCrypto `getRandomValues`，绝不使用 `Math.random`）生成 RFC 9562 `v4` 与 `v7`；解析器严格区分版本位与变体位，仅对 `v7` 提取 48 位毫秒时间戳，绝不为 `v4` 编造时间。
 - **`D05` JWT 本地解码与验签**：复用 `D01` 无损 JSON AST 解析器保留 64 位整数声明，识别五段式 JWE 保护头并明确不解密；使用 Rust `hmac` + `subtle` 恒定时间实现直接对原始编码片段 `<headerB64>.<payloadB64>` 执行 `HS256`/`HS384`/`HS512` 验签（绝不重序列化 JSON），拦截未支持的 `crit` 关键扩展，严格分离展示结构解码、签名状态与 NumericDate 实时时间核对。
 - **`D06` Unix 时间戳转换**：全链路采用 `BigInt` 欧几里得整除/取模运算处理秒、毫秒、微秒、纳秒，杜绝 JS `Number` 舍入；严格校验格里高利历闰日，拒绝日期溢出自动滚月；对无偏移日期通过 `Intl.DateTimeFormat` 探测目标 IANA 时区窗口偏移，显式拦截并拒绝夏令时春季跳变缺失时刻与秋季回拨重复时刻。
