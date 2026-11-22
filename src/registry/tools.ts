@@ -21,6 +21,7 @@ import { WordCounterWorkspace } from "../tools/word-counter/WordCounterWorkspace
 import { QrWorkspace } from "../tools/qr-code/QrWorkspace";
 import { BatchRenameWorkspace } from "../tools/batch-rename/BatchRenameWorkspace";
 import { FindDuplicatesWorkspace } from "../tools/find-duplicates/FindDuplicatesWorkspace";
+import { ArchiveWorkspace } from "../tools/archive/ArchiveWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -44,6 +45,7 @@ export type ToolIconName =
   | "qr-code"
   | "file-pen-line"
   | "folder-search"
+  | "file-archive"
   | "frame";
 
 export interface RegisteredTool {
@@ -686,6 +688,37 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "folder-search",
     implementationStatus: "full",
     component: FindDuplicatesWorkspace,
+  },
+  {
+    id: "F04",
+    category: "file",
+    name: { "zh-CN": "压缩与解压", "en-US": "Zip & Unzip" },
+    summary: {
+      "zh-CN":
+        "离线预览与批量解压 ZIP、7z、RAR、TAR/TGZ/TXZ/TBZ2、单文件 GZ/XZ/BZ2 与 ISO，并支持创建标准/AES-256 加密 ZIP 及 TAR.GZ",
+      "en-US":
+        "Offline preview and isolated batch extraction for ZIP, 7z, RAR, TAR/GZ/XZ/BZ2, single-stream GZ/XZ/BZ2, and ISO, plus ZIP (standard/AES-256/ZipCrypto) and TAR.GZ creation",
+    },
+    keywords: [
+      "zip",
+      "unzip",
+      "archive",
+      "extract",
+      "compress",
+      "7z",
+      "rar",
+      "tar",
+      "targz",
+      "iso",
+      "aes",
+      "压缩",
+      "解压",
+      "归档",
+      "压缩包",
+    ],
+    icon: "file-archive",
+    implementationStatus: "full",
+    component: ArchiveWorkspace,
   },
 ];
 

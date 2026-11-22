@@ -33,7 +33,8 @@
     "targets": ["nsis"],
     "resources": {
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
-      "../licenses/F01.txt": "licenses/F01.txt"
+      "../licenses/F01.txt": "licenses/F01.txt",
+      "../licenses/F04-unrar-rs.txt": "licenses/F04-unrar-rs.txt"
     },
     "publisher": "Livio",
     "copyright": "Copyright (c) 2026 Livio",

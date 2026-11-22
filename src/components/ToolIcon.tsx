@@ -4,6 +4,7 @@ import {
   CaseSensitive,
   Clock,
   Compass,
+  FileArchive,
   FilePenLine,
   FileText,
   Fingerprint,
@@ -30,6 +31,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <FilePenLine size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "folder-search":
       return <FolderSearch size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "file-archive":
+      return <FileArchive size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "braces":
       return <Braces size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "binary":
