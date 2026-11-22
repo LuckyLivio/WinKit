@@ -2,6 +2,7 @@ pub mod batch_rename;
 pub mod beautifier;
 pub mod codec;
 pub mod error;
+pub mod find_duplicates;
 pub mod fs_guard;
 pub mod hasher;
 pub mod jwt;
@@ -25,6 +26,10 @@ use crate::codec::{
     transform_text_payload, CodecOptions, CodecTransformResponse,
 };
 use crate::error::AppError;
+use crate::find_duplicates::{
+    recycle_duplicate_groups_impl, scan_duplicates_impl, DuplicateRecycleResponse,
+    DuplicateScanOptions, DuplicateScanResult, RecycleGroupPlan, DUPLICATES_SCAN_PROGRESS_EVENT,
+};
 use crate::fs_guard::{
     paths_refer_to_same_location, read_strict_coord_batch_file, read_strict_diff_text_file,
     read_strict_tabular_text_file, read_utf8_text_file_bounded, suggest_safe_output_path,
@@ -793,6 +798,112 @@ fn get_batch_rename_undo_status(
 }
 
 #[tauri::command]
+async fn scan_duplicate_folders<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    options: DuplicateScanOptions,
+) -> Result<DuplicateScanResult, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid duplicate scan task ID."));
+    }
+    let owned_id = trimmed_id.to_string();
+    let guard = registry.register_checked(&owned_id, "F03", true)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+
+        let res = scan_duplicates_impl(&tid, &options, &cancel_flag, |scan_ev| {
+            let _ = app.emit(DUPLICATES_SCAN_PROGRESS_EVENT, scan_ev);
+        });
+
+        drop(guard);
+
+        match &res {
+            Ok(done) => {
+                let n = done.scanned_file_count as u64;
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background duplicate scanner failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn recycle_duplicate_groups<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    plans: Vec<RecycleGroupPlan>,
+) -> Result<DuplicateRecycleResponse, AppError> {
+    let task_id = next_internal_task_id("recycle-f03");
+    let guard = registry.register_checked(&task_id, "F03", false)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+
+        let res = recycle_duplicate_groups_impl(&plans);
+        drop(guard);
+
+        match &res {
+            Ok(done) => {
+                let n = done.recycled_count as u64;
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background duplicate recycle worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -867,6 +978,8 @@ pub fn run() {
             execute_batch_rename,
             undo_last_batch_rename,
             get_batch_rename_undo_status,
+            scan_duplicate_folders,
+            recycle_duplicate_groups,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,
