@@ -429,7 +429,7 @@ fn decode_hex_checked(
     }
 
     let mut out = Vec::with_capacity(nibbles.len() / 2);
-    for pair in nibbles.chunks_exact(2) {
+    for pair in nibbles.as_chunks::<2>().0 {
         out.push((pair[0] << 4) | pair[1]);
     }
     Ok(out)
@@ -491,7 +491,7 @@ fn decode_binary_checked(
     }
 
     let mut out = Vec::with_capacity(bits.len() / 8);
-    for group in bits.chunks_exact(8) {
+    for group in bits.as_chunks::<8>().0 {
         let mut byte = 0u8;
         for &b in group {
             byte = (byte << 1) | b;

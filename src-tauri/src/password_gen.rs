@@ -185,7 +185,7 @@ pub fn compute_constrained_password_bits(length: usize, class_sizes: &[usize]) -
         } else {
             (remaining as f64 / s_f64).powi(length as i32)
         };
-        if bits_set % 2 == 0 {
+        if bits_set.is_multiple_of(2) {
             prob_valid += ratio;
         } else {
             prob_valid -= ratio;

@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod batch_rename;
 pub mod beautifier;
 pub mod codec;
@@ -5,6 +6,7 @@ pub mod error;
 pub mod find_duplicates;
 pub mod fs_guard;
 pub mod hasher;
+pub mod iso_reader;
 pub mod jwt;
 pub mod password_gen;
 mod qr;
@@ -12,6 +14,12 @@ pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
 
+use crate::archive::{
+    create_archive_impl, extract_archives_batch_with_limit, inspect_archive_impl,
+    open_local_directory_impl, ArchivePreviewResponse, CreateArchiveRequest, CreateArchiveResponse,
+    ExtractArchivesBatchResponse, ExtractArchivesRequest, ARCHIVE_PROGRESS_EVENT,
+    DEFAULT_MAX_EXTRACT_BYTES_PER_ARCHIVE,
+};
 use crate::batch_rename::{
     execute_batch_rename_impl, inspect_sources_impl, undo_last_batch_rename_impl,
     BatchRenameExecuteResponse, BatchRenameInspectResponse, BatchRenameState,
@@ -904,6 +912,162 @@ async fn recycle_duplicate_groups<R: Runtime>(
 }
 
 #[tauri::command]
+async fn inspect_archive(
+    registry: State<'_, TaskRegistry>,
+    path: String,
+    password: Option<String>,
+) -> Result<ArchivePreviewResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || inspect_archive_impl(&path, password.as_deref()))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "INTERNAL_JOIN_ERROR",
+                "Background archive preview worker failed.",
+            )
+        })?
+}
+
+#[tauri::command]
+async fn extract_archives_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: ExtractArchivesRequest,
+) -> Result<ExtractArchivesBatchResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param(
+            "Invalid archive extraction task ID.",
+        ));
+    }
+    let owned_id = trimmed_id.to_string();
+    let guard = registry.register_checked(&owned_id, "F04", true)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+
+        let res = extract_archives_batch_with_limit(
+            &tid,
+            &req,
+            DEFAULT_MAX_EXTRACT_BYTES_PER_ARCHIVE,
+            &cancel_flag,
+            |ev| {
+                let _ = app.emit(ARCHIVE_PROGRESS_EVENT, ev);
+            },
+        );
+        drop(guard);
+
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = done.succeeded_count as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background archive extractor failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn create_archive<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: CreateArchiveRequest,
+) -> Result<CreateArchiveResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid archive creation task ID."));
+    }
+    let owned_id = trimmed_id.to_string();
+    let guard = registry.register_checked(&owned_id, "F04", true)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+
+        let res = create_archive_impl(&tid, &req, &cancel_flag, |ev| {
+            let _ = app.emit(ARCHIVE_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        &tool,
+                        done.output_byte_length,
+                        Some(done.output_byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background archive creator failed."))?
+}
+
+#[tauri::command]
+fn open_local_directory(registry: State<'_, TaskRegistry>, path: String) -> Result<(), AppError> {
+    registry.ensure_not_shutting_down()?;
+    open_local_directory_impl(&path)
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -980,6 +1144,10 @@ pub fn run() {
             get_batch_rename_undo_status,
             scan_duplicate_folders,
             recycle_duplicate_groups,
+            inspect_archive,
+            extract_archives_batch,
+            create_archive,
+            open_local_directory,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,
