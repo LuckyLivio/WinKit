@@ -40,6 +40,13 @@ import {
   type SecretGenResponse,
 } from "../tools/password-generator/passwordEngine";
 import type { BatchRenameSourceEntry } from "../tools/batch-rename/batchRenameEngine";
+import type {
+  DuplicateRecycleResponse,
+  DuplicateScanOptions,
+  DuplicateScanProgressPayload,
+  DuplicateScanResult,
+  RecycleGroupPlan,
+} from "../tools/find-duplicates/findDuplicatesEngine";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -733,6 +740,35 @@ export async function getBatchRenameUndoStatus(): Promise<BatchRenameUndoStatus>
     return { available: false, itemCount: 0, completedAtMs: null };
   }
   return invoke<BatchRenameUndoStatus>("get_batch_rename_undo_status");
+}
+
+export async function scanDuplicateFolders(
+  taskId: string,
+  options: DuplicateScanOptions,
+): Promise<DuplicateScanResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<DuplicateScanResult>("scan_duplicate_folders", {
+    taskId,
+    options,
+  });
+}
+
+export async function recycleDuplicateGroups(
+  plans: RecycleGroupPlan[],
+): Promise<DuplicateRecycleResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<DuplicateRecycleResponse>("recycle_duplicate_groups", { plans });
+}
+
+export async function subscribeDuplicateScanProgress(
+  handler: (payload: DuplicateScanProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<DuplicateScanProgressPayload>("winkit://duplicates-scan-progress", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function subscribeTaskProgress(

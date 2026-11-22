@@ -7,6 +7,7 @@ import {
   FilePenLine,
   FileText,
   Fingerprint,
+  FolderSearch,
   Frame,
   GitCompareArrows,
   KeyRound,
@@ -27,6 +28,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <QrCode size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "file-pen-line":
       return <FilePenLine size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "folder-search":
+      return <FolderSearch size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "braces":
       return <Braces size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "binary":

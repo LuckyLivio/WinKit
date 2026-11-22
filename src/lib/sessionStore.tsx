@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   Base64WrapWidth,
   CodecFormat,
@@ -40,7 +48,20 @@ import {
   type RenameRule,
   type RenameSort,
 } from "../tools/batch-rename/renameRulesModel";
-import type { BatchRenameSkippedItem } from "./tauriBridge";
+import type {
+  DuplicateRecycleResponse,
+  DuplicateScanOptions,
+  DuplicateScanProgressPayload,
+  DuplicateScanResult,
+} from "../tools/find-duplicates/findDuplicatesEngine";
+import {
+  bindDisposableListener,
+  cancelBackendTask,
+  parseBackendError,
+  scanDuplicateFolders,
+  subscribeDuplicateScanProgress,
+  type BatchRenameSkippedItem,
+} from "./tauriBridge";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -263,6 +284,23 @@ export interface BatchRenameSessionState {
   lastBanner: { tone: "ok" | "warn" | "err"; text: string } | null;
 }
 
+export type DuplicateMinSizeUnit = "B" | "KiB" | "MiB";
+
+export interface FindDuplicatesSessionState {
+  rootPaths: string[];
+  minSizeInput: string;
+  minSizeUnit: DuplicateMinSizeUnit;
+  includeHidden: boolean;
+  preferredKeepFolder: string;
+  status: "idle" | "scanning" | "recycling" | "completed" | "cancelled" | "error";
+  activeTaskId: string | null;
+  liveProgress: DuplicateScanProgressPayload | null;
+  scanResult: DuplicateScanResult | null;
+  selectedPaths: string[];
+  lastRecycleReport: DuplicateRecycleResponse | null;
+  errorMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -282,6 +320,7 @@ export interface SessionWorkspaces {
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
   batchRename: BatchRenameSessionState;
+  findDuplicates: FindDuplicatesSessionState;
 }
 
 const INITIAL_SESSION_STATE: SessionWorkspaces = {
@@ -467,6 +506,20 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     filterMode: "all",
     lastBanner: null,
   },
+  findDuplicates: {
+    rootPaths: [],
+    minSizeInput: "0",
+    minSizeUnit: "B",
+    includeHidden: false,
+    preferredKeepFolder: "",
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    scanResult: null,
+    selectedPaths: [],
+    lastRecycleReport: null,
+    errorMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -495,6 +548,16 @@ interface SessionStoreContextValue {
       | Partial<BatchRenameSessionState>
       | ((prev: BatchRenameSessionState) => BatchRenameSessionState),
   ) => void;
+  updateFindDuplicatesSession: (
+    patchOrUpdater:
+      | Partial<FindDuplicatesSessionState>
+      | ((prev: FindDuplicatesSessionState) => FindDuplicatesSessionState),
+  ) => void;
+  startDuplicateScan: (
+    options: DuplicateScanOptions,
+    formatError: (err: unknown) => string,
+  ) => Promise<void>;
+  cancelDuplicateScan: () => Promise<void>;
 }
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
@@ -602,6 +665,132 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const dupScanSeqRef = useRef(1);
+  const activeDupTaskRef = useRef<string | null>(null);
+
+  const updateFindDuplicatesSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<FindDuplicatesSessionState>
+        | ((prev: FindDuplicatesSessionState) => FindDuplicatesSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        findDuplicates:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.findDuplicates)
+            : { ...prev.findDuplicates, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return bindDisposableListener(
+      () =>
+        subscribeDuplicateScanProgress((payload) => {
+          setSession((prev) => {
+            if (prev.findDuplicates.activeTaskId !== payload.taskId) {
+              return prev;
+            }
+            return {
+              ...prev,
+              findDuplicates: {
+                ...prev.findDuplicates,
+                liveProgress: payload,
+              },
+            };
+          });
+        }),
+      "f03-session-scan-progress",
+    );
+  }, []);
+
+  const startDuplicateScan = useCallback(
+    async (options: DuplicateScanOptions, formatError: (err: unknown) => string) => {
+      if (activeDupTaskRef.current) return;
+      const taskId = `f03-scan-${Date.now()}-${dupScanSeqRef.current++}`;
+      activeDupTaskRef.current = taskId;
+
+      setSession((prev) => ({
+        ...prev,
+        findDuplicates: {
+          ...prev.findDuplicates,
+          status: "scanning",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            phase: "walking",
+            scannedFiles: 0,
+            candidateFiles: 0,
+            processedBytes: 0,
+            totalCandidateBytes: null,
+            currentPath: options.rootPaths[0] ?? null,
+          },
+          scanResult: null,
+          selectedPaths: [],
+          lastRecycleReport: null,
+          errorMessage: null,
+        },
+      }));
+
+      try {
+        const result = await scanDuplicateFolders(taskId, options);
+        if (activeDupTaskRef.current !== taskId) return;
+        activeDupTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          findDuplicates: {
+            ...prev.findDuplicates,
+            status: "completed",
+            activeTaskId: null,
+            liveProgress: null,
+            scanResult: result,
+            // Default: 0 items checked after scan
+            selectedPaths: [],
+            preferredKeepFolder:
+              prev.findDuplicates.preferredKeepFolder || (result.effectiveRoots[0] ?? ""),
+            errorMessage: null,
+          },
+        }));
+      } catch (err) {
+        if (activeDupTaskRef.current !== taskId) return;
+        activeDupTaskRef.current = null;
+        const parsed = parseBackendError(err);
+        if (parsed.code === "TASK_CANCELLED") {
+          setSession((prev) => ({
+            ...prev,
+            findDuplicates: {
+              ...prev.findDuplicates,
+              status: "cancelled",
+              activeTaskId: null,
+              liveProgress: null,
+              errorMessage: null,
+            },
+          }));
+        } else {
+          setSession((prev) => ({
+            ...prev,
+            findDuplicates: {
+              ...prev.findDuplicates,
+              status: "error",
+              activeTaskId: null,
+              liveProgress: null,
+              errorMessage: formatError(err),
+            },
+          }));
+        }
+      }
+    },
+    [],
+  );
+
+  const cancelDuplicateScan = useCallback(async () => {
+    const taskId = activeDupTaskRef.current;
+    if (!taskId) return;
+    await cancelBackendTask(taskId);
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -624,6 +813,9 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateCaseConverterSession,
         updateBeautifierSession,
         updateBatchRenameSession,
+        updateFindDuplicatesSession,
+        startDuplicateScan,
+        cancelDuplicateScan,
       }}
     >
       {children}
