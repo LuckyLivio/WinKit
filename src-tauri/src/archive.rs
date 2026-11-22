@@ -2412,36 +2412,111 @@ mod tests {
             }
         }
 
-        // Verify independent Windows bsdtar can list WinKit's created normal.zip & bundle.tar.gz & aes256.zip!
+        // Verify independent Windows tools can open WinKit-created archives across ALL Windows locales (CP1252 / CP936):
+        // 1) .NET System.IO.Compression.ZipFile (PowerShell) verifies UTF-8 Chinese paths & empty file in normal.zip
+        // 2) Host Windows bsdtar verifies standard ZIP, TAR.GZ, ZipCrypto ZIP, and AES-256 ZIP (`--passphrase`) decryption
         #[cfg(windows)]
         {
-            for name in ["normal.zip", "bundle.tar.gz", "aes256.zip", "zipcrypto.zip"] {
-                let status = Command::new("tar")
-                    .arg("-tf")
-                    .arg(dir.path().join(name))
-                    .status()
-                    .expect("run host tar");
-                assert!(status.success(), "host bsdtar failed listing {name}");
-            }
-            // Also verify independent host bsdtar actually extracts WinKit's AES-256 ZIP using `--passphrase`!
-            let ext_aes_dir = dir.path().join("bsdtar_aes_verify");
-            fs::create_dir_all(&ext_aes_dir).expect("mkdir");
-            let ext_out = Command::new("tar")
-                .args(["--passphrase", "Pass#2026!", "-xf"])
-                .arg(dir.path().join("aes256.zip"))
-                .arg("-C")
-                .arg(&ext_aes_dir)
+            let ps_out_dir = dir.path().join("dotnet_zip_verify");
+            fs::create_dir_all(&ps_out_dir).expect("mkdir dotnet_zip_verify");
+            let ps_script = format!(
+                "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('{}', '{}')",
+                dir.path().join("normal.zip").to_string_lossy().replace('\'', "''"),
+                ps_out_dir.to_string_lossy().replace('\'', "''")
+            );
+            let ps_out = Command::new("powershell")
+                .args(["-NoProfile", "-Command", &ps_script])
                 .output()
-                .expect("run host bsdtar extract aes256");
+                .expect("run powershell ZipFile verify");
             assert!(
-                ext_out.status.success(),
-                "independent bsdtar failed decrypting WinKit AES-256 ZIP: {}",
-                String::from_utf8_lossy(&ext_out.stderr)
+                ps_out.status.success(),
+                "independent .NET ZipFile failed extracting UTF-8 normal.zip: {}",
+                String::from_utf8_lossy(&ps_out.stderr)
             );
             assert_eq!(
-                sha256_file(&ext_aes_dir.join("资料包_中文").join("报告_2026.txt")),
+                sha256_file(&ps_out_dir.join("资料包_中文").join("报告_2026.txt")),
                 expected_cn_hash
             );
+            assert_eq!(
+                sha256_file(
+                    &ps_out_dir
+                        .join("资料包_中文")
+                        .join("子目录")
+                        .join("空文件.txt")
+                ),
+                expected_empty_hash
+            );
+
+            // ASCII-named fixture for host bsdtar interop (Windows bsdtar uses CP_ACP which cannot represent CJK on en-US runners)
+            let ascii_src = dir.path().join("ascii_pack");
+            fs::create_dir_all(&ascii_src).expect("mkdir ascii_pack");
+            let ascii_file = ascii_src.join("report_2026.txt");
+            fs::write(&ascii_file, b"WinKit cross-tool archive payload 2026").expect("write ascii");
+            let ascii_hash = sha256_file(&ascii_file);
+
+            for (name, fmt, pwd) in [
+                ("ascii_normal.zip", ArchiveCreateFormat::Zip, None),
+                ("ascii_bundle.tar.gz", ArchiveCreateFormat::TarGz, None),
+                (
+                    "ascii_aes256.zip",
+                    ArchiveCreateFormat::ZipAes256,
+                    Some("Pass#2026!".to_string()),
+                ),
+                (
+                    "ascii_zipcrypto.zip",
+                    ArchiveCreateFormat::ZipZipcrypto,
+                    Some("Pass#2026!".to_string()),
+                ),
+            ] {
+                let out_path = dir.path().join(name);
+                create_archive_impl(
+                    "test-ascii-create",
+                    &CreateArchiveRequest {
+                        source_paths: vec![ascii_src.to_string_lossy().into_owned()],
+                        output_path: out_path.to_string_lossy().into_owned(),
+                        format: fmt,
+                        password: pwd.clone(),
+                        overwrite: false,
+                    },
+                    &cancel,
+                    |_| {},
+                )
+                .expect("create ascii interop archive");
+
+                let list_out = Command::new("tar")
+                    .arg("-tf")
+                    .arg(&out_path)
+                    .output()
+                    .expect("run host tar -tf");
+                assert!(
+                    list_out.status.success(),
+                    "host bsdtar failed listing {name}: {}",
+                    String::from_utf8_lossy(&list_out.stderr)
+                );
+
+                let ext_dir = dir.path().join(format!("bsdtar_verify_{name}"));
+                fs::create_dir_all(&ext_dir).expect("mkdir ext_dir");
+                let mut cmd = Command::new("tar");
+                if let Some(pass) = pwd.as_deref() {
+                    cmd.args(["--passphrase", pass]);
+                }
+                let ext_out = cmd
+                    .arg("-xf")
+                    .arg(&out_path)
+                    .arg("-C")
+                    .arg(&ext_dir)
+                    .output()
+                    .expect("run host bsdtar extract");
+                assert!(
+                    ext_out.status.success(),
+                    "independent bsdtar failed extracting {name}: {}",
+                    String::from_utf8_lossy(&ext_out.stderr)
+                );
+                assert_eq!(
+                    sha256_file(&ext_dir.join("ascii_pack").join("report_2026.txt")),
+                    ascii_hash
+                );
+            }
         }
     }
 
