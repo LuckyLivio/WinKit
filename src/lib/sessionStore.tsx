@@ -33,6 +33,14 @@ import type {
   CoordinateOutputFormatId,
   PlainTextAxisOrder,
 } from "../tools/coordinate-converter/coordinateEngine";
+import type { BatchRenameSourceEntry } from "../tools/batch-rename/batchRenameEngine";
+import {
+  DEFAULT_RENAME_RULE,
+  DEFAULT_RENAME_SORT,
+  type RenameRule,
+  type RenameSort,
+} from "../tools/batch-rename/renameRulesModel";
+import type { BatchRenameSkippedItem } from "./tauriBridge";
 
 export type JsonIndentOption = "2" | "4" | "tab";
 export type JsonModeOption = "format" | "minify" | "validate";
@@ -245,6 +253,16 @@ export interface BeautifierSessionState {
   lastSavedMessage: string | null;
 }
 
+export interface BatchRenameSessionState {
+  entries: BatchRenameSourceEntry[];
+  existingDirSiblings: Record<string, string[]>;
+  skipped: BatchRenameSkippedItem[];
+  rule: RenameRule;
+  sort: RenameSort;
+  filterMode: "all" | "changed" | "issues";
+  lastBanner: { tone: "ok" | "warn" | "err"; text: string } | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -263,6 +281,7 @@ export interface SessionWorkspaces {
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   beautifier: BeautifierSessionState;
+  batchRename: BatchRenameSessionState;
 }
 
 const INITIAL_SESSION_STATE: SessionWorkspaces = {
@@ -439,6 +458,15 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     aspectRatio: "original",
     lastSavedMessage: null,
   },
+  batchRename: {
+    entries: [],
+    existingDirSiblings: {},
+    skipped: [],
+    rule: DEFAULT_RENAME_RULE,
+    sort: DEFAULT_RENAME_SORT,
+    filterMode: "all",
+    lastBanner: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -462,6 +490,11 @@ interface SessionStoreContextValue {
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
   updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
+  updateBatchRenameSession: (
+    patchOrUpdater:
+      | Partial<BatchRenameSessionState>
+      | ((prev: BatchRenameSessionState) => BatchRenameSessionState),
+  ) => void;
 }
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
@@ -552,6 +585,23 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, beautifier: { ...prev.beautifier, ...patch } }));
   };
 
+  const updateBatchRenameSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<BatchRenameSessionState>
+        | ((prev: BatchRenameSessionState) => BatchRenameSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        batchRename:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.batchRename)
+            : { ...prev.batchRename, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -573,6 +623,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateWordCounterSession,
         updateCaseConverterSession,
         updateBeautifierSession,
+        updateBatchRenameSession,
       }}
     >
       {children}

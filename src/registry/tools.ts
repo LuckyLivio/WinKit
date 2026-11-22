@@ -19,6 +19,7 @@ import { UuidGeneratorWorkspace } from "../tools/uuid-generator/UuidGeneratorWor
 import { WordCounterWorkspace } from "../tools/word-counter/WordCounterWorkspace";
 
 import { QrWorkspace } from "../tools/qr-code/QrWorkspace";
+import { BatchRenameWorkspace } from "../tools/batch-rename/BatchRenameWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -40,6 +41,7 @@ export type ToolIconName =
   | "file-text"
   | "case-sensitive"
   | "qr-code"
+  | "file-pen-line"
   | "frame";
 
 export interface RegisteredTool {
@@ -622,6 +624,37 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "qr-code",
     implementationStatus: "full",
     component: QrWorkspace,
+  },
+  {
+    id: "F02",
+    category: "file",
+    name: { "zh-CN": "批量重命名", "en-US": "Batch Rename" },
+    summary: {
+      "zh-CN":
+        "支持查找替换、正则捕获组、前后缀、序号日期与大小写规则，执行前全量预览冲突并支持一键撤销最近批次",
+      "en-US":
+        "Batch rename files with find/replace, regex captures, prefix/suffix, numbering, dates, or case changes with full conflict preview and undo",
+    },
+    keywords: [
+      "rename",
+      "batch rename",
+      "bulk rename",
+      "prefix",
+      "suffix",
+      "numbering",
+      "sequence",
+      "filename",
+      "undo",
+      "批量重命名",
+      "重命名",
+      "改名",
+      "前后缀",
+      "序号",
+      "撤销",
+    ],
+    icon: "file-pen-line",
+    implementationStatus: "full",
+    component: BatchRenameWorkspace,
   },
 ];
 
