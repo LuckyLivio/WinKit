@@ -22,6 +22,7 @@ import { QrWorkspace } from "../tools/qr-code/QrWorkspace";
 import { BatchRenameWorkspace } from "../tools/batch-rename/BatchRenameWorkspace";
 import { FindDuplicatesWorkspace } from "../tools/find-duplicates/FindDuplicatesWorkspace";
 import { ArchiveWorkspace } from "../tools/archive/ArchiveWorkspace";
+import { OrganizeDownloadsWorkspace } from "../tools/organize-downloads/OrganizeDownloadsWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -46,6 +47,7 @@ export type ToolIconName =
   | "file-pen-line"
   | "folder-search"
   | "file-archive"
+  | "folder-input"
   | "frame";
 
 export interface RegisteredTool {
@@ -719,6 +721,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "file-archive",
     implementationStatus: "full",
     component: ArchiveWorkspace,
+  },
+  {
+    id: "F05",
+    category: "file",
+    name: { "zh-CN": "下载图片按来源归档", "en-US": "Organize Downloads" },
+    summary: {
+      "zh-CN":
+        "针对手动选择的本地图片目录读取 NTFS Zone.Identifier 下载来源域名，支持可编辑 CDN 站点映射、防覆盖同卷移动并原样保留安全流",
+      "en-US":
+        "Inspect NTFS Zone.Identifier source domains in a user-selected image folder, map CDNs to friendly site folders, and move without overwriting while preserving ZoneId",
+    },
+    keywords: [
+      "organize",
+      "downloads",
+      "zone.identifier",
+      "ads",
+      "domain",
+      "source",
+      "images",
+      "archive",
+      "下载图片",
+      "按来源归档",
+      "来源归档",
+      "归档",
+      "图床",
+    ],
+    icon: "folder-input",
+    implementationStatus: "full",
+    component: OrganizeDownloadsWorkspace,
   },
 ];
 

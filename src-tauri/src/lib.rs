@@ -8,6 +8,7 @@ pub mod fs_guard;
 pub mod hasher;
 pub mod iso_reader;
 pub mod jwt;
+pub mod organize_downloads;
 pub mod password_gen;
 mod qr;
 pub mod tasks;
@@ -50,6 +51,10 @@ use crate::hasher::{
     MultiFileBatchHashResult, MultiFileHashResult, MultiTextHashResult, HASH_BATCH_ITEM_EVENT,
 };
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
+use crate::organize_downloads::{
+    execute_organize_downloads_impl, preview_organize_downloads_impl, OrganizeExecuteRequest,
+    OrganizeExecuteResponse, OrganizePreviewRequest, OrganizePreviewResponse,
+};
 use crate::password_gen::{generate_secrets_with_os_rng, SecretGenRequest, SecretGenResponse};
 use crate::tasks::{
     CloseRequestDecision, ShutdownDrainResult, TaskProgressPayload, TaskRegistry,
@@ -1068,6 +1073,68 @@ fn open_local_directory(registry: State<'_, TaskRegistry>, path: String) -> Resu
 }
 
 #[tauri::command]
+async fn preview_organize_downloads(
+    registry: State<'_, TaskRegistry>,
+    req: OrganizePreviewRequest,
+) -> Result<OrganizePreviewResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || preview_organize_downloads_impl(&req))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "INTERNAL_JOIN_ERROR",
+                "Background organize-downloads preview worker failed.",
+            )
+        })?
+}
+
+#[tauri::command]
+async fn execute_organize_downloads<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: OrganizeExecuteRequest,
+) -> Result<OrganizeExecuteResponse, AppError> {
+    let task_id = next_internal_task_id("f05-organize");
+    let guard = registry.register_checked(&task_id, "F05", false)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+
+        let res = execute_organize_downloads_impl(&req);
+        drop(guard);
+
+        match &res {
+            Ok(done) => {
+                let n = done.moved_count as u64;
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Background organize-downloads execution worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -1148,6 +1215,8 @@ pub fn run() {
             extract_archives_batch,
             create_archive,
             open_local_directory,
+            preview_organize_downloads,
+            execute_organize_downloads,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,

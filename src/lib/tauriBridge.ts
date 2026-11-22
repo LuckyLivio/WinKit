@@ -55,6 +55,12 @@ import type {
   ExtractArchivesBatchResponse,
   ExtractArchivesRequest,
 } from "../tools/archive/archiveModel";
+import type {
+  OrganizeExecuteRequest,
+  OrganizeExecuteResponse,
+  OrganizePreviewRequest,
+  OrganizePreviewResponse,
+} from "../tools/organize-downloads/organizeEngine";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -322,7 +328,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.8.0",
+      version: "0.9.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -809,7 +815,7 @@ export async function extractArchivesBatch(
   assertFrontendNotShuttingDown();
   return invoke<ExtractArchivesBatchResponse>("extract_archives_batch", {
     taskId,
-    request,
+    req: request,
   });
 }
 
@@ -820,7 +826,7 @@ export async function createArchive(
   assertFrontendNotShuttingDown();
   return invoke<CreateArchiveResponse>("create_archive", {
     taskId,
-    request,
+    req: request,
   });
 }
 
@@ -829,6 +835,20 @@ export async function openLocalDirectory(path: string): Promise<void> {
     return;
   }
   await invoke<void>("open_local_directory", { path });
+}
+
+export async function previewOrganizeDownloads(
+  req: OrganizePreviewRequest,
+): Promise<OrganizePreviewResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<OrganizePreviewResponse>("preview_organize_downloads", { req });
+}
+
+export async function executeOrganizeDownloads(
+  req: OrganizeExecuteRequest,
+): Promise<OrganizeExecuteResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<OrganizeExecuteResponse>("execute_organize_downloads", { req });
 }
 
 export async function subscribeArchiveProgress(
