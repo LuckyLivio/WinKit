@@ -8,6 +8,7 @@ import {
   FilePenLine,
   FileText,
   Fingerprint,
+  FolderInput,
   FolderSearch,
   Frame,
   GitCompareArrows,
@@ -33,6 +34,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <FolderSearch size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "file-archive":
       return <FileArchive size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "folder-input":
+      return <FolderInput size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "braces":
       return <Braces size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "binary":

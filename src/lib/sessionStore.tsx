@@ -65,6 +65,13 @@ import type {
   ExtractConflictPolicy,
 } from "../tools/archive/archiveModel";
 import {
+  DEFAULT_DOMAIN_MAPPINGS,
+  type DomainMappingRule,
+  type OrganizeExecuteResponse,
+  type OrganizeNamingMode,
+  type OrganizePreviewResponse,
+} from "../tools/organize-downloads/organizeEngine";
+import {
   bindDisposableListener,
   cancelBackendTask,
   createArchive,
@@ -334,6 +341,16 @@ export interface ArchiveSessionState {
   errorMessage: string | null;
 }
 
+export interface OrganizeDownloadsSessionState {
+  folderPath: string;
+  namingMode: OrganizeNamingMode;
+  moveUnknownToFolder: boolean;
+  mappings: DomainMappingRule[];
+  preview: OrganizePreviewResponse | null;
+  lastExecution: OrganizeExecuteResponse | null;
+  errorMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -355,6 +372,7 @@ export interface SessionWorkspaces {
   batchRename: BatchRenameSessionState;
   findDuplicates: FindDuplicatesSessionState;
   archive: ArchiveSessionState;
+  organizeDownloads: OrganizeDownloadsSessionState;
 }
 
 const INITIAL_SESSION_STATE: SessionWorkspaces = {
@@ -573,6 +591,15 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     lastCreateReport: null,
     errorMessage: null,
   },
+  organizeDownloads: {
+    folderPath: "",
+    namingMode: "site_alias",
+    moveUnknownToFolder: false,
+    mappings: DEFAULT_DOMAIN_MAPPINGS.map((m) => ({ ...m })),
+    preview: null,
+    lastExecution: null,
+    errorMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -624,6 +651,11 @@ interface SessionStoreContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<{ result: CreateArchiveResponse | null; errorCode: string | null }>;
   cancelArchiveTask: () => Promise<void>;
+  updateOrganizeDownloadsSession: (
+    patchOrUpdater:
+      | Partial<OrganizeDownloadsSessionState>
+      | ((prev: OrganizeDownloadsSessionState) => OrganizeDownloadsSessionState),
+  ) => void;
 }
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
@@ -1031,6 +1063,23 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     await cancelBackendTask(taskId);
   }, []);
 
+  const updateOrganizeDownloadsSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<OrganizeDownloadsSessionState>
+        | ((prev: OrganizeDownloadsSessionState) => OrganizeDownloadsSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        organizeDownloads:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.organizeDownloads)
+            : { ...prev.organizeDownloads, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -1060,6 +1109,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         startArchiveExtract,
         startArchiveCreate,
         cancelArchiveTask,
+        updateOrganizeDownloadsSession,
       }}
     >
       {children}
