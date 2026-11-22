@@ -39,6 +39,7 @@ import {
   type SecretGenRequest,
   type SecretGenResponse,
 } from "../tools/password-generator/passwordEngine";
+import type { BatchRenameSourceEntry } from "../tools/batch-rename/batchRenameEngine";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -149,6 +150,42 @@ export interface BeautifyExportResult {
   outputWidth: number;
   outputHeight: number;
   byteLength: number;
+}
+
+export interface BatchRenameSkippedItem {
+  path: string;
+  reason: string;
+}
+
+export interface BatchRenameInspectResponse {
+  entries: BatchRenameSourceEntry[];
+  existingDirSiblings: Record<string, string[]>;
+  skipped: BatchRenameSkippedItem[];
+}
+
+export interface RenamePairInput {
+  sourcePath: string;
+  newName: string;
+}
+
+export interface RenamedItemReport {
+  oldPath: string;
+  newPath: string;
+  oldName: string;
+  newName: string;
+}
+
+export interface BatchRenameUndoStatus {
+  available: boolean;
+  itemCount: number;
+  completedAtMs: number | null;
+}
+
+export interface BatchRenameExecuteResponse {
+  renamedCount: number;
+  items: RenamedItemReport[];
+  updatedInspection: BatchRenameInspectResponse;
+  undoStatus: BatchRenameUndoStatus;
 }
 
 export interface TaskProgressPayload {
@@ -331,6 +368,24 @@ export async function pickMultipleFiles(options: {
     directory: false,
     title: options.title,
     filters: options.filters,
+  });
+  if (Array.isArray(selected)) {
+    return selected.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof selected === "string") {
+    return [selected];
+  }
+  return [];
+}
+
+export async function pickMultipleDirectories(options: { title?: string }): Promise<string[]> {
+  if (!isTauriDesktop()) {
+    return [];
+  }
+  const selected = await open({
+    multiple: true,
+    directory: true,
+    title: options.title,
   });
   if (Array.isArray(selected)) {
     return selected.filter((item): item is string => typeof item === "string");
@@ -641,6 +696,43 @@ export async function exportBeautifiedImage(
 ): Promise<BeautifyExportResult> {
   assertFrontendNotShuttingDown();
   return invoke<BeautifyExportResult>("export_beautified_png", { params });
+}
+
+export async function inspectBatchRenameSources(
+  paths: string[],
+): Promise<BatchRenameInspectResponse> {
+  assertFrontendNotShuttingDown();
+  if (!isTauriDesktop()) {
+    return { entries: [], existingDirSiblings: {}, skipped: [] };
+  }
+  return invoke<BatchRenameInspectResponse>("inspect_batch_rename_sources", { paths });
+}
+
+export async function executeBatchRename(
+  operations: RenamePairInput[],
+  currentPaths: string[],
+): Promise<BatchRenameExecuteResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchRenameExecuteResponse>("execute_batch_rename", {
+    operations,
+    currentPaths,
+  });
+}
+
+export async function undoLastBatchRename(
+  currentPaths: string[],
+): Promise<BatchRenameExecuteResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchRenameExecuteResponse>("undo_last_batch_rename", {
+    currentPaths,
+  });
+}
+
+export async function getBatchRenameUndoStatus(): Promise<BatchRenameUndoStatus> {
+  if (!isTauriDesktop()) {
+    return { available: false, itemCount: 0, completedAtMs: null };
+  }
+  return invoke<BatchRenameUndoStatus>("get_batch_rename_undo_status");
 }
 
 export async function subscribeTaskProgress(

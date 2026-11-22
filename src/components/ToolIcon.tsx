@@ -4,6 +4,7 @@ import {
   CaseSensitive,
   Clock,
   Compass,
+  FilePenLine,
   FileText,
   Fingerprint,
   Frame,
@@ -24,6 +25,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
   switch (name) {
     case "qr-code":
       return <QrCode size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "file-pen-line":
+      return <FilePenLine size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "braces":
       return <Braces size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "binary":
