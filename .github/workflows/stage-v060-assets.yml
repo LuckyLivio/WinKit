@@ -1,0 +1,46 @@
+name: Stage v0.6.0 release assets
+
+on:
+  push:
+    branches: [release/v0.6.0-assets]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN: "44979125582"
+      SOURCE_SHA: 14aebb98cc0b8629bf971051f7653a7d56ad563b
+      INSTALLER: WinKit_0.6.0_x64-setup.exe
+      EXPECTED_HASH: 11722ce0831e83270867523d3338710dd8bced01522f126efd69d263468a5c18
+    steps:
+      - name: Verify source run and release tag
+        run: |
+          set -euo pipefail
+          test "$(gh run view "$SOURCE_RUN" --json headSha,conclusion --jq '.headSha + ":" + .conclusion')" = "$SOURCE_SHA:success"
+          tag_object=$(gh api "repos/$GH_REPO/git/ref/tags/v0.6.0" --jq .object.sha)
+          test "$(gh api "repos/$GH_REPO/git/tags/$tag_object" --jq .object.sha)" = "$SOURCE_SHA"
+          test "$(gh release view v0.6.0 --json isDraft --jq .isDraft)" = true
+      - name: Download the verified Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 44979125582
+          name: WinKit-windows-x64-14aebb98cc0b8629bf971051f7653a7d56ad563b
+          path: release-artifact
+      - name: Check and attach the installer and checksum to the draft
+        working-directory: release-artifact
+        run: |
+          set -euo pipefail
+          test "$(jq -r .commit artifact.json)" = "$SOURCE_SHA"
+          test "$(jq -r .authenticode artifact.json)" = NotSigned
+          test "$(stat -c %s "$INSTALLER")" = 3440852
+          test "$(sha256sum "$INSTALLER" | cut -d ' ' -f 1)" = "$EXPECTED_HASH"
+          sha256sum --check --strict SHA256SUMS.txt
+          gh release upload v0.6.0 "$INSTALLER" SHA256SUMS.txt
