@@ -120,8 +120,8 @@ jobs:
               Start-Sleep -Milliseconds 250
               $app.Refresh()
               if ($app.HasExited) { throw "Application exited during startup: $($app.ExitCode)" }
-            } while (!$app.MainWindowHandle -and [DateTime]::UtcNow -lt $deadline)
-            if ($app.MainWindowHandle) {
+            } while ($app.MainWindowHandle -eq [IntPtr]::Zero -and [DateTime]::UtcNow -lt $deadline)
+            if ($app.MainWindowHandle -ne [IntPtr]::Zero) {
               if (!$app.CloseMainWindow() -or !$app.WaitForExit(15000) -or $app.ExitCode -ne 0) {
                 throw "Application did not close normally"
               }
