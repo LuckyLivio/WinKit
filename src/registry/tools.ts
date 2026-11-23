@@ -29,6 +29,8 @@ import { ImageCompressWorkspace } from "../tools/image-compress/ImageCompressWor
 import { ImageResizeWorkspace } from "../tools/image-resize/ImageResizeWorkspace";
 import { ImageRotateWorkspace } from "../tools/image-rotate/ImageRotateWorkspace";
 import { ImageMetadataWorkspace } from "../tools/image-metadata/ImageMetadataWorkspace";
+import { ImageRedactWorkspace } from "../tools/image-redact/ImageRedactWorkspace";
+import { ImageAnnotateWorkspace } from "../tools/image-annotate/ImageAnnotateWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -60,7 +62,9 @@ export type ToolIconName =
   | "image-compress"
   | "image-resize"
   | "image-rotate"
-  | "image-metadata";
+  | "image-metadata"
+  | "image-redact"
+  | "image-annotate";
 
 export interface RegisteredTool {
   id: string;
@@ -797,6 +801,68 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "image-metadata",
     implementationStatus: "full",
     component: ImageMetadataWorkspace,
+  },
+  {
+    id: "I11",
+    category: "image",
+    name: { "zh-CN": "图片局部打码", "en-US": "Redact Image" },
+    summary: {
+      "zh-CN":
+        "多区域模糊、像素化与不透明实色遮盖，导出或交接时将遮盖不可逆烘焙为平坦像素并可选复用 I09 清理隐私元数据",
+      "en-US":
+        "Multi-region blur, pixelate, and opaque solid cover that bakes redactions destructively into flat pixels with optional I09 privacy metadata stripping",
+    },
+    keywords: [
+      "redact",
+      "blur",
+      "pixelate",
+      "mosaic",
+      "censor",
+      "hide",
+      "privacy",
+      "mask",
+      "打码",
+      "马赛克",
+      "遮盖",
+      "模糊",
+      "隐私",
+      "涂抹",
+    ],
+    icon: "image-redact",
+    implementationStatus: "partial",
+    component: ImageRedactWorkspace,
+  },
+  {
+    id: "I12",
+    category: "image",
+    name: { "zh-CN": "截图批注", "en-US": "Annotate Screenshot" },
+    summary: {
+      "zh-CN":
+        "提供箭头、直线、矩形、椭圆、中文文字、高亮、连续编号、画笔、局部模糊与裁剪，锁定原图像素并以原分辨率复制或导出",
+      "en-US":
+        "Annotate screenshots with arrows, lines, shapes, Chinese/English text, highlights, numbered steps, brush, local blur, and pixel-exact crop at full resolution",
+    },
+    keywords: [
+      "annotate",
+      "markup",
+      "arrow",
+      "callout",
+      "highlight",
+      "crop",
+      "draw",
+      "text",
+      "number",
+      "批注",
+      "标注",
+      "箭头",
+      "编号",
+      "高亮",
+      "裁剪",
+      "截图编辑",
+    ],
+    icon: "image-annotate",
+    implementationStatus: "full",
+    component: ImageAnnotateWorkspace,
   },
   {
     id: "F01",

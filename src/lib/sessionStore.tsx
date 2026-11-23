@@ -7,6 +7,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { AnnotateToolKind, AnnotationItem } from "../tools/image-annotate/annotationRenderer";
+import {
+  DEFAULT_VIEWPORT,
+  type PixelRect,
+  type ViewportState,
+} from "../tools/image-editor/canvasViewport";
 import type {
   Base64WrapWidth,
   CodecFormat,
@@ -111,6 +117,7 @@ import {
   type CaptureResultPayload,
   type CaptureWindowInfo,
   type ImageAssetPayload,
+  type RedactionKind,
 } from "./tauriBridge";
 
 export type JsonIndentOption = "2" | "4" | "tab";
@@ -487,6 +494,67 @@ export interface ImageMetadataSessionState {
   errorMessage: string | null;
 }
 
+export interface RedactRegionItem {
+  id: string;
+  kind: RedactionKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  strength: number;
+  colorHex: string;
+}
+
+export interface ImageRedactSessionState {
+  assetId: string | null;
+  sourcePath: string | null;
+  sourceFileName: string | null;
+  dataUrl: string | null;
+  width: number | null;
+  height: number | null;
+  hasAlpha: boolean;
+  activeTool: "select" | RedactionKind;
+  defaultStrength: number;
+  defaultColorHex: string;
+  stripMetadata: boolean;
+  regions: RedactRegionItem[];
+  undoStack: RedactRegionItem[][];
+  redoStack: RedactRegionItem[][];
+  selectedId: string | null;
+  viewport: ViewportState;
+  lastSavedMessage: string | null;
+}
+
+export interface ImageAnnotateSnapshot {
+  items: AnnotationItem[];
+  cropRect: PixelRect | null;
+}
+
+export interface ImageAnnotateSessionState {
+  assetId: string | null;
+  sourcePath: string | null;
+  sourceFileName: string | null;
+  dataUrl: string | null;
+  width: number | null;
+  height: number | null;
+  hasAlpha: boolean;
+  activeTool: AnnotateToolKind;
+  color: string;
+  highlightColor: string;
+  strokeWidth: number;
+  fontSize: number;
+  textBackgroundPill: boolean;
+  blurStrength: number;
+  nextNumber: number;
+  items: AnnotationItem[];
+  cropRect: PixelRect | null;
+  undoStack: ImageAnnotateSnapshot[];
+  redoStack: ImageAnnotateSnapshot[];
+  selectedId: string | null;
+  viewport: ViewportState;
+  lastSavedMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -506,6 +574,8 @@ export interface SessionWorkspaces {
   caseConverter: CaseConverterSessionState;
   screenCapture: ScreenCaptureSessionState;
   beautifier: BeautifierSessionState;
+  imageRedact: ImageRedactSessionState;
+  imageAnnotate: ImageAnnotateSessionState;
   batchRename: BatchRenameSessionState;
   findDuplicates: FindDuplicatesSessionState;
   archive: ArchiveSessionState;
@@ -840,6 +910,49 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     lastReport: null,
     errorMessage: null,
   },
+  imageRedact: {
+    assetId: null,
+    sourcePath: null,
+    sourceFileName: null,
+    dataUrl: null,
+    width: null,
+    height: null,
+    hasAlpha: false,
+    activeTool: "solid",
+    defaultStrength: 14,
+    defaultColorHex: "#111827",
+    stripMetadata: true,
+    regions: [],
+    undoStack: [],
+    redoStack: [],
+    selectedId: null,
+    viewport: { ...DEFAULT_VIEWPORT },
+    lastSavedMessage: null,
+  },
+  imageAnnotate: {
+    assetId: null,
+    sourcePath: null,
+    sourceFileName: null,
+    dataUrl: null,
+    width: null,
+    height: null,
+    hasAlpha: false,
+    activeTool: "arrow",
+    color: "#DC2626",
+    highlightColor: "#FDE047",
+    strokeWidth: 4,
+    fontSize: 22,
+    textBackgroundPill: true,
+    blurStrength: 14,
+    nextNumber: 1,
+    items: [],
+    cropRect: null,
+    undoStack: [],
+    redoStack: [],
+    selectedId: null,
+    viewport: { ...DEFAULT_VIEWPORT },
+    lastSavedMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -876,6 +989,16 @@ interface SessionStoreContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<BatchImageJobResponse | null>;
   cancelBeautifyBatch: () => Promise<void>;
+  updateImageRedactSession: (
+    patchOrUpdater:
+      | Partial<ImageRedactSessionState>
+      | ((prev: ImageRedactSessionState) => ImageRedactSessionState),
+  ) => void;
+  updateImageAnnotateSession: (
+    patchOrUpdater:
+      | Partial<ImageAnnotateSessionState>
+      | ((prev: ImageAnnotateSessionState) => ImageAnnotateSessionState),
+  ) => void;
   handoffImageToTool: (targetToolId: ImageHandoffTarget, asset: ImageAssetPayload) => void;
   updateBatchRenameSession: (
     patchOrUpdater:
@@ -1088,6 +1211,40 @@ export function SessionStoreProvider({
     [],
   );
 
+  const updateImageRedactSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ImageRedactSessionState>
+        | ((prev: ImageRedactSessionState) => ImageRedactSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        imageRedact:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.imageRedact)
+            : { ...prev.imageRedact, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  const updateImageAnnotateSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ImageAnnotateSessionState>
+        | ((prev: ImageAnnotateSessionState) => ImageAnnotateSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        imageAnnotate:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.imageAnnotate)
+            : { ...prev.imageAnnotate, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
   const handoffImageToTool = useCallback(
     (targetToolId: ImageHandoffTarget, asset: ImageAssetPayload) => {
       if (targetToolId === "I03") {
@@ -1103,6 +1260,48 @@ export function SessionStoreProvider({
             sourceWidth: asset.width,
             sourceHeight: asset.height,
             hasAlpha: asset.hasAlpha,
+            lastSavedMessage: null,
+          },
+        }));
+      } else if (targetToolId === "I11") {
+        setSession((prev) => ({
+          ...prev,
+          imageRedact: {
+            ...prev.imageRedact,
+            assetId: asset.assetId,
+            sourcePath: null,
+            sourceFileName: asset.label,
+            dataUrl: asset.dataUrl,
+            width: asset.width,
+            height: asset.height,
+            hasAlpha: asset.hasAlpha,
+            regions: [],
+            undoStack: [],
+            redoStack: [],
+            selectedId: null,
+            viewport: { ...DEFAULT_VIEWPORT },
+            lastSavedMessage: null,
+          },
+        }));
+      } else if (targetToolId === "I12") {
+        setSession((prev) => ({
+          ...prev,
+          imageAnnotate: {
+            ...prev.imageAnnotate,
+            assetId: asset.assetId,
+            sourcePath: null,
+            sourceFileName: asset.label,
+            dataUrl: asset.dataUrl,
+            width: asset.width,
+            height: asset.height,
+            hasAlpha: asset.hasAlpha,
+            items: [],
+            cropRect: null,
+            undoStack: [],
+            redoStack: [],
+            selectedId: null,
+            nextNumber: 1,
+            viewport: { ...DEFAULT_VIEWPORT },
             lastSavedMessage: null,
           },
         }));
@@ -1995,6 +2194,8 @@ export function SessionStoreProvider({
         updateBeautifierSession,
         startBeautifyBatch,
         cancelBeautifyBatch,
+        updateImageRedactSession,
+        updateImageAnnotateSession,
         handoffImageToTool,
         updateBatchRenameSession,
         updateFindDuplicatesSession,

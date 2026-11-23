@@ -9,6 +9,7 @@ pub mod hasher;
 pub mod image_assets;
 pub mod image_core;
 pub mod image_metadata;
+pub mod image_redact;
 pub mod image_transform;
 pub mod iso_reader;
 pub mod jwt;
@@ -70,6 +71,10 @@ use crate::image_core::{
     PreviewConvertImageResponse, IMAGE_BATCH_PROGRESS_EVENT,
 };
 use crate::image_metadata::{strip_images_metadata_batch_impl, StripMetadataBatchRequest};
+use crate::image_redact::{
+    apply_image_redactions_to_asset_impl, export_redacted_image_file_impl,
+    ApplyRedactionsAssetRequest, ExportRedactedImageRequest, ExportRedactedImageResult,
+};
 use crate::image_transform::{
     preview_rotate_image_impl, resize_images_batch_impl, rotate_images_batch_impl,
     PreviewRotateImageRequest, PreviewRotateImageResponse, ResizeImagesBatchRequest,
@@ -1991,6 +1996,69 @@ async fn execute_organize_downloads<R: Runtime>(
 }
 
 #[tauri::command]
+async fn apply_image_redactions_to_asset(
+    registry: State<'_, TaskRegistry>,
+    store: State<'_, ImageAssetStore>,
+    req: ApplyRedactionsAssetRequest,
+) -> Result<ImageAssetPayload, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || apply_image_redactions_to_asset_impl(&store, &req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image redaction worker failed."))?
+}
+
+#[tauri::command]
+async fn export_redacted_image_file<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    store: State<'_, ImageAssetStore>,
+    req: ExportRedactedImageRequest,
+) -> Result<ExportRedactedImageResult, AppError> {
+    let task_id = next_internal_task_id("i11-redact-export");
+    let guard = registry.register_checked(&task_id, "I11", false)?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = export_redacted_image_file_impl(&store, &req, &cancel_flag);
+        drop(guard);
+        match &res {
+            Ok(saved) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        &tool,
+                        saved.byte_length,
+                        Some(saved.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Image redaction export worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -2100,6 +2168,8 @@ pub fn run() {
             copy_image_asset_to_clipboard,
             read_clipboard_image_as_asset,
             save_image_asset_file,
+            apply_image_redactions_to_asset,
+            export_redacted_image_file,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
