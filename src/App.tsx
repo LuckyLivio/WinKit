@@ -28,10 +28,12 @@ import {
   bindDisposableListener,
   destroyCurrentWindow,
   discardAudioRecording,
+  discardScreenRecording,
   fetchRuntimeInfo,
   formatLocalizedError,
   requestWindowClose,
   stopAudioRecording,
+  stopScreenRecording,
   subscribeNativeCloseRequest,
   subscribeTaskProgress,
   type AppRuntimeInfo,
@@ -204,9 +206,15 @@ export function App({ toolsOverride }: AppProps = {}) {
       shutdownState.phase === "confirming" ? (shutdownState.recordingToolIds ?? []) : [];
     resetFrontendShutdownGate();
     setCoordinatedShutdown({ phase: "idle" });
+    if (recTools.includes("V05")) {
+      await stopScreenRecording().catch(() => {});
+      setRoute({ kind: "tool", toolId: "V05" });
+    }
     if (recTools.includes("A02")) {
       await stopAudioRecording().catch(() => {});
-      setRoute({ kind: "tool", toolId: "A02" });
+      if (!recTools.includes("V05")) {
+        setRoute({ kind: "tool", toolId: "A02" });
+      }
     }
   }, [setCoordinatedShutdown, shutdownState]);
 
@@ -221,6 +229,9 @@ export function App({ toolsOverride }: AppProps = {}) {
     setCoordinatedShutdown({ phase: "draining" });
 
     try {
+      if (recTools.includes("V05")) {
+        await discardScreenRecording().catch(() => {});
+      }
       if (recTools.includes("A02")) {
         await discardAudioRecording().catch(() => {});
       }

@@ -52,6 +52,7 @@ import { AudioConvertWorkspace } from "../tools/audio-convert/AudioConvertWorksp
 import { AudioCleanupWorkspace } from "../tools/audio-cleanup/AudioCleanupWorkspace";
 import { VideoReplaceAudioWorkspace } from "../tools/video-replace-audio/VideoReplaceAudioWorkspace";
 import { VideoSubtitlesWorkspace } from "../tools/video-subtitles/VideoSubtitlesWorkspace";
+import { ScreenRecorderWorkspace } from "../tools/screen-recorder/ScreenRecorderWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -106,7 +107,8 @@ export type ToolIconName =
   | "audio-convert"
   | "audio-cleanup"
   | "video-replace-audio"
-  | "video-subtitles";
+  | "video-subtitles"
+  | "screen-record";
 
 export interface RegisteredTool {
   id: string;
@@ -1245,6 +1247,37 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "video-frames",
     implementationStatus: "full",
     component: VideoFramesWorkspace,
+  },
+  {
+    id: "V05",
+    category: "video",
+    name: { "zh-CN": "屏幕录制", "en-US": "Record Screen" },
+    summary: {
+      "zh-CN":
+        "基于 Windows.Graphics.Capture 录制显示器、单个窗口或高分屏框选区域，支持 WASAPI 系统声音与麦克风独立/混录、30/60 fps、H.264 MP4/MOV、指针与点击高亮及置顶无入画状态条",
+      "en-US":
+        "Record a display, single window, or DPI-accurate region with Windows.Graphics.Capture, optional WASAPI system audio and microphone mixing, 30/60 fps H.264 MP4/MOV, cursor/click highlight, and excluded floating status HUD",
+    },
+    keywords: [
+      "v05",
+      "record screen",
+      "screen recorder",
+      "screen capture",
+      "wgc",
+      "wasapi",
+      "loopback",
+      "mp4",
+      "mov",
+      "60fps",
+      "屏幕录制",
+      "录屏",
+      "录制窗口",
+      "区域录屏",
+      "系统声音",
+    ],
+    icon: "screen-record",
+    implementationStatus: "full",
+    component: ScreenRecorderWorkspace,
   },
   {
     id: "V06",

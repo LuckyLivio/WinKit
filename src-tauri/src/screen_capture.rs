@@ -1300,6 +1300,73 @@ mod win_impl {
         }
     }
 
+    /// Reuses I01's Z-ordered `PrintWindow(PW_RENDERFULLCONTENT)` compositor to render a physical-pixel
+    /// region directly into a BGRA frame buffer on non-Default / secondary desktops where DWM/GDI
+    /// display surfaces belong to the primary Default desktop.
+    pub fn capture_region_bgra_composited(
+        rect: CaptureRect,
+        include_cursor: bool,
+        out_bgra: &mut [u8],
+    ) -> bool {
+        let expected = (rect.width as usize) * (rect.height as usize) * 4;
+        if rect.width == 0 || rect.height == 0 || out_bgra.len() != expected {
+            return false;
+        }
+        unsafe {
+            let screen_dc = GetDC(None);
+            if screen_dc.is_invalid() {
+                return false;
+            }
+            let mem_dc = CreateCompatibleDC(Some(screen_dc));
+            if mem_dc.is_invalid() {
+                let _ = ReleaseDC(None, screen_dc);
+                return false;
+            }
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: rect.width as i32,
+                    biHeight: -(rect.height as i32),
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..std::mem::zeroed()
+                },
+                ..std::mem::zeroed()
+            };
+            let mut bits_ptr: *mut std::ffi::c_void = null_mut();
+            let mut ok = false;
+            if let Ok(hbitmap) = CreateDIBSection(
+                Some(screen_dc),
+                &bmi,
+                DIB_RGB_COLORS,
+                &mut bits_ptr,
+                None,
+                0,
+            ) {
+                if !bits_ptr.is_null() {
+                    let old = SelectObject(mem_dc, HGDIOBJ(hbitmap.0));
+                    ok = composite_unlocked_windows_fallback(mem_dc, screen_dc, rect);
+                    if ok && include_cursor {
+                        draw_cursor_onto_dc(mem_dc, rect.x, rect.y, rect.width, rect.height);
+                    }
+                    if ok {
+                        let src = std::slice::from_raw_parts(bits_ptr as *const u8, expected);
+                        out_bgra.copy_from_slice(src);
+                        for px in out_bgra.as_chunks_mut::<4>().0 {
+                            px[3] = 255;
+                        }
+                    }
+                    let _ = SelectObject(mem_dc, old);
+                }
+                let _ = DeleteObject(HGDIOBJ(hbitmap.0));
+            }
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(None, screen_dc);
+            ok
+        }
+    }
+
     /// Captures a specific top-level window using PrintWindow(PW_RENDERFULLCONTENT)
     /// so partially occluded windows capture their full un-occluded contents, while
     /// strictly respecting Windows display affinity (protected content).
@@ -2340,6 +2407,52 @@ pub fn list_capture_windows_impl() -> Vec<CaptureWindowInfo> {
     #[cfg(not(windows))]
     {
         Vec::new()
+    }
+}
+
+#[cfg(windows)]
+pub fn capture_region_bgra_composited_impl(
+    rect: CaptureRect,
+    include_cursor: bool,
+    out_bgra: &mut [u8],
+) -> bool {
+    win_impl::capture_region_bgra_composited(rect, include_cursor, out_bgra)
+}
+
+/// Reuses I01's DPI-aware frozen full-virtual-screen region selector to pick a physical-pixel rectangle
+/// without capturing an image asset (used by V05 Screen Recorder region selection).
+pub fn pick_screen_region_rect_impl(
+    prompt: &str,
+    cancel_flag: &AtomicBool,
+) -> Result<CaptureRect, AppError> {
+    #[cfg(windows)]
+    {
+        let virt = win_impl::virtual_screen_rect();
+        let frozen = win_impl::capture_screen_rect(virt, false)?;
+        let selected = win_impl::select_region_over_frozen(&frozen, virt, prompt, cancel_flag)?;
+        let rel_x = (selected.x - virt.x).max(0) as u32;
+        let rel_y = (selected.y - virt.y).max(0) as u32;
+        let cw = selected.width.min(frozen.width().saturating_sub(rel_x));
+        let ch = selected.height.min(frozen.height().saturating_sub(rel_y));
+        if cw < 4 || ch < 4 {
+            return Err(AppError::invalid_param(
+                "Selected recording region is too small (minimum 4x4 pixels).",
+            ));
+        }
+        Ok(CaptureRect {
+            x: selected.x,
+            y: selected.y,
+            width: cw,
+            height: ch,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (prompt, cancel_flag);
+        Err(AppError::new(
+            "CAPTURE_UNAVAILABLE",
+            "Interactive region selection is supported on Windows 11.",
+        ))
     }
 }
 
