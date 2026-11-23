@@ -40,6 +40,8 @@ import { VideoMuteWorkspace } from "../tools/video-mute/VideoMuteWorkspace";
 import { AudioExtractWorkspace } from "../tools/audio-extract/AudioExtractWorkspace";
 import { VideoFramesWorkspace } from "../tools/video-frames/VideoFramesWorkspace";
 import { VideoGifWorkspace } from "../tools/video-gif/VideoGifWorkspace";
+import { VideoConvertWorkspace } from "../tools/video-convert/VideoConvertWorkspace";
+import { VideoCompressWorkspace } from "../tools/video-compress/VideoCompressWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -82,7 +84,9 @@ export type ToolIconName =
   | "video-mute"
   | "audio-extract"
   | "video-frames"
-  | "video-gif";
+  | "video-gif"
+  | "video-convert"
+  | "video-compress";
 
 export interface RegisteredTool {
   id: string;
@@ -1160,6 +1164,60 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "video-frames",
     implementationStatus: "full",
     component: VideoFramesWorkspace,
+  },
+  {
+    id: "V06",
+    category: "video",
+    name: { "zh-CN": "视频压缩", "en-US": "Compress Video" },
+    summary: {
+      "zh-CN":
+        "高质量/均衡/小体积三档与 H.264/HEVC 压缩，支持原尺寸/1080p/720p/480p 上限（小视频不放大），压后未缩小默认保留原件并记录实际编码器",
+      "en-US":
+        "Compress videos with High/Balanced/Small presets, H.264 or HEVC, non-upscaling resolution caps, verified hardware encoder detection, and keep-original protection",
+    },
+    keywords: [
+      "compress video",
+      "shrink video",
+      "h264",
+      "hevc",
+      "h265",
+      "nvenc",
+      "crf",
+      "视频压缩",
+      "减小体积",
+      "压缩视频",
+    ],
+    icon: "video-compress",
+    implementationStatus: "full",
+    component: VideoCompressWorkspace,
+  },
+  {
+    id: "V07",
+    category: "video",
+    name: { "zh-CN": "视频格式转换", "en-US": "Convert Video" },
+    summary: {
+      "zh-CN":
+        "支持单文件与批量转换为 MP4、MOV、WebM（VP9/Opus）、M4V 与 MKV，开始前逐轨展示直拷/重编码与容器限制，导出后由 ffprobe 核验实际编码与轨道",
+      "en-US":
+        "Convert single or batch videos to MP4, MOV, WebM (VP9/Opus), M4V, or MKV with pre-run per-track compatibility analysis and post-export ffprobe verification",
+    },
+    keywords: [
+      "convert video",
+      "remux",
+      "mp4",
+      "mov",
+      "webm",
+      "m4v",
+      "mkv",
+      "vp9",
+      "opus",
+      "视频格式转换",
+      "转码",
+      "封装",
+    ],
+    icon: "video-convert",
+    implementationStatus: "full",
+    component: VideoConvertWorkspace,
   },
   {
     id: "V10",

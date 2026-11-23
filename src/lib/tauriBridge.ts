@@ -1945,3 +1945,190 @@ export async function convertVideoToGif(
   assertFrontendNotShuttingDown();
   return invoke<ConvertVideoToGifResult>("convert_video_to_gif", { req });
 }
+
+// ---------- Phase 4B1 PR 1: V07 Convert Video & V06 Compress Video ----------
+
+export type VideoConvertFormat = "mp4" | "mov" | "webm" | "m4v" | "mkv";
+export type TrackConvertAction = "copy" | "transcode" | "drop";
+export type ConvertOverallMode = "remux_only" | "mixed" | "full_transcode";
+
+export interface TrackConvertPlan {
+  streamIndex: number;
+  streamType: string;
+  sourceCodec: string;
+  language: string | null;
+  title: string | null;
+  action: TrackConvertAction;
+  targetCodec: string | null;
+  reasonCode: string;
+  reasonText: string;
+}
+
+export interface VideoConvertPlan {
+  sourcePath: string;
+  fileName: string;
+  byteSize: number;
+  durationSec: number | null;
+  sourceContainer: string | null;
+  targetFormat: VideoConvertFormat;
+  overallMode: ConvertOverallMode;
+  copyTrackCount: number;
+  transcodeTrackCount: number;
+  dropTrackCount: number;
+  hasContainerLimitations: boolean;
+  limitationMessages: string[];
+  tracks: TrackConvertPlan[];
+}
+
+export interface InspectVideoConvertPlanRequest {
+  sourcePaths: string[];
+  targetFormat: VideoConvertFormat;
+}
+
+export interface InspectVideoConvertPlanItem {
+  sourcePath: string;
+  fileName: string;
+  ok: boolean;
+  plan: VideoConvertPlan | null;
+  error: string | null;
+}
+
+export interface InspectVideoConvertPlanResponse {
+  targetFormat: VideoConvertFormat;
+  items: InspectVideoConvertPlanItem[];
+}
+
+export interface ConvertVideosBatchRequest {
+  taskId: string;
+  sourcePaths: string[];
+  outputDir: string;
+  targetFormat: VideoConvertFormat;
+  allowDropIncompatible: boolean;
+}
+
+export type ConvertItemStatus = "converted" | "skipped" | "failed";
+
+export interface ConvertVideoItemResult {
+  sourcePath: string;
+  fileName: string;
+  status: ConvertItemStatus;
+  outputPath: string | null;
+  outputBytes: number | null;
+  overallMode: ConvertOverallMode | null;
+  verifiedContainer: string | null;
+  verifiedVideoCodecs: string[];
+  verifiedAudioCodecs: string[];
+  verifiedSubtitleCodecs: string[];
+  verifiedStreamCount: number | null;
+  droppedTrackCount: number;
+  elapsedMs: number;
+  message: string | null;
+}
+
+export interface ConvertVideosBatchResponse {
+  taskId: string;
+  outputDir: string;
+  targetFormat: VideoConvertFormat;
+  cancelled: boolean;
+  convertedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  elapsedMs: number;
+  items: ConvertVideoItemResult[];
+}
+
+export type CompressQualityPreset = "high" | "balanced" | "small";
+export type CompressVideoCodec = "h264" | "hevc";
+export type CompressResolutionCap = "original" | "p1080" | "p720" | "p480";
+
+export interface VideoEncoderOption {
+  id: string;
+  codec: CompressVideoCodec;
+  isHardware: boolean;
+  label: string;
+}
+
+export interface VideoEncoderCapabilities {
+  ffmpegPath: string;
+  h264Encoders: VideoEncoderOption[];
+  hevcEncoders: VideoEncoderOption[];
+  hasHardwareH264: boolean;
+  hasHardwareHevc: boolean;
+}
+
+export interface CompressVideosBatchRequest {
+  taskId: string;
+  sourcePaths: string[];
+  outputDir: string;
+  preset: CompressQualityPreset;
+  codec: CompressVideoCodec;
+  resolutionCap: CompressResolutionCap;
+  encoderPreference?: string | null;
+  keepAudio?: boolean;
+  keepOriginalIfLarger?: boolean;
+}
+
+export type CompressItemStatus = "compressed" | "kept_original" | "skipped" | "failed";
+
+export interface CompressVideoItemResult {
+  sourcePath: string;
+  fileName: string;
+  status: CompressItemStatus;
+  outputPath: string | null;
+  originalBytes: number;
+  outputBytes: number | null;
+  attemptedCompressedBytes: number | null;
+  savedBytes: number;
+  savedPercent: number;
+  keptOriginal: boolean;
+  keptOriginalReason: string | null;
+  actualEncoderUsed: string | null;
+  usedHardwareEncoder: boolean;
+  outputWidth: number | null;
+  outputHeight: number | null;
+  outputCodec: string | null;
+  elapsedMs: number;
+  message: string | null;
+}
+
+export interface CompressVideosBatchResponse {
+  taskId: string;
+  outputDir: string;
+  cancelled: boolean;
+  compressedCount: number;
+  keptOriginalCount: number;
+  skippedCount: number;
+  failedCount: number;
+  totalOriginalBytes: number;
+  totalOutputBytes: number;
+  totalSavedBytes: number;
+  totalSavedPercent: number;
+  elapsedMs: number;
+  items: CompressVideoItemResult[];
+}
+
+export async function inspectVideoConvertPlan(
+  req: InspectVideoConvertPlanRequest,
+): Promise<InspectVideoConvertPlanResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<InspectVideoConvertPlanResponse>("inspect_video_convert_plan", { req });
+}
+
+export async function convertVideosBatch(
+  req: ConvertVideosBatchRequest,
+): Promise<ConvertVideosBatchResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<ConvertVideosBatchResponse>("convert_videos_batch", { req });
+}
+
+export async function probeVideoEncoders(): Promise<VideoEncoderCapabilities> {
+  assertFrontendNotShuttingDown();
+  return invoke<VideoEncoderCapabilities>("probe_video_encoders");
+}
+
+export async function compressVideosBatch(
+  req: CompressVideosBatchRequest,
+): Promise<CompressVideosBatchResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<CompressVideosBatchResponse>("compress_videos_batch", { req });
+}

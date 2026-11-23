@@ -9,7 +9,7 @@ use crate::error::AppError;
 use crate::fs_guard::validate_existing_input_file;
 use crate::media_core::{
     allocate_non_colliding_output_path, require_media_tools, run_ffmpeg_cancellable,
-    AtomicMediaOutput, MediaTaskProgressPayload,
+    run_ffprobe_args, AtomicMediaOutput, MediaTaskProgressPayload,
 };
 use crate::media_info::probe_media_info_impl;
 use crate::wic_heic::{encode_heic_bytes_via_wic, get_heic_capabilities};
@@ -123,11 +123,7 @@ pub fn compute_frame_timestamps(
             if !t.is_finite() || t < 0.0 {
                 return Err(AppError::invalid_param("Timestamp must be >= 0."));
             }
-            let clamped = if safe_dur > 0.0 {
-                t.min((safe_dur - 0.01).max(0.0))
-            } else {
-                t
-            };
+            let clamped = if safe_dur > 0.0 { t.min(safe_dur) } else { t };
             Ok(vec![clamped])
         }
         FrameExtractMode::IntervalSeconds => {
@@ -230,6 +226,161 @@ fn make_thumbnail_data_url(img: &image::DynamicImage) -> String {
     }
 }
 
+const PTS_EPSILON_SEC: f64 = 0.00015;
+
+#[derive(Debug, Clone, Copy)]
+struct ResolvedFrameSelection {
+    selected_pts: f64,
+    keyframe_pts: f64,
+}
+
+/// Queries the first video stream's `start_time` (seconds) so timestamp math stays accurate
+/// even on containers with non-zero starting PTS (e.g. MPEG-TS broadcasts).
+fn probe_video_stream_start_time(ffprobe: &Path, source_path: &Path) -> f64 {
+    let args = vec![
+        "-v".into(),
+        "error".into(),
+        "-select_streams".into(),
+        "v:0".into(),
+        "-show_entries".into(),
+        "stream=start_time".into(),
+        "-of".into(),
+        "csv=p=0".into(),
+        source_path.to_string_lossy().to_string(),
+    ];
+    let Ok(stdout) = run_ffprobe_args(ffprobe, &args) else {
+        return 0.0;
+    };
+    for line in stdout.lines() {
+        let trimmed = line.trim().trim_end_matches(',');
+        if let Ok(val) = trimmed.parse::<f64>() {
+            if val.is_finite() {
+                return val;
+            }
+        }
+    }
+    0.0
+}
+
+/// Selects the exact displayed frame at `target_abs_ts` from a sorted `(pts_time, is_keyframe)` list:
+/// returns the largest `pts_time <= target_abs_ts + PTS_EPSILON_SEC` (falling back to the earliest
+/// frame if `target_abs_ts` precedes the first frame) paired with the latest keyframe `<= selected_pts`.
+fn select_frame_pts_from_packets(
+    packets: &[(f64, bool)],
+    target_abs_ts: f64,
+    stream_start_time: f64,
+    require_bracket: bool,
+    near_eof: bool,
+) -> Option<ResolvedFrameSelection> {
+    if packets.is_empty() {
+        return None;
+    }
+    let mut sorted = packets.to_vec();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let threshold = target_abs_ts + PTS_EPSILON_SEC;
+    let latest_le = sorted.iter().rev().find(|(pts, _)| *pts <= threshold);
+    let has_gt = sorted.iter().any(|(pts, _)| *pts > threshold);
+
+    if require_bracket {
+        let (cand_pts, _) = latest_le?;
+        if !has_gt && !near_eof {
+            return None;
+        }
+        let kf = sorted
+            .iter()
+            .rev()
+            .find(|(pts, is_kf)| *is_kf && *pts <= *cand_pts + PTS_EPSILON_SEC)?;
+        return Some(ResolvedFrameSelection {
+            selected_pts: *cand_pts,
+            keyframe_pts: kf.0,
+        });
+    }
+
+    let selected_pts = latest_le.map(|(pts, _)| *pts).unwrap_or(sorted[0].0);
+    let keyframe_pts = sorted
+        .iter()
+        .rev()
+        .find(|(pts, is_kf)| *is_kf && *pts <= selected_pts + PTS_EPSILON_SEC)
+        .map(|(pts, _)| *pts)
+        .unwrap_or(stream_start_time);
+
+    Some(ResolvedFrameSelection {
+        selected_pts,
+        keyframe_pts,
+    })
+}
+
+/// Resolves the exact source frame presentation timestamp (PTS) displayed at `target_ts`
+/// without resampling onto a fixed FPS grid.
+///
+/// Uses expanding bracketed `-read_intervals` windows (`start%end`) so long videos remain fast
+/// via container keyframe seeking while sparse VFR streams with long held frames or B-frame
+/// reordering still locate the exact active frame and its preceding keyframe.
+fn resolve_exact_frame_pts_and_keyframe(
+    ffprobe: &Path,
+    source_path: &Path,
+    stream_start_time: f64,
+    duration_sec: Option<f64>,
+    target_ts: f64,
+) -> Option<ResolvedFrameSelection> {
+    let target_abs = stream_start_time + target_ts.max(0.0);
+    let near_eof = duration_sec.is_some_and(|d| d > 0.0 && target_ts >= d - 0.1);
+    let windows: [Option<(f64, f64)>; 4] = [
+        Some((4.0, 2.0)),
+        Some((20.0, 16.0)),
+        Some((120.0, 60.0)),
+        None,
+    ];
+
+    for win in windows {
+        let mut args: Vec<String> = vec![
+            "-v".into(),
+            "error".into(),
+            "-select_streams".into(),
+            "v:0".into(),
+            "-show_entries".into(),
+            "packet=pts_time,flags".into(),
+            "-of".into(),
+            "csv=p=0".into(),
+        ];
+        if let Some((lookback, lookahead)) = win {
+            let w_start = (target_abs - lookback).max(stream_start_time);
+            let w_end = target_abs + lookahead;
+            args.push("-read_intervals".into());
+            args.push(format!("{w_start:.3}%{w_end:.3}"));
+        }
+        args.push(source_path.to_string_lossy().to_string());
+
+        let Ok(stdout) = run_ffprobe_args(ffprobe, &args) else {
+            continue;
+        };
+        let mut packets: Vec<(f64, bool)> = Vec::new();
+        for line in stdout.lines() {
+            let mut parts = line.split(',');
+            let Some(pts_raw) = parts.next().map(str::trim) else {
+                continue;
+            };
+            let flags_raw = parts.next().map(str::trim).unwrap_or("");
+            if let Ok(pts) = pts_raw.parse::<f64>() {
+                if pts.is_finite() {
+                    packets.push((pts, flags_raw.contains('K')));
+                }
+            }
+        }
+        if let Some(sel) = select_frame_pts_from_packets(
+            &packets,
+            target_abs,
+            stream_start_time,
+            win.is_some(),
+            near_eof,
+        ) {
+            return Some(sel);
+        }
+    }
+    None
+}
+
 pub fn extract_video_frames_impl(
     media_root: &Path,
     req: &ExtractFramesRequest,
@@ -281,6 +432,7 @@ pub fn extract_video_frames_impl(
     let quality = req.quality.unwrap_or(90).clamp(50, 100);
     let scale_vf = build_resolution_scale_filter(req.resolution);
     let total = timestamps.len();
+    let stream_start_time = probe_video_stream_start_time(&tools.ffprobe, &source_path);
 
     let mut frames: Vec<ExtractedFrameItem> = Vec::with_capacity(total);
     let mut cancelled = false;
@@ -339,21 +491,29 @@ pub fn extract_video_frames_impl(
             .map(|a| a.temp_path().to_path_buf())
             .unwrap_or_else(|| extract_target.clone());
 
-        // Attempt 1: Active-frame VFR-accurate seek using a 3s pre-roll + `fps=50:round=down:eof_action=pass,trim=start=rem`
-        // so VFR streams (which hold a frame across non-uniform intervals) yield the exact frame displayed at `ts`
-        // instead of skipping forward to the next packet whose PTS >= ts.
-        // Fallback attempts: direct `-ss` seek for very sparse streams or timestamps right at EOF.
+        // Attempt 1: Native display-PTS selection (no fixed-FPS resampling grid).
+        // Resolves the exact latest source frame with PTS <= ts and seeks rapidly to its preceding
+        // keyframe, covering high-FPS (e.g. 120 fps), exact frame boundaries, between-frame times,
+        // VFR long-held slides, EOF, and long videos alike.
+        // Fallback attempts: direct `-ss` seek for exotic containers lacking packet PTS indices.
         #[derive(Clone, Copy)]
         enum FrameSeekStrategy {
-            VfrHoldAccurate(f64),
+            PtsExact(ResolvedFrameSelection),
             DirectSeek(f64),
         }
 
         let mut actual_ts = ts;
-        let mut attempts = vec![
-            FrameSeekStrategy::VfrHoldAccurate(ts),
-            FrameSeekStrategy::DirectSeek(ts),
-        ];
+        let mut attempts: Vec<FrameSeekStrategy> = Vec::with_capacity(3);
+        if let Some(resolved) = resolve_exact_frame_pts_and_keyframe(
+            &tools.ffprobe,
+            &source_path,
+            stream_start_time,
+            probe.duration_sec,
+            ts,
+        ) {
+            attempts.push(FrameSeekStrategy::PtsExact(resolved));
+        }
+        attempts.push(FrameSeekStrategy::DirectSeek(ts));
         if ts > 0.08 {
             attempts.push(FrameSeekStrategy::DirectSeek((ts - 0.08).max(0.0)));
         }
@@ -364,28 +524,29 @@ pub fn extract_video_frames_impl(
         for strategy in attempts {
             let _ = fs::remove_file(&ffmpeg_out_path);
             let (attempt_ts, mut args) = match strategy {
-                FrameSeekStrategy::VfrHoldAccurate(target_ts) => {
-                    let fast_seek = (target_ts - 3.0).max(0.0);
-                    let rem = (target_ts - fast_seek).max(0.0);
-                    let trim_start = (rem - 0.001).max(0.0);
-                    let mut vf = format!(
-                        "fps=fps=50:round=down:eof_action=pass,trim=start={trim_start:.4},setpts=PTS-STARTPTS"
-                    );
+                FrameSeekStrategy::PtsExact(sel) => {
+                    let seek_rel = ((sel.keyframe_pts - stream_start_time) - 0.02).max(0.0);
+                    let select_threshold = sel.selected_pts - PTS_EPSILON_SEC;
+                    let mut vf = format!("select='gte(t,{select_threshold:.6})'");
                     if let Some(scale) = scale_vf {
                         vf.push(',');
                         vf.push_str(scale);
                     }
                     let cmd_args: Vec<String> = vec![
+                        "-noaccurate_seek".into(),
                         "-ss".into(),
-                        format!("{fast_seek:.3}"),
+                        format!("{seek_rel:.3}"),
+                        "-copyts".into(),
                         "-i".into(),
                         source_path.to_string_lossy().to_string(),
                         "-vf".into(),
                         vf,
+                        "-fps_mode".into(),
+                        "passthrough".into(),
                         "-frames:v".into(),
                         "1".into(),
                     ];
-                    (target_ts, cmd_args)
+                    ((sel.selected_pts - stream_start_time).max(0.0), cmd_args)
                 }
                 FrameSeekStrategy::DirectSeek(target_ts) => {
                     let mut cmd_args: Vec<String> = vec![
@@ -740,5 +901,292 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    /// Generates an image whose top row encodes `frame_idx` (0..63) as 6 high-contrast binary blocks
+    /// so every individual frame of a lossless test clip can be decoded deterministically.
+    fn write_binary_indexed_frame(path: &Path, frame_idx: u32) {
+        let mut img = image::RgbImage::from_pixel(256, 128, image::Rgb([30, 41, 59]));
+        for bit_idx in 0..6u32 {
+            let set = ((frame_idx >> bit_idx) & 1) == 1;
+            let color = if set {
+                image::Rgb([240, 240, 240])
+            } else {
+                image::Rgb([16, 16, 16])
+            };
+            let x0 = 16 + bit_idx * 32;
+            for y in 20..60 {
+                for x in x0..(x0 + 24) {
+                    img.put_pixel(x, y, color);
+                }
+            }
+        }
+        img.save(path).unwrap();
+    }
+
+    fn decode_binary_indexed_frame(path: &Path) -> u32 {
+        let img = image::open(path).unwrap().to_rgb8();
+        let mut idx = 0u32;
+        for bit_idx in 0..6u32 {
+            let px = img.get_pixel(16 + bit_idx * 32 + 12, 40).0;
+            let luma = (u32::from(px[0]) + u32::from(px[1]) + u32::from(px[2])) / 3;
+            if luma > 128 {
+                idx |= 1 << bit_idx;
+            }
+        }
+        idx
+    }
+
+    #[test]
+    fn v04_120fps_lossless_exact_boundary_between_frames_and_eof() {
+        let dir = tempdir().unwrap();
+        let Ok(tools) = require_media_tools(dir.path()) else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        let src_frames = dir.path().join("frames120");
+        fs::create_dir_all(&src_frames).unwrap();
+        for i in 0..60u32 {
+            write_binary_indexed_frame(&src_frames.join(format!("f_{i:04}.png")), i);
+        }
+
+        // Lossless 120 fps MP4 (exact 1/120 s PTS grid: frame 3 displays on [0.025, 0.033333))
+        let clip_120 = dir.path().join("clip_120fps_lossless.mp4");
+        run_ffmpeg_cancellable(
+            &tools.ffmpeg,
+            &[
+                "-framerate".into(),
+                "120".into(),
+                "-i".into(),
+                src_frames.join("f_%04d.png").to_string_lossy().to_string(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-crf".into(),
+                "0".into(),
+                "-preset".into(),
+                "ultrafast".into(),
+                "-pix_fmt".into(),
+                "yuv444p".into(),
+                clip_120.to_string_lossy().to_string(),
+            ],
+            Some(0.5),
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+
+        // Confirm via ffprobe that frame 3 starts at exactly 0.025 s
+        let pts_out = run_ffprobe_args(
+            &tools.ffprobe,
+            &[
+                "-v".into(),
+                "error".into(),
+                "-select_streams".into(),
+                "v:0".into(),
+                "-show_entries".into(),
+                "frame=pts_time".into(),
+                "-of".into(),
+                "csv=p=0".into(),
+                clip_120.to_string_lossy().to_string(),
+            ],
+        )
+        .unwrap();
+        let pts: Vec<f64> = pts_out
+            .lines()
+            .filter_map(|l| l.trim().trim_end_matches(',').parse::<f64>().ok())
+            .collect();
+        assert_eq!(pts.len(), 60);
+        assert!((pts[3] - 0.025).abs() < 1e-4, "frame 3 PTS was {}", pts[3]);
+
+        let out_dir = dir.path().join("out_120");
+        // Test: start (0.0), exact boundary (0.025 -> 3), between frames (0.031 -> 3, previously regressed to frame 7),
+        // next frame (0.0334 -> 4), and EOF (0.500 -> 59)
+        for (i, (ts, expected_idx)) in [
+            (0.000, 0u32),
+            (0.025, 3u32),
+            (0.031, 3u32),
+            (0.0334, 4u32),
+            (0.500, 59u32),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let resp = extract_video_frames_impl(
+                dir.path(),
+                &ExtractFramesRequest {
+                    task_id: format!("v04-120fps-{i}"),
+                    source_path: clip_120.to_string_lossy().to_string(),
+                    output_dir: out_dir.to_string_lossy().to_string(),
+                    mode: FrameExtractMode::SingleTime,
+                    timestamp_sec: Some(ts),
+                    interval_sec: None,
+                    frame_count: None,
+                    start_sec: None,
+                    end_sec: None,
+                    resolution: FrameResolutionPreset::Original,
+                    format: FrameImageFormat::Png,
+                    quality: Some(90),
+                },
+                &cancel,
+                |_| {},
+            )
+            .unwrap();
+            assert_eq!(resp.extracted_count, 1);
+            let got = decode_binary_indexed_frame(Path::new(&resp.frames[0].output_path));
+            assert_eq!(
+                got, expected_idx,
+                "120fps clip at t={ts}s extracted frame {got}, expected frame {expected_idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn v04_vfr_long_hold_and_long_video_fast_seek() {
+        let dir = tempdir().unwrap();
+        let Ok(tools) = require_media_tools(dir.path()) else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        let f5 = dir.path().join("f5.png");
+        let f19 = dir.path().join("f19.png");
+        write_binary_indexed_frame(&f5, 5);
+        write_binary_indexed_frame(&f19, 19);
+
+        // VFR video holding frame 5 for 12 full seconds, then frame 19 for 3 seconds
+        let list_path = dir.path().join("vfr_long.txt");
+        let n5 = f5.to_string_lossy().replace('\\', "/");
+        let n19 = f19.to_string_lossy().replace('\\', "/");
+        fs::write(
+            &list_path,
+            format!("file '{n5}'\nduration 12.0\nfile '{n19}'\nduration 3.0\nfile '{n19}'\n"),
+        )
+        .unwrap();
+        let vfr_long = dir.path().join("vfr_long_hold.mkv");
+        run_ffmpeg_cancellable(
+            &tools.ffmpeg,
+            &[
+                "-f".into(),
+                "concat".into(),
+                "-safe".into(),
+                "0".into(),
+                "-i".into(),
+                list_path.to_string_lossy().to_string(),
+                "-fps_mode".into(),
+                "vfr".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+                vfr_long.to_string_lossy().to_string(),
+            ],
+            Some(15.0),
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+
+        let out_vfr = dir.path().join("out_vfr_long");
+        for (i, (ts, expected)) in [
+            (0.0, 5u32),
+            (6.5, 5u32),
+            (11.9, 5u32),
+            (12.0, 19u32),
+            (14.5, 19u32),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let resp = extract_video_frames_impl(
+                dir.path(),
+                &ExtractFramesRequest {
+                    task_id: format!("v04-vfr-long-{i}"),
+                    source_path: vfr_long.to_string_lossy().to_string(),
+                    output_dir: out_vfr.to_string_lossy().to_string(),
+                    mode: FrameExtractMode::SingleTime,
+                    timestamp_sec: Some(ts),
+                    interval_sec: None,
+                    frame_count: None,
+                    start_sec: None,
+                    end_sec: None,
+                    resolution: FrameResolutionPreset::Original,
+                    format: FrameImageFormat::Png,
+                    quality: Some(90),
+                },
+                &cancel,
+                |_| {},
+            )
+            .unwrap();
+            let got = decode_binary_indexed_frame(Path::new(&resp.frames[0].output_path));
+            assert_eq!(
+                got, expected,
+                "VFR long-hold at t={ts}s got {got}, expected {expected}"
+            );
+        }
+
+        // Long 120s video fast-seek check: first 115s red, last 5s blue
+        let long_clip = dir.path().join("long_120s.mp4");
+        run_ffmpeg_cancellable(
+            &tools.ffmpeg,
+            &[
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "color=c=red:s=320x180:r=10:d=115".into(),
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "color=c=blue:s=320x180:r=10:d=5".into(),
+                "-filter_complex".into(),
+                "[0:v][1:v]concat=n=2:v=1:a=0[v]".into(),
+                "-map".into(),
+                "[v]".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-g".into(),
+                "20".into(),
+                "-preset".into(),
+                "ultrafast".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+                long_clip.to_string_lossy().to_string(),
+            ],
+            Some(120.0),
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+
+        let t0 = Instant::now();
+        let resp_long = extract_video_frames_impl(
+            dir.path(),
+            &ExtractFramesRequest {
+                task_id: "v04-long-fast".into(),
+                source_path: long_clip.to_string_lossy().to_string(),
+                output_dir: dir.path().join("out_long").to_string_lossy().to_string(),
+                mode: FrameExtractMode::SingleTime,
+                timestamp_sec: Some(117.25),
+                interval_sec: None,
+                frame_count: None,
+                start_sec: None,
+                end_sec: None,
+                resolution: FrameResolutionPreset::Original,
+                format: FrameImageFormat::Png,
+                quality: Some(90),
+            },
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        let elapsed_ms = t0.elapsed().as_millis();
+        let rgb = image::open(&resp_long.frames[0].output_path)
+            .unwrap()
+            .to_rgb8()
+            .get_pixel(160, 90)
+            .0;
+        assert!(
+            rgb[2] > 180 && rgb[0] < 60,
+            "expected Blue at 117.25s, got {rgb:?}"
+        );
+        assert!(elapsed_ms < 5_000, "long video seek took {elapsed_ms} ms");
     }
 }
