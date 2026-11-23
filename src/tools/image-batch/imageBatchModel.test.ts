@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeResizeTargetDimensions,
+  computeRotatedDimensions,
   formatImageBytes,
   formatImageFormatLabel,
   formatImageWarningText,
@@ -66,5 +68,63 @@ describe("imageBatchModel", () => {
     const second = { ...base, path: "D:\\Photos\\B.JPG", fileName: "B.JPG" };
     const merged = mergeInspectedItems([base], [dup, second]);
     expect(merged.map((m) => m.fileName)).toEqual(["A.PNG", "B.JPG"]);
+  });
+
+  it("computes resize target dimensions respecting aspect ratio, preventUpscale, and portrait display sizes", () => {
+    // Portrait display size 1000x2000 -> longest edge 1000 => 500x1000
+    expect(
+      computeResizeTargetDimensions(1000, 2000, {
+        mode: "longest_edge",
+        percentage: 50,
+        longestEdge: 1000,
+        targetWidth: 800,
+        targetHeight: 800,
+        keepAspectRatio: true,
+        preventUpscale: true,
+      }),
+    ).toEqual({ width: 500, height: 1000, unchanged: false });
+
+    // Small 400x300 under longestEdge=1200 with preventUpscale=true stays 400x300
+    expect(
+      computeResizeTargetDimensions(400, 300, {
+        mode: "longest_edge",
+        percentage: 50,
+        longestEdge: 1200,
+        targetWidth: 800,
+        targetHeight: 800,
+        keepAspectRatio: true,
+        preventUpscale: true,
+      }),
+    ).toEqual({ width: 400, height: 300, unchanged: true });
+
+    // Exact 800x400 -> target 400x400 with keepAspectRatio=true => 400x200; false => 400x400
+    expect(
+      computeResizeTargetDimensions(800, 400, {
+        mode: "exact",
+        percentage: 50,
+        longestEdge: 1200,
+        targetWidth: 400,
+        targetHeight: 400,
+        keepAspectRatio: true,
+        preventUpscale: true,
+      }),
+    ).toEqual({ width: 400, height: 200, unchanged: false });
+    expect(
+      computeResizeTargetDimensions(800, 400, {
+        mode: "exact",
+        percentage: 50,
+        longestEdge: 1200,
+        targetWidth: 400,
+        targetHeight: 400,
+        keepAspectRatio: false,
+        preventUpscale: true,
+      }),
+    ).toEqual({ width: 400, height: 400, unchanged: false });
+
+    // Rotated dimensions track 90-degree swaps
+    expect(computeRotatedDimensions(800, 600, ["rotate_right", "flip_horizontal"])).toEqual({
+      width: 600,
+      height: 800,
+    });
   });
 });

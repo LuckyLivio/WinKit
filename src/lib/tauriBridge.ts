@@ -72,6 +72,10 @@ import type {
   PreviewCompressImageResponse,
   PreviewConvertImageRequest,
   PreviewConvertImageResponse,
+  PreviewRotateImageRequest,
+  PreviewRotateImageResponse,
+  ResizeImagesBatchRequest,
+  RotateImagesBatchRequest,
 } from "../tools/image-batch/imageBatchModel";
 
 export interface AppRuntimeInfo {
@@ -908,6 +912,29 @@ export async function compressImagesBatch(
 ): Promise<BatchImageJobResponse> {
   assertFrontendNotShuttingDown();
   return invoke<BatchImageJobResponse>("compress_images_batch", { taskId, req });
+}
+
+export async function resizeImagesBatch(
+  taskId: string,
+  req: ResizeImagesBatchRequest,
+): Promise<BatchImageJobResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchImageJobResponse>("resize_images_batch", { taskId, req });
+}
+
+export async function previewRotateImage(
+  req: PreviewRotateImageRequest,
+): Promise<PreviewRotateImageResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<PreviewRotateImageResponse>("preview_rotate_image", { req });
+}
+
+export async function rotateImagesBatch(
+  taskId: string,
+  req: RotateImagesBatchRequest,
+): Promise<BatchImageJobResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchImageJobResponse>("rotate_images_batch", { taskId, req });
 }
 
 export async function subscribeImageBatchProgress(

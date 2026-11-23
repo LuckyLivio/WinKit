@@ -25,6 +25,8 @@ import { ArchiveWorkspace } from "../tools/archive/ArchiveWorkspace";
 import { OrganizeDownloadsWorkspace } from "../tools/organize-downloads/OrganizeDownloadsWorkspace";
 import { ImageConvertWorkspace } from "../tools/image-convert/ImageConvertWorkspace";
 import { ImageCompressWorkspace } from "../tools/image-compress/ImageCompressWorkspace";
+import { ImageResizeWorkspace } from "../tools/image-resize/ImageResizeWorkspace";
+import { ImageRotateWorkspace } from "../tools/image-rotate/ImageRotateWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -52,7 +54,9 @@ export type ToolIconName =
   | "folder-input"
   | "frame"
   | "image-convert"
-  | "image-compress";
+  | "image-compress"
+  | "image-resize"
+  | "image-rotate";
 
 export interface RegisteredTool {
   id: string;
@@ -666,6 +670,61 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "image-compress",
     implementationStatus: "full",
     component: ImageCompressWorkspace,
+  },
+  {
+    id: "I07",
+    category: "image",
+    name: { "zh-CN": "图片批量缩放", "en-US": "Resize Images" },
+    summary: {
+      "zh-CN":
+        "按百分比、最长边或指定宽高批量缩放图片，默认保持比例并禁止放大，按 EXIF 实际显示方向实时预览最终像素尺寸",
+      "en-US":
+        "Batch resize by percentage, longest edge, or exact dimensions with aspect-ratio lock, no-upscale default, and EXIF display-orientation sizing preview",
+    },
+    keywords: [
+      "resize",
+      "scale",
+      "dimensions",
+      "percentage",
+      "longest edge",
+      "aspect ratio",
+      "thumbnail",
+      "图片缩放",
+      "批量缩放",
+      "调整尺寸",
+      "最长边",
+      "像素",
+    ],
+    icon: "image-resize",
+    implementationStatus: "full",
+    component: ImageResizeWorkspace,
+  },
+  {
+    id: "I08",
+    category: "image",
+    name: { "zh-CN": "图片旋转与翻转", "en-US": "Rotate Images" },
+    summary: {
+      "zh-CN":
+        "支持 90° 左右旋转、180° 旋转、水平与垂直翻转及按序组合重置，烘焙 EXIF 方向确保预览、导出与 Windows 照片一致",
+      "en-US":
+        "Batch rotate 90°/180° and flip horizontally or vertically in exact order, baking EXIF orientation upright so Windows Photos never double-rotates",
+    },
+    keywords: [
+      "rotate",
+      "flip",
+      "mirror",
+      "orientation",
+      "exif",
+      "90",
+      "180",
+      "图片旋转",
+      "翻转",
+      "镜像",
+      "方向",
+    ],
+    icon: "image-rotate",
+    implementationStatus: "full",
+    component: ImageRotateWorkspace,
   },
   {
     id: "F01",

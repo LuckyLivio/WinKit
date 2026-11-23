@@ -19,6 +19,8 @@ import {
   Minimize2,
   QrCode,
   Regex,
+  RotateCw,
+  Scaling,
   ScanText,
   ShieldCheck,
   Table2,
@@ -74,6 +76,10 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <ArrowLeftRight size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-compress":
       return <Minimize2 size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "image-resize":
+      return <Scaling size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "image-rotate":
+      return <RotateCw size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "table-2":
       return <Table2 size={size} strokeWidth={1.75} aria-hidden="true" />;
   }

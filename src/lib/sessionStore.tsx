@@ -81,6 +81,10 @@ import type {
   ImageConvertTargetFormat,
   InspectedImageItem,
   PngCompressMode,
+  ResizeImagesBatchRequest,
+  ResizeMode,
+  RotateImagesBatchRequest,
+  TransformStep,
 } from "../tools/image-batch/imageBatchModel";
 import {
   bindDisposableListener,
@@ -90,6 +94,8 @@ import {
   createArchive,
   extractArchivesBatch,
   parseBackendError,
+  resizeImagesBatch,
+  rotateImagesBatch,
   scanDuplicateFolders,
   subscribeArchiveProgress,
   subscribeDuplicateScanProgress,
@@ -394,6 +400,36 @@ export interface ImageCompressSessionState {
   errorMessage: string | null;
 }
 
+export interface ImageResizeSessionState {
+  items: InspectedImageItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  mode: ResizeMode;
+  percentage: number;
+  longestEdge: number;
+  targetWidth: number;
+  targetHeight: number;
+  keepAspectRatio: boolean;
+  preventUpscale: boolean;
+  status: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: ImageBatchProgressPayload | null;
+  lastReport: BatchImageJobResponse | null;
+  errorMessage: string | null;
+}
+
+export interface ImageRotateSessionState {
+  items: InspectedImageItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  steps: TransformStep[];
+  status: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: ImageBatchProgressPayload | null;
+  lastReport: BatchImageJobResponse | null;
+  errorMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -418,6 +454,8 @@ export interface SessionWorkspaces {
   organizeDownloads: OrganizeDownloadsSessionState;
   imageConvert: ImageConvertSessionState;
   imageCompress: ImageCompressSessionState;
+  imageResize: ImageResizeSessionState;
+  imageRotate: ImageRotateSessionState;
 }
 
 const INITIAL_SESSION_STATE: SessionWorkspaces = {
@@ -672,6 +710,34 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     lastReport: null,
     errorMessage: null,
   },
+  imageResize: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    mode: "longest_edge",
+    percentage: 50,
+    longestEdge: 1920,
+    targetWidth: 1280,
+    targetHeight: 720,
+    keepAspectRatio: true,
+    preventUpscale: true,
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
+  imageRotate: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    steps: [],
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -748,6 +814,26 @@ interface SessionStoreContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<BatchImageJobResponse | null>;
   cancelImageCompressBatch: () => Promise<void>;
+  updateImageResizeSession: (
+    patchOrUpdater:
+      | Partial<ImageResizeSessionState>
+      | ((prev: ImageResizeSessionState) => ImageResizeSessionState),
+  ) => void;
+  startImageResizeBatch: (
+    req: ResizeImagesBatchRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<BatchImageJobResponse | null>;
+  cancelImageResizeBatch: () => Promise<void>;
+  updateImageRotateSession: (
+    patchOrUpdater:
+      | Partial<ImageRotateSessionState>
+      | ((prev: ImageRotateSessionState) => ImageRotateSessionState),
+  ) => void;
+  startImageRotateBatch: (
+    req: RotateImagesBatchRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<BatchImageJobResponse | null>;
+  cancelImageRotateBatch: () => Promise<void>;
 }
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
@@ -1175,6 +1261,8 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
   const imgBatchSeqRef = useRef(1);
   const activeConvertTaskRef = useRef<string | null>(null);
   const activeCompressTaskRef = useRef<string | null>(null);
+  const activeResizeTaskRef = useRef<string | null>(null);
+  const activeRotateTaskRef = useRef<string | null>(null);
 
   const updateImageConvertSession = useCallback(
     (
@@ -1225,6 +1313,18 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
               return {
                 ...prev,
                 imageCompress: { ...prev.imageCompress, liveProgress: payload },
+              };
+            }
+            if (prev.imageResize.activeTaskId === payload.taskId) {
+              return {
+                ...prev,
+                imageResize: { ...prev.imageResize, liveProgress: payload },
+              };
+            }
+            if (prev.imageRotate.activeTaskId === payload.taskId) {
+              return {
+                ...prev,
+                imageRotate: { ...prev.imageRotate, liveProgress: payload },
               };
             }
             return prev;
@@ -1362,6 +1462,168 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateImageResizeSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ImageResizeSessionState>
+        | ((prev: ImageResizeSessionState) => ImageResizeSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        imageResize:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.imageResize)
+            : { ...prev.imageResize, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  const startImageResizeBatch = useCallback(
+    async (
+      req: ResizeImagesBatchRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<BatchImageJobResponse | null> => {
+      if (activeResizeTaskRef.current) return null;
+      const taskId = `i07-resize-${Date.now()}-${imgBatchSeqRef.current++}`;
+      activeResizeTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        imageResize: {
+          ...prev.imageResize,
+          status: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "I07",
+            currentIndex: 1,
+            totalItems: req.sourcePaths.length,
+            currentFileName: req.sourcePaths[0] ?? "",
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await resizeImagesBatch(taskId, req);
+        if (activeResizeTaskRef.current !== taskId) return null;
+        activeResizeTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageResize: {
+            ...prev.imageResize,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeResizeTaskRef.current !== taskId) return null;
+        activeResizeTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageResize: {
+            ...prev.imageResize,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelImageResizeBatch = useCallback(async () => {
+    const tid = activeResizeTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateImageRotateSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ImageRotateSessionState>
+        | ((prev: ImageRotateSessionState) => ImageRotateSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        imageRotate:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.imageRotate)
+            : { ...prev.imageRotate, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  const startImageRotateBatch = useCallback(
+    async (
+      req: RotateImagesBatchRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<BatchImageJobResponse | null> => {
+      if (activeRotateTaskRef.current) return null;
+      const taskId = `i08-rotate-${Date.now()}-${imgBatchSeqRef.current++}`;
+      activeRotateTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        imageRotate: {
+          ...prev.imageRotate,
+          status: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "I08",
+            currentIndex: 1,
+            totalItems: req.sourcePaths.length,
+            currentFileName: req.sourcePaths[0] ?? "",
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await rotateImagesBatch(taskId, req);
+        if (activeRotateTaskRef.current !== taskId) return null;
+        activeRotateTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageRotate: {
+            ...prev.imageRotate,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeRotateTaskRef.current !== taskId) return null;
+        activeRotateTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageRotate: {
+            ...prev.imageRotate,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelImageRotateBatch = useCallback(async () => {
+    const tid = activeRotateTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -1398,6 +1660,12 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateImageCompressSession,
         startImageCompressBatch,
         cancelImageCompressBatch,
+        updateImageResizeSession,
+        startImageResizeBatch,
+        cancelImageResizeBatch,
+        updateImageRotateSession,
+        startImageRotateBatch,
+        cancelImageRotateBatch,
       }}
     >
       {children}
