@@ -11,6 +11,7 @@ pub mod image_core;
 pub mod image_metadata;
 pub mod image_redact;
 pub mod image_transform;
+pub mod image_watermark;
 pub mod iso_reader;
 pub mod jwt;
 pub mod organize_downloads;
@@ -79,6 +80,10 @@ use crate::image_transform::{
     preview_rotate_image_impl, resize_images_batch_impl, rotate_images_batch_impl,
     PreviewRotateImageRequest, PreviewRotateImageResponse, ResizeImagesBatchRequest,
     RotateImagesBatchRequest,
+};
+use crate::image_watermark::{
+    render_watermarked_asset_impl, watermark_images_batch_impl, RenderWatermarkedAssetRequest,
+    WatermarkImagesBatchRequest,
 };
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
 use crate::organize_downloads::{
@@ -2059,6 +2064,82 @@ async fn export_redacted_image_file<R: Runtime>(
 }
 
 #[tauri::command]
+async fn render_watermarked_asset(
+    registry: State<'_, TaskRegistry>,
+    store: State<'_, ImageAssetStore>,
+    req: RenderWatermarkedAssetRequest,
+) -> Result<ImageAssetPayload, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || render_watermarked_asset_impl(&store, &req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image watermark worker failed."))?
+}
+
+#[tauri::command]
+async fn watermark_images_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: WatermarkImagesBatchRequest,
+) -> Result<BatchImageJobResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid image watermark task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I13", true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = watermark_images_batch_impl(&tid, &req, &cancel_flag, |ev| {
+            let _ = app.emit(IMAGE_BATCH_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = done.succeeded_count as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Image watermark batch worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -2170,6 +2251,8 @@ pub fn run() {
             save_image_asset_file,
             apply_image_redactions_to_asset,
             export_redacted_image_file,
+            render_watermarked_asset,
+            watermark_images_batch,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

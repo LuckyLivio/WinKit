@@ -281,6 +281,42 @@ export interface ExportRedactedImageResult {
   metadataStripped: boolean;
 }
 
+export type WatermarkPlacement =
+  | "top_left"
+  | "top_center"
+  | "top_right"
+  | "middle_left"
+  | "center"
+  | "middle_right"
+  | "bottom_left"
+  | "bottom_center"
+  | "bottom_right"
+  | "diagonal_tile";
+
+export interface WatermarkStyleConfig {
+  stampPngDataUrl?: string | null;
+  logoPath?: string | null;
+  placement: WatermarkPlacement;
+  scalePercent: number;
+  marginPercent: number;
+  opacityPercent: number;
+  tileAngleDeg?: number | null;
+  tileSpacingPercent?: number | null;
+}
+
+export interface RenderWatermarkedAssetRequest {
+  assetId?: string | null;
+  inputPath?: string | null;
+  label?: string | null;
+  style: WatermarkStyleConfig;
+}
+
+export interface WatermarkImagesBatchRequest {
+  sourcePaths: string[];
+  outputDir: string;
+  style: WatermarkStyleConfig;
+}
+
 export interface CaptureRect {
   x: number;
   y: number;
@@ -522,7 +558,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.10.0",
+      version: "0.11.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -1057,6 +1093,21 @@ export async function exportRedactedImageFile(
 ): Promise<ExportRedactedImageResult> {
   assertFrontendNotShuttingDown();
   return invoke<ExportRedactedImageResult>("export_redacted_image_file", { req });
+}
+
+export async function renderWatermarkedAsset(
+  req: RenderWatermarkedAssetRequest,
+): Promise<ImageAssetPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImageAssetPayload>("render_watermarked_asset", { req });
+}
+
+export async function watermarkImagesBatch(
+  taskId: string,
+  req: WatermarkImagesBatchRequest,
+): Promise<BatchImageJobResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchImageJobResponse>("watermark_images_batch", { taskId, req });
 }
 
 export async function inspectBatchRenameSources(

@@ -31,6 +31,7 @@ import { ImageRotateWorkspace } from "../tools/image-rotate/ImageRotateWorkspace
 import { ImageMetadataWorkspace } from "../tools/image-metadata/ImageMetadataWorkspace";
 import { ImageRedactWorkspace } from "../tools/image-redact/ImageRedactWorkspace";
 import { ImageAnnotateWorkspace } from "../tools/image-annotate/ImageAnnotateWorkspace";
+import { ImageWatermarkWorkspace } from "../tools/image-watermark/ImageWatermarkWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -64,7 +65,8 @@ export type ToolIconName =
   | "image-rotate"
   | "image-metadata"
   | "image-redact"
-  | "image-annotate";
+  | "image-annotate"
+  | "image-watermark";
 
 export interface RegisteredTool {
   id: string;
@@ -863,6 +865,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "image-annotate",
     implementationStatus: "full",
     component: ImageAnnotateWorkspace,
+  },
+  {
+    id: "I13",
+    category: "image",
+    name: { "zh-CN": "图片水印", "en-US": "Image Watermark" },
+    summary: {
+      "zh-CN":
+        "为单张或批量图片添加中英文文字水印与透明 PNG Logo，支持九宫格角落定位、边距、大小、不透明度与斜向平铺并输出新副本",
+      "en-US":
+        "Add Chinese/English text or transparent PNG logo watermarks to single or batch images with 9-point placement, margins, scale, opacity, and diagonal tiling",
+    },
+    keywords: [
+      "watermark",
+      "logo",
+      "text watermark",
+      "tile",
+      "diagonal",
+      "brand",
+      "copyright",
+      "stamp",
+      "水印",
+      "图片水印",
+      "平铺",
+      "版权",
+      "徽标",
+    ],
+    icon: "image-watermark",
+    implementationStatus: "partial",
+    component: ImageWatermarkWorkspace,
   },
   {
     id: "F01",
