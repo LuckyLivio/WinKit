@@ -66,14 +66,18 @@ export interface Messages {
   };
   closeGuard: {
     title: string;
+    recordingTitle: string;
     drainingTitle: string;
     errorTitle: string;
     body: (count: number, writeCount: number) => string;
+    recordingBody: string;
     bodyFinished: string;
     drainingBody: string;
     timeoutBody: (remaining: string) => string;
     stayButton: string;
+    stopAndKeepButton: string;
     quitAnywayButton: string;
+    discardAndQuitButton: string;
     exitNowButton: string;
     retryQuitButton: string;
   };
@@ -98,6 +102,12 @@ export interface Messages {
     DOWNLOAD_FAILED: string;
     CHECKSUM_MISMATCH: string;
     MEDIA_PROCESS_FAILED: string;
+    MIC_PERMISSION_DENIED: string;
+    NO_MICROPHONE_AVAILABLE: string;
+    AUDIO_DEVICE_IN_USE: string;
+    AUDIO_DEVICE_DISCONNECTED: string;
+    AUDIO_DEVICE_NOT_FOUND: string;
+    EMPTY_RECORDING: string;
     TASK_CANCELLED: string;
     INVALID_PARAMETER: string;
     FALLBACK: string;
@@ -1009,19 +1019,24 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     closeGuard: {
       title: "仍有本地任务正在运行",
+      recordingTitle: "正在进行本地录制",
       drainingTitle: "正在安全收尾并退出…",
       errorTitle: "暂时无法完成退出",
       body: (count, writeCount) =>
         writeCount > 0
           ? `当前有 ${count} 个任务尚未结束（含 ${writeCount} 个文件写入收尾步骤）。当前版本不支持在系统托盘后台继续运行；确认退出后将取消可中断任务，并等待短时文件写入安全落盘后关闭。`
           : `当前有 ${count} 个本地任务正在运行。当前版本不支持关闭窗口后在系统托盘继续运行，现在退出将取消未完成的任务并在释放文件句柄后关闭。`,
+      recordingBody:
+        "当前仍有正在进行的本地录音或录屏。你可以留在 WinKit 继续录制、停止并保留已录内容以便试听/保存，或直接放弃未保存内容并退出。",
       bodyFinished: "刚才运行的后台任务已经结束，现在可以直接退出 WinKit，或留在当前工作区。",
       drainingBody:
         "正在请求任务停止、等待文件写入安全收尾并释放文件句柄，请稍候（收尾期间已锁定退出流程）…",
       timeoutBody: (remaining) =>
         `等待后台任务结束超时（仍未结束：${remaining}）。为保护文件完整性未强制终止进程；你可以重试退出或先返回应用查看状态（已发出取消请求的任务不会自动恢复）。`,
       stayButton: "继续使用",
+      stopAndKeepButton: "停止并保留已录内容",
       quitAnywayButton: "取消任务并退出",
+      discardAndQuitButton: "放弃录制并退出",
       exitNowButton: "立即退出",
       retryQuitButton: "重试退出",
     },
@@ -1047,6 +1062,13 @@ export const MESSAGES: Record<Locale, Messages> = {
       DOWNLOAD_FAILED: "媒体组件下载中断或网络不可用，您可以稍后重试。",
       CHECKSUM_MISMATCH: "下载的媒体组件包 SHA-256 摘要校验未通过，已自动丢弃。",
       MEDIA_PROCESS_FAILED: "本地媒体处理进程执行失败。",
+      MIC_PERMISSION_DENIED:
+        "Windows 已阻止麦克风访问权限。请前往「Windows 设置 → 隐私和安全性 → 麦克风」允许桌面应用访问麦克风后重试。",
+      NO_MICROPHONE_AVAILABLE: "未检测到可用的麦克风输入设备，请接入或启用麦克风后刷新设备列表。",
+      AUDIO_DEVICE_IN_USE: "所选音频设备当前被其他程序独占占用，请释放后重试。",
+      AUDIO_DEVICE_DISCONNECTED: "所选音频设备已断开或被禁用。",
+      AUDIO_DEVICE_NOT_FOUND: "找不到所选音频设备，请刷新设备列表后重新选择。",
+      EMPTY_RECORDING: "停止前未采集到有效音频帧，未生成空录音文件。",
       TASK_CANCELLED: "任务已按请求取消。",
       INVALID_PARAMETER: "输入参数或路径格式无效。",
       FALLBACK: "执行本地操作时发生错误。",
@@ -2079,12 +2101,15 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     closeGuard: {
       title: "Active Local Task in Progress",
+      recordingTitle: "Local Recording in Progress",
       drainingTitle: "Finishing Safely Before Exit…",
       errorTitle: "Unable to Complete Exit",
       body: (count, writeCount) =>
         writeCount > 0
           ? `${count} local task${count === 1 ? " is" : "s are"} still active (including ${writeCount} file-write commit step${writeCount === 1 ? "" : "s"}). WinKit does not run in the system tray; exiting will cancel interruptible tasks and wait for active file writes to finish safely.`
           : `${count} local task${count === 1 ? " is" : "s are"} currently running. WinKit does not continue in the system tray after closing; exiting now will cancel unfinished work and close once file handles are released.`,
+      recordingBody:
+        "A local audio or screen recording is still active. You can stay in WinKit to keep recording, stop and preserve what has been recorded so you can review or save it, or discard it and exit.",
       bodyFinished:
         "Active background tasks have finished. You can exit WinKit immediately or stay in your workspace.",
       drainingBody:
@@ -2092,7 +2117,9 @@ export const MESSAGES: Record<Locale, Messages> = {
       timeoutBody: (remaining) =>
         `Timed out waiting for tasks to stop (still active: ${remaining}). WinKit kept the window open to avoid corrupting files; you can retry exiting or return to the workspace (cancelled tasks are not resumed).`,
       stayButton: "Stay in WinKit",
+      stopAndKeepButton: "Stop & Keep Recording",
       quitAnywayButton: "Cancel Task & Exit",
+      discardAndQuitButton: "Discard & Exit",
       exitNowButton: "Exit Now",
       retryQuitButton: "Retry Exit",
     },
@@ -2124,6 +2151,16 @@ export const MESSAGES: Record<Locale, Messages> = {
       CHECKSUM_MISMATCH:
         "Downloaded media package failed SHA-256 integrity verification and was discarded.",
       MEDIA_PROCESS_FAILED: "Local media engine process failed.",
+      MIC_PERMISSION_DENIED:
+        "Windows blocked microphone access. Enable microphone access for desktop apps in Windows Settings → Privacy & security → Microphone, then retry.",
+      NO_MICROPHONE_AVAILABLE:
+        "No active microphone device was found. Connect or enable an input device and refresh.",
+      AUDIO_DEVICE_IN_USE:
+        "The selected audio device is locked in exclusive mode by another application.",
+      AUDIO_DEVICE_DISCONNECTED: "The selected audio device was disconnected or disabled.",
+      AUDIO_DEVICE_NOT_FOUND:
+        "The selected audio device is no longer available. Refresh the list and select another device.",
+      EMPTY_RECORDING: "No audio frames were captured before stopping.",
       TASK_CANCELLED: "Operation cancelled.",
       INVALID_PARAMETER: "Invalid input parameter or file path.",
       FALLBACK: "An unexpected local error occurred.",

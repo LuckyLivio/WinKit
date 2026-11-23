@@ -2655,3 +2655,119 @@ export async function watermarkVideo(req: WatermarkVideoRequest): Promise<Waterm
   assertFrontendNotShuttingDown();
   return invoke<WatermarkVideoResult>("watermark_video", { req });
 }
+
+// ---------- Phase 4B2 Batch 2 PR 1: A02 Audio Recorder ----------
+
+export type AudioEndpointFlow = "capture" | "render";
+
+export interface AudioDeviceInfo {
+  id: string;
+  name: string;
+  flow: AudioEndpointFlow;
+  isDefault: boolean;
+  sampleRate: number | null;
+  channels: number | null;
+  bitsPerSample: number | null;
+}
+
+export type RecorderPhase = "idle" | "monitoring" | "recording" | "paused" | "stopped_ready";
+export type AudioRecordOutputFormat = "wav" | "m4a";
+
+export interface AudioRecorderSnapshot {
+  phase: RecorderPhase;
+  deviceId: string | null;
+  deviceName: string | null;
+  sampleRate: number | null;
+  channels: number | null;
+  elapsedSec: number;
+  levelRms: number;
+  levelPeak: number;
+  dbFs: number;
+  clipping: boolean;
+  previewUrl: string | null;
+  tempWavPath: string | null;
+  byteSize: number | null;
+  interruptedReason: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface SaveAudioRecordingRequest {
+  taskId: string;
+  outputPath: string;
+  format: AudioRecordOutputFormat;
+  bitrateKbps?: number | null;
+  allowOverwrite: boolean;
+}
+
+export interface SaveAudioRecordingResult {
+  outputPath: string;
+  format: AudioRecordOutputFormat;
+  durationSec: number;
+  sampleRate: number;
+  channels: number;
+  byteSize: number;
+}
+
+export async function listAudioCaptureDevices(): Promise<AudioDeviceInfo[]> {
+  assertFrontendNotShuttingDown();
+  return invoke<AudioDeviceInfo[]>("list_audio_capture_devices");
+}
+
+export async function getAudioRecorderStatus(): Promise<AudioRecorderSnapshot> {
+  return invoke<AudioRecorderSnapshot>("get_audio_recorder_status");
+}
+
+export async function startAudioMonitor(deviceId?: string | null): Promise<AudioRecorderSnapshot> {
+  assertFrontendNotShuttingDown();
+  return invoke<AudioRecorderSnapshot>("start_audio_monitor", {
+    deviceId: deviceId ?? null,
+  });
+}
+
+export async function stopAudioMonitor(): Promise<AudioRecorderSnapshot> {
+  return invoke<AudioRecorderSnapshot>("stop_audio_monitor");
+}
+
+export async function startAudioRecording(
+  deviceId?: string | null,
+): Promise<AudioRecorderSnapshot> {
+  assertFrontendNotShuttingDown();
+  return invoke<AudioRecorderSnapshot>("start_audio_recording", {
+    deviceId: deviceId ?? null,
+  });
+}
+
+export async function pauseAudioRecording(): Promise<AudioRecorderSnapshot> {
+  return invoke<AudioRecorderSnapshot>("pause_audio_recording");
+}
+
+export async function resumeAudioRecording(): Promise<AudioRecorderSnapshot> {
+  return invoke<AudioRecorderSnapshot>("resume_audio_recording");
+}
+
+export async function stopAudioRecording(): Promise<AudioRecorderSnapshot> {
+  return invoke<AudioRecorderSnapshot>("stop_audio_recording");
+}
+
+export async function discardAudioRecording(): Promise<AudioRecorderSnapshot> {
+  return invoke<AudioRecorderSnapshot>("discard_audio_recording");
+}
+
+export async function saveAudioRecording(
+  req: SaveAudioRecordingRequest,
+): Promise<SaveAudioRecordingResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<SaveAudioRecordingResult>("save_audio_recording", { req });
+}
+
+export async function subscribeAudioRecorderState(
+  handler: (payload: AudioRecorderSnapshot) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<AudioRecorderSnapshot>("winkit://audio-recorder-state", (event) => {
+    handler(event.payload);
+  });
+}

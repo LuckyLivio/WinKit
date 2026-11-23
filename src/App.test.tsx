@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 50 active tools with unique IDs, complete bilingual metadata, and Coordinate Picker search aliases", () => {
+  it("registers all 51 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -142,10 +142,16 @@ describe("WinKit desktop workbench shell", () => {
       "V14",
       "V15",
       "A01",
+      "A02",
       "A03",
       "A04",
       "A05",
     ]);
+    for (const query of ["录音机", "microphone", "record audio"]) {
+      expect(
+        filterTools(REGISTERED_TOOLS, { query, category: "audio" }).map((tool) => tool.id),
+      ).toEqual(["A02"]);
+    }
     for (const query of ["二维码", "barcode", "Wi-Fi"]) {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "file" }).map((tool) => tool.id),

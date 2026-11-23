@@ -8,6 +8,7 @@ export type ShutdownDialogState =
       phase: "confirming";
       activeCount: number;
       writeFinishingCount: number;
+      recordingToolIds?: string[];
     }
   | { phase: "draining" }
   | {
@@ -19,6 +20,7 @@ interface ShutdownDialogProps {
   state: ShutdownDialogState;
   liveActiveCount: number;
   onStay: () => void;
+  onStopAndKeepRecording?: () => void;
   onConfirmQuit: () => void;
 }
 
@@ -26,10 +28,12 @@ export function ShutdownDialog({
   state,
   liveActiveCount,
   onStay,
+  onStopAndKeepRecording,
   onConfirmQuit,
 }: ShutdownDialogProps) {
   const { t } = useI18n();
   const stayBtnRef = useRef<HTMLButtonElement | null>(null);
+  const stopKeepBtnRef = useRef<HTMLButtonElement | null>(null);
   const confirmBtnRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -81,9 +85,11 @@ export function ShutdownDialog({
           e.preventDefault();
           return;
         }
-        const focusables = [stayBtnRef.current, confirmBtnRef.current].filter(
-          (el): el is HTMLButtonElement => Boolean(el && !el.disabled),
-        );
+        const focusables = [
+          stayBtnRef.current,
+          stopKeepBtnRef.current,
+          confirmBtnRef.current,
+        ].filter((el): el is HTMLButtonElement => Boolean(el && !el.disabled));
         if (focusables.length === 0) return;
         const first = focusables[0]!;
         const last = focusables[focusables.length - 1]!;
@@ -112,12 +118,19 @@ export function ShutdownDialog({
         : Math.max(liveActiveCount, state.activeCount)
       : 0;
 
+  const hasActiveRecording =
+    state.phase === "confirming" &&
+    Boolean(state.recordingToolIds && state.recordingToolIds.length > 0) &&
+    effectiveCount > 0;
+
   const title =
     state.phase === "draining"
       ? t.closeGuard.drainingTitle
       : state.phase === "error"
         ? t.closeGuard.errorTitle
-        : t.closeGuard.title;
+        : hasActiveRecording
+          ? t.closeGuard.recordingTitle
+          : t.closeGuard.title;
 
   const body = (() => {
     if (state.phase === "draining") {
@@ -129,6 +142,9 @@ export function ShutdownDialog({
     if (effectiveCount === 0) {
       return t.closeGuard.bodyFinished;
     }
+    if (hasActiveRecording) {
+      return t.closeGuard.recordingBody;
+    }
     return t.closeGuard.body(effectiveCount, state.writeFinishingCount);
   })();
 
@@ -137,7 +153,9 @@ export function ShutdownDialog({
       ? t.closeGuard.retryQuitButton
       : effectiveCount === 0
         ? t.closeGuard.exitNowButton
-        : t.closeGuard.quitAnywayButton;
+        : hasActiveRecording
+          ? t.closeGuard.discardAndQuitButton
+          : t.closeGuard.quitAnywayButton;
 
   return (
     <div
@@ -178,6 +196,16 @@ export function ShutdownDialog({
             <button ref={stayBtnRef} type="button" className="btn" onClick={onStay}>
               {t.closeGuard.stayButton}
             </button>
+            {hasActiveRecording && onStopAndKeepRecording && (
+              <button
+                ref={stopKeepBtnRef}
+                type="button"
+                className="btn btn-primary"
+                onClick={onStopAndKeepRecording}
+              >
+                {t.closeGuard.stopAndKeepButton}
+              </button>
+            )}
             <button
               ref={confirmBtnRef}
               type="button"
