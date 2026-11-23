@@ -6,6 +6,7 @@ import {
   CaseSensitive,
   Clock,
   Compass,
+  Crop,
   EyeOff,
   FileArchive,
   FileAudio,
@@ -125,5 +126,9 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <ArrowLeftRight size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "video-compress":
       return <Minimize2 size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-resize":
+      return <Scaling size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-crop":
+      return <Crop size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }
