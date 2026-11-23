@@ -1,4 +1,5 @@
 import {
+  ArrowLeftRight,
   Binary,
   Braces,
   CaseSensitive,
@@ -15,6 +16,7 @@ import {
   KeyRound,
   Link2,
   LockKeyhole,
+  Minimize2,
   QrCode,
   Regex,
   ScanText,
@@ -68,6 +70,10 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <CaseSensitive size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "frame":
       return <Frame size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "image-convert":
+      return <ArrowLeftRight size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "image-compress":
+      return <Minimize2 size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "table-2":
       return <Table2 size={size} strokeWidth={1.75} aria-hidden="true" />;
   }

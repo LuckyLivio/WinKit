@@ -61,6 +61,18 @@ import type {
   OrganizePreviewRequest,
   OrganizePreviewResponse,
 } from "../tools/organize-downloads/organizeEngine";
+import type {
+  BatchImageJobResponse,
+  CompressImagesBatchRequest,
+  ConvertImagesBatchRequest,
+  HeicCapabilities,
+  ImageBatchProgressPayload,
+  InspectBatchImagesResponse,
+  PreviewCompressImageRequest,
+  PreviewCompressImageResponse,
+  PreviewConvertImageRequest,
+  PreviewConvertImageResponse,
+} from "../tools/image-batch/imageBatchModel";
 
 export interface AppRuntimeInfo {
   name: string;
@@ -849,6 +861,64 @@ export async function executeOrganizeDownloads(
 ): Promise<OrganizeExecuteResponse> {
   assertFrontendNotShuttingDown();
   return invoke<OrganizeExecuteResponse>("execute_organize_downloads", { req });
+}
+
+export async function getImageHeicCapabilities(): Promise<HeicCapabilities> {
+  if (!isTauriDesktop()) {
+    return {
+      decodeAvailable: false,
+      encodeAvailable: false,
+      decodeNote: "Browser test mode",
+      encodeNote: "Browser test mode",
+    };
+  }
+  return invoke<HeicCapabilities>("get_image_heic_capabilities");
+}
+
+export async function inspectBatchImages(paths: string[]): Promise<InspectBatchImagesResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<InspectBatchImagesResponse>("inspect_batch_images", { paths });
+}
+
+export async function previewConvertImage(
+  req: PreviewConvertImageRequest,
+): Promise<PreviewConvertImageResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<PreviewConvertImageResponse>("preview_convert_image", { req });
+}
+
+export async function convertImagesBatch(
+  taskId: string,
+  req: ConvertImagesBatchRequest,
+): Promise<BatchImageJobResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchImageJobResponse>("convert_images_batch", { taskId, req });
+}
+
+export async function previewCompressImage(
+  req: PreviewCompressImageRequest,
+): Promise<PreviewCompressImageResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<PreviewCompressImageResponse>("preview_compress_image", { req });
+}
+
+export async function compressImagesBatch(
+  taskId: string,
+  req: CompressImagesBatchRequest,
+): Promise<BatchImageJobResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchImageJobResponse>("compress_images_batch", { taskId, req });
+}
+
+export async function subscribeImageBatchProgress(
+  handler: (payload: ImageBatchProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<ImageBatchProgressPayload>("winkit://image-batch-progress", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function subscribeArchiveProgress(

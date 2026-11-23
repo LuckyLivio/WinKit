@@ -23,6 +23,8 @@ import { BatchRenameWorkspace } from "../tools/batch-rename/BatchRenameWorkspace
 import { FindDuplicatesWorkspace } from "../tools/find-duplicates/FindDuplicatesWorkspace";
 import { ArchiveWorkspace } from "../tools/archive/ArchiveWorkspace";
 import { OrganizeDownloadsWorkspace } from "../tools/organize-downloads/OrganizeDownloadsWorkspace";
+import { ImageConvertWorkspace } from "../tools/image-convert/ImageConvertWorkspace";
+import { ImageCompressWorkspace } from "../tools/image-compress/ImageCompressWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -48,7 +50,9 @@ export type ToolIconName =
   | "folder-search"
   | "file-archive"
   | "folder-input"
-  | "frame";
+  | "frame"
+  | "image-convert"
+  | "image-compress";
 
 export interface RegisteredTool {
   id: string;
@@ -603,6 +607,65 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "frame",
     implementationStatus: "partial",
     component: ScreenshotBeautifierWorkspace,
+  },
+  {
+    id: "I05",
+    category: "image",
+    name: { "zh-CN": "图片格式转换", "en-US": "Convert Images" },
+    summary: {
+      "zh-CN":
+        "批量转换 JPEG、PNG、WebP、TIFF、BMP 与 Windows WIC HEIC（含手机 HEIC 转 JPG），支持质量设置与透明图背景色实时预览",
+      "en-US":
+        "Batch convert JPEG, PNG, WebP, TIFF, BMP, and Windows WIC HEIC (including phone HEIC to JPG) with quality controls and live transparency background preview",
+    },
+    keywords: [
+      "convert",
+      "image",
+      "heic",
+      "heif",
+      "jpg",
+      "jpeg",
+      "png",
+      "webp",
+      "tiff",
+      "bmp",
+      "format",
+      "图片转换",
+      "格式转换",
+      "透明背景",
+      "转jpg",
+    ],
+    icon: "image-convert",
+    implementationStatus: "full",
+    component: ImageConvertWorkspace,
+  },
+  {
+    id: "I06",
+    category: "image",
+    name: { "zh-CN": "图片压缩", "en-US": "Compress Images" },
+    summary: {
+      "zh-CN":
+        "低中高三档本地批量压缩 JPEG、PNG、WebP，支持实时前后细节对比、PNG 无损/有损区分及未节省空间保留原件",
+      "en-US":
+        "Batch compress JPEG, PNG, and WebP locally across Low/Medium/High presets with live before/after detail comparison, lossless vs lossy PNG modes, and no-bloat original preservation",
+    },
+    keywords: [
+      "compress",
+      "optimize",
+      "shrink",
+      "jpeg",
+      "png",
+      "webp",
+      "oxipng",
+      "lossless",
+      "图片压缩",
+      "无损优化",
+      "体积压缩",
+      "前后对比",
+    ],
+    icon: "image-compress",
+    implementationStatus: "full",
+    component: ImageCompressWorkspace,
   },
   {
     id: "F01",
