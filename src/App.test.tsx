@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 37 active tools with unique IDs, complete bilingual metadata, and Coordinate Picker search aliases", () => {
+  it("registers all 39 active tools with unique IDs, complete bilingual metadata, and Coordinate Picker search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -128,9 +128,11 @@ describe("WinKit desktop workbench shell", () => {
       "F03",
       "F04",
       "F05",
+      "V04",
       "V10",
       "V11",
       "V13",
+      "V15",
       "A04",
     ]);
     for (const query of ["二维码", "barcode", "Wi-Fi"]) {

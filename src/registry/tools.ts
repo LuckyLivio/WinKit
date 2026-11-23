@@ -38,6 +38,8 @@ import { MediaInfoWorkspace } from "../tools/media-info/MediaInfoWorkspace";
 import { VideoTrimWorkspace } from "../tools/video-trim/VideoTrimWorkspace";
 import { VideoMuteWorkspace } from "../tools/video-mute/VideoMuteWorkspace";
 import { AudioExtractWorkspace } from "../tools/audio-extract/AudioExtractWorkspace";
+import { VideoFramesWorkspace } from "../tools/video-frames/VideoFramesWorkspace";
+import { VideoGifWorkspace } from "../tools/video-gif/VideoGifWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -1133,6 +1135,33 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     component: OrganizeDownloadsWorkspace,
   },
   {
+    id: "V04",
+    category: "video",
+    name: { "zh-CN": "视频抽帧", "en-US": "Extract Frames" },
+    summary: {
+      "zh-CN":
+        "按指定时间点、固定间隔秒数或均匀数量从视频抽取静帧，支持原尺寸/1080p/720p 与 PNG/JPEG/WebP（及系统 WIC HEIC），竖屏正立导出并适配 VFR",
+      "en-US":
+        "Extract still frames by timestamp, interval, or even count in Original/1080p/720p as PNG, JPEG, WebP (or Windows WIC HEIC), upright for portrait and timestamp-accurate for VFR",
+    },
+    keywords: [
+      "extract frames",
+      "frames",
+      "still",
+      "snapshot",
+      "thumbnail",
+      "poster",
+      "video",
+      "视频抽帧",
+      "抽帧",
+      "截帧",
+      "封面",
+    ],
+    icon: "video-frames",
+    implementationStatus: "full",
+    component: VideoFramesWorkspace,
+  },
+  {
     id: "V10",
     category: "video",
     name: { "zh-CN": "媒体信息检测", "en-US": "Media Info" },
@@ -1215,6 +1244,31 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "video-mute",
     implementationStatus: "full",
     component: VideoMuteWorkspace,
+  },
+  {
+    id: "V15",
+    category: "video",
+    name: { "zh-CN": "视频转 GIF", "en-US": "Video to GIF" },
+    summary: {
+      "zh-CN":
+        "将整段视频或指定时间范围通过调色板优化生成高质量 GIF，支持 10/15/24 fps、320/480/640 px 或原宽（默认不放大）及循环开关，导出后即时预览动图与体积",
+      "en-US":
+        "Convert full videos or time ranges into palette-optimized GIFs at 10/15/24 fps and 320/480/640 px or original width with loop toggle and live animated preview",
+    },
+    keywords: [
+      "gif",
+      "video to gif",
+      "animated",
+      "palette",
+      "loop",
+      "视频转gif",
+      "动图",
+      "表情包",
+      "录屏转gif",
+    ],
+    icon: "video-gif",
+    implementationStatus: "full",
+    component: VideoGifWorkspace,
   },
   {
     id: "A04",

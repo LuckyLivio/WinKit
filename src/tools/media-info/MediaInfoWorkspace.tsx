@@ -350,6 +350,20 @@ export function MediaInfoWorkspace() {
                   >
                     <span>{isZh ? "静音 (V13)" : "Mute (V13)"}</span>
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("V04", report.path)}
+                  >
+                    <span>{isZh ? "抽帧 (V04)" : "Frames (V04)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("V15", report.path)}
+                  >
+                    <span>{isZh ? "转 GIF (V15)" : "GIF (V15)"}</span>
+                  </button>
                 </>
               )}
               {report?.hasAudio && (
