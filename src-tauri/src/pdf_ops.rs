@@ -1896,6 +1896,588 @@ pub fn split_pdf_impl(
     })
 }
 
+/* ==================== P09 Organize PDF, P10 Delete Pages, P11 Extract Pages ==================== */
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizePageSpec {
+    pub source_page: usize,
+    pub extra_rotation_cw: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizePdfRequest {
+    pub task_id: Option<String>,
+    pub path: String,
+    pub pages: Vec<OrganizePageSpec>,
+    pub output_path: String,
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizePdfResult {
+    pub output_path: String,
+    pub byte_length: u64,
+    pub source_page_count: usize,
+    pub output_page_count: usize,
+    pub rotated_pages: usize,
+    pub deleted_pages: usize,
+    pub reordered: bool,
+    pub summary: PdfStructuralSummary,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletePdfPagesRequest {
+    pub task_id: Option<String>,
+    pub path: String,
+    pub delete_pages: Vec<usize>,
+    pub output_path: String,
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletePdfPagesResult {
+    pub output_path: String,
+    pub byte_length: u64,
+    pub source_page_count: usize,
+    pub deleted_pages: Vec<usize>,
+    pub kept_pages: Vec<usize>,
+    pub summary: PdfStructuralSummary,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfExtractMode {
+    SinglePdf,
+    PerPagePdfs,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractPdfPagesRequest {
+    pub task_id: Option<String>,
+    pub path: String,
+    pub pages: Vec<usize>,
+    pub mode: PdfExtractMode,
+    pub dedupe_and_sort: Option<bool>,
+    pub output_path: Option<String>,
+    pub output_dir: Option<String>,
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractPdfOutputFile {
+    pub path: String,
+    pub file_name: String,
+    pub byte_length: u64,
+    pub page_count: usize,
+    pub range_label: String,
+    pub collision_adjusted: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractPdfPagesResult {
+    pub mode: PdfExtractMode,
+    pub source_page_count: usize,
+    pub extracted_pages: Vec<usize>,
+    pub duplicate_pages_removed: usize,
+    pub files: Vec<ExtractPdfOutputFile>,
+    pub total_output_bytes: u64,
+    pub cancelled: bool,
+    pub summary: PdfStructuralSummary,
+    pub warnings: Vec<String>,
+}
+
+fn collect_structural_warnings(summary: &PdfStructuralSummary) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if !summary.signature_invalidated_sources.is_empty() {
+        warnings.push(format!(
+            "Original digital signatures were invalidated and stripped from edited output for: {}.",
+            summary.signature_invalidated_sources.join(", ")
+        ));
+    }
+    if !summary.acroform_simplified_sources.is_empty() {
+        warnings.push(format!(
+            "Interactive AcroForm trees were simplified in edited output for: {} (page appearance preserved).",
+            summary.acroform_simplified_sources.join(", ")
+        ));
+    }
+    warnings
+}
+
+/// P09: Organize PDF pages (reorder, rotate 90/180/270°, delete) and export a new PDF.
+pub fn organize_pdf_impl(
+    req: &OrganizePdfRequest,
+    cancel_flag: &AtomicBool,
+    mut on_progress: impl FnMut(PdfTaskProgressPayload),
+) -> Result<OrganizePdfResult, AppError> {
+    if req.pages.is_empty() {
+        return Err(AppError::invalid_param(
+            "Output PDF must keep at least 1 page.",
+        ));
+    }
+    let loaded = load_pdf_for_editing(Path::new(&req.path))?;
+    let source_page_count = loaded.doc.get_pages().len();
+    let source_path = loaded
+        .path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(&req.path));
+
+    let mut plan = Vec::with_capacity(req.pages.len());
+    let mut kept_set = HashSet::new();
+    let mut rotated_pages = 0usize;
+    for spec in &req.pages {
+        if spec.source_page == 0 || spec.source_page > source_page_count {
+            return Err(AppError::invalid_param(format!(
+                "Page {} is out of bounds (document has {source_page_count} pages).",
+                spec.source_page
+            )));
+        }
+        let norm_rot = (spec.extra_rotation_cw % 360) / 90 * 90;
+        if norm_rot != 0 {
+            rotated_pages += 1;
+        }
+        kept_set.insert(spec.source_page);
+        plan.push(PlannedPageRef {
+            source_idx: 0,
+            source_page_1based: spec.source_page,
+            extra_rotation_cw: norm_rot,
+        });
+    }
+
+    let deleted_pages = source_page_count.saturating_sub(kept_set.len());
+    let reordered = plan
+        .windows(2)
+        .any(|w| w[0].source_page_1based > w[1].source_page_1based);
+
+    let staged = AtomicPdfOutput::prepare(
+        &req.output_path,
+        &[source_path],
+        req.overwrite.unwrap_or(false),
+    )?;
+    let task_id = req
+        .task_id
+        .clone()
+        .unwrap_or_else(|| "pdf-organize".to_string());
+    let sources = vec![loaded];
+    let out_count = plan.len();
+
+    let (mut out_doc, summary) = assemble_pdf_from_plan(
+        &sources,
+        &plan,
+        &AssembleOptions {
+            add_filename_bookmarks: false,
+            preserve_source_outlines: true,
+        },
+        cancel_flag,
+        |done, total| {
+            on_progress(PdfTaskProgressPayload {
+                task_id: task_id.clone(),
+                tool_id: "P09".to_string(),
+                current: done,
+                total,
+                percent: (done as f64 / total.max(1) as f64) * 90.0,
+                detail: format!("Organizing page {done}/{total}"),
+            });
+        },
+    )?;
+
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
+
+    let bytes = serialize_pdf_document(&mut out_doc)?;
+    let (final_path, byte_length) = staged.write_and_commit(&bytes)?;
+    let warnings = collect_structural_warnings(&summary);
+
+    on_progress(PdfTaskProgressPayload {
+        task_id,
+        tool_id: "P09".to_string(),
+        current: out_count,
+        total: out_count,
+        percent: 100.0,
+        detail: "Completed".to_string(),
+    });
+
+    Ok(OrganizePdfResult {
+        output_path: final_path.to_string_lossy().into_owned(),
+        byte_length,
+        source_page_count,
+        output_page_count: out_count,
+        rotated_pages,
+        deleted_pages,
+        reordered,
+        summary,
+        warnings,
+    })
+}
+
+/// P10: Delete selected pages from a PDF and export remaining pages into a new PDF.
+/// Explicitly rejects deleting all pages so an empty invalid PDF can never be produced.
+pub fn delete_pdf_pages_impl(
+    req: &DeletePdfPagesRequest,
+    cancel_flag: &AtomicBool,
+    mut on_progress: impl FnMut(PdfTaskProgressPayload),
+) -> Result<DeletePdfPagesResult, AppError> {
+    if req.delete_pages.is_empty() {
+        return Err(AppError::invalid_param("Select at least 1 page to delete."));
+    }
+    let loaded = load_pdf_for_editing(Path::new(&req.path))?;
+    let source_page_count = loaded.doc.get_pages().len();
+    let source_path = loaded
+        .path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(&req.path));
+
+    let mut delete_set = HashSet::new();
+    for &p in &req.delete_pages {
+        if p == 0 || p > source_page_count {
+            return Err(AppError::invalid_param(format!(
+                "Page {p} is out of bounds (document has {source_page_count} pages)."
+            )));
+        }
+        delete_set.insert(p);
+    }
+
+    let mut deleted_pages: Vec<usize> = delete_set.iter().copied().collect();
+    deleted_pages.sort_unstable();
+    let kept_pages: Vec<usize> = (1..=source_page_count)
+        .filter(|p| !delete_set.contains(p))
+        .collect();
+
+    if kept_pages.is_empty() {
+        return Err(AppError::invalid_param(
+            "Cannot delete all pages from a PDF; at least 1 page must remain.",
+        ));
+    }
+
+    let staged = AtomicPdfOutput::prepare(
+        &req.output_path,
+        &[source_path],
+        req.overwrite.unwrap_or(false),
+    )?;
+    let task_id = req
+        .task_id
+        .clone()
+        .unwrap_or_else(|| "pdf-delete".to_string());
+    let plan: Vec<PlannedPageRef> = kept_pages
+        .iter()
+        .map(|&p| PlannedPageRef {
+            source_idx: 0,
+            source_page_1based: p,
+            extra_rotation_cw: 0,
+        })
+        .collect();
+    let sources = vec![loaded];
+
+    let (mut out_doc, summary) = assemble_pdf_from_plan(
+        &sources,
+        &plan,
+        &AssembleOptions {
+            add_filename_bookmarks: false,
+            preserve_source_outlines: true,
+        },
+        cancel_flag,
+        |done, total| {
+            on_progress(PdfTaskProgressPayload {
+                task_id: task_id.clone(),
+                tool_id: "P10".to_string(),
+                current: done,
+                total,
+                percent: (done as f64 / total.max(1) as f64) * 90.0,
+                detail: format!("Keeping page {done}/{total}"),
+            });
+        },
+    )?;
+
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
+
+    let bytes = serialize_pdf_document(&mut out_doc)?;
+    let (final_path, byte_length) = staged.write_and_commit(&bytes)?;
+    let warnings = collect_structural_warnings(&summary);
+
+    on_progress(PdfTaskProgressPayload {
+        task_id,
+        tool_id: "P10".to_string(),
+        current: kept_pages.len(),
+        total: kept_pages.len(),
+        percent: 100.0,
+        detail: "Completed".to_string(),
+    });
+
+    Ok(DeletePdfPagesResult {
+        output_path: final_path.to_string_lossy().into_owned(),
+        byte_length,
+        source_page_count,
+        deleted_pages,
+        kept_pages,
+        summary,
+        warnings,
+    })
+}
+
+/// P11: Extract selected pages into either a single combined PDF or one PDF per selected page.
+pub fn extract_pdf_pages_impl(
+    req: &ExtractPdfPagesRequest,
+    cancel_flag: &AtomicBool,
+    mut on_progress: impl FnMut(PdfTaskProgressPayload),
+) -> Result<ExtractPdfPagesResult, AppError> {
+    if req.pages.is_empty() {
+        return Err(AppError::invalid_param(
+            "Select at least 1 page to extract.",
+        ));
+    }
+    let loaded = load_pdf_for_editing(Path::new(&req.path))?;
+    let source_page_count = loaded.doc.get_pages().len();
+    let source_path = loaded
+        .path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(&req.path));
+    let stem = loaded.display_name.clone();
+
+    for &p in &req.pages {
+        if p == 0 || p > source_page_count {
+            return Err(AppError::invalid_param(format!(
+                "Page {p} is out of bounds (document has {source_page_count} pages)."
+            )));
+        }
+    }
+
+    let dedupe_and_sort = req.dedupe_and_sort.unwrap_or(true);
+    let mut extracted_pages: Vec<usize> = Vec::with_capacity(req.pages.len());
+    let mut seen = HashSet::new();
+    let mut duplicate_pages_removed = 0usize;
+    for &p in &req.pages {
+        if dedupe_and_sort {
+            if seen.insert(p) {
+                extracted_pages.push(p);
+            } else {
+                duplicate_pages_removed += 1;
+            }
+        } else {
+            extracted_pages.push(p);
+        }
+    }
+    if dedupe_and_sort {
+        extracted_pages.sort_unstable();
+    }
+
+    let task_id = req
+        .task_id
+        .clone()
+        .unwrap_or_else(|| "pdf-extract".to_string());
+    let sources = vec![loaded];
+
+    match req.mode {
+        PdfExtractMode::SinglePdf => {
+            let output_raw = req
+                .output_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    AppError::invalid_param(
+                        "Output PDF path is required when extracting to a single PDF.",
+                    )
+                })?;
+            let staged = AtomicPdfOutput::prepare(
+                output_raw,
+                &[source_path],
+                req.overwrite.unwrap_or(false),
+            )?;
+            let plan: Vec<PlannedPageRef> = extracted_pages
+                .iter()
+                .map(|&p| PlannedPageRef {
+                    source_idx: 0,
+                    source_page_1based: p,
+                    extra_rotation_cw: 0,
+                })
+                .collect();
+
+            let (mut out_doc, summary) = assemble_pdf_from_plan(
+                &sources,
+                &plan,
+                &AssembleOptions {
+                    add_filename_bookmarks: false,
+                    preserve_source_outlines: true,
+                },
+                cancel_flag,
+                |done, total| {
+                    on_progress(PdfTaskProgressPayload {
+                        task_id: task_id.clone(),
+                        tool_id: "P11".to_string(),
+                        current: done,
+                        total,
+                        percent: (done as f64 / total.max(1) as f64) * 90.0,
+                        detail: format!("Extracting page {done}/{total}"),
+                    });
+                },
+            )?;
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err(AppError::cancelled());
+            }
+
+            let bytes = serialize_pdf_document(&mut out_doc)?;
+            let (final_path, byte_length) = staged.write_and_commit(&bytes)?;
+            let file_name = final_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "extracted.pdf".to_string());
+            let warnings = collect_structural_warnings(&summary);
+
+            on_progress(PdfTaskProgressPayload {
+                task_id,
+                tool_id: "P11".to_string(),
+                current: extracted_pages.len(),
+                total: extracted_pages.len(),
+                percent: 100.0,
+                detail: "Completed".to_string(),
+            });
+
+            Ok(ExtractPdfPagesResult {
+                mode: PdfExtractMode::SinglePdf,
+                source_page_count,
+                extracted_pages: extracted_pages.clone(),
+                duplicate_pages_removed,
+                files: vec![ExtractPdfOutputFile {
+                    path: final_path.to_string_lossy().into_owned(),
+                    file_name,
+                    byte_length,
+                    page_count: extracted_pages.len(),
+                    range_label: format_compact_page_list(&extracted_pages),
+                    collision_adjusted: false,
+                }],
+                total_output_bytes: byte_length,
+                cancelled: false,
+                summary,
+                warnings,
+            })
+        }
+        PdfExtractMode::PerPagePdfs => {
+            let dir_raw = req
+                .output_dir
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    AppError::invalid_param(
+                        "Output directory is required when extracting one PDF per page.",
+                    )
+                })?;
+            let out_dir = crate::fs_guard::validate_user_path(dir_raw, "Output directory")?;
+            let dir_meta = std::fs::metadata(&out_dir)
+                .map_err(|e| AppError::from_io(e, "Unable to access output directory"))?;
+            if !dir_meta.is_dir() {
+                return Err(AppError::invalid_param(
+                    "Selected output location is not a valid directory.",
+                ));
+            }
+            let pad_width = source_page_count.to_string().len().max(2);
+            let forbidden = vec![source_path];
+            let total = extracted_pages.len();
+            let mut files = Vec::with_capacity(total);
+            let mut total_output_bytes = 0u64;
+            let mut cancelled = false;
+            let mut aggregate_summary = PdfStructuralSummary::default();
+
+            for (idx, &p) in extracted_pages.iter().enumerate() {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    cancelled = true;
+                    break;
+                }
+                let plan = vec![PlannedPageRef {
+                    source_idx: 0,
+                    source_page_1based: p,
+                    extra_rotation_cw: 0,
+                }];
+                let (mut out_doc, part_summary) = assemble_pdf_from_plan(
+                    &sources,
+                    &plan,
+                    &AssembleOptions {
+                        add_filename_bookmarks: false,
+                        preserve_source_outlines: true,
+                    },
+                    cancel_flag,
+                    |_, _| {},
+                )?;
+                if cancel_flag.load(Ordering::Relaxed) {
+                    cancelled = true;
+                    break;
+                }
+                let bytes = serialize_pdf_document(&mut out_doc)?;
+                let desired =
+                    sanitize_pdf_filename(&format!("{stem}_p{:0width$}.pdf", p, width = pad_width));
+                let (staged, collision_adjusted) =
+                    AtomicPdfOutput::prepare_unique_in_dir(&out_dir, &desired, &forbidden)?;
+                let (final_path, byte_length) = staged.write_and_commit(&bytes)?;
+                let file_name = final_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or(desired);
+
+                aggregate_summary.preserved_external_links += part_summary.preserved_external_links;
+                aggregate_summary.remapped_internal_links += part_summary.remapped_internal_links;
+                aggregate_summary.dropped_dangling_links += part_summary.dropped_dangling_links;
+                aggregate_summary.remapped_bookmarks += part_summary.remapped_bookmarks;
+                aggregate_summary.dropped_dangling_bookmarks +=
+                    part_summary.dropped_dangling_bookmarks;
+                for s in part_summary.signature_invalidated_sources {
+                    if !aggregate_summary.signature_invalidated_sources.contains(&s) {
+                        aggregate_summary.signature_invalidated_sources.push(s);
+                    }
+                }
+                for s in part_summary.acroform_simplified_sources {
+                    if !aggregate_summary.acroform_simplified_sources.contains(&s) {
+                        aggregate_summary.acroform_simplified_sources.push(s);
+                    }
+                }
+
+                total_output_bytes += byte_length;
+                files.push(ExtractPdfOutputFile {
+                    path: final_path.to_string_lossy().into_owned(),
+                    file_name,
+                    byte_length,
+                    page_count: 1,
+                    range_label: format!("{p}"),
+                    collision_adjusted,
+                });
+
+                on_progress(PdfTaskProgressPayload {
+                    task_id: task_id.clone(),
+                    tool_id: "P11".to_string(),
+                    current: idx + 1,
+                    total,
+                    percent: ((idx + 1) as f64 / total.max(1) as f64) * 100.0,
+                    detail: format!("Extracted {}/{total}", idx + 1),
+                });
+            }
+
+            let warnings = collect_structural_warnings(&aggregate_summary);
+            Ok(ExtractPdfPagesResult {
+                mode: PdfExtractMode::PerPagePdfs,
+                source_page_count,
+                extracted_pages,
+                duplicate_pages_removed,
+                files,
+                total_output_bytes,
+                cancelled,
+                summary: aggregate_summary,
+                warnings,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2290,5 +2872,189 @@ mod tests {
         .expect("bad preview");
         assert!(!bad_preview.valid);
         assert!(!bad_preview.errors.is_empty());
+    }
+
+    #[test]
+    fn p09_organize_reorders_rotates_deletes_and_remaps_links_and_outlines_cleanly() {
+        let dir = tempdir().expect("tempdir");
+        let src = dir.path().join("deck.pdf");
+        let out = dir.path().join("deck_organized.pdf");
+        create_rich_test_pdf(
+            &src,
+            &["Page One", "Page Two", "Page Three", "Page Four"],
+            true,
+        );
+
+        let cancel = AtomicBool::new(false);
+        // Reorder [3, 1, 4] (dropping page 2), rotate page 1 by 90° and page 4 by 270°
+        let res = organize_pdf_impl(
+            &OrganizePdfRequest {
+                task_id: Some("t-org".into()),
+                path: src.to_string_lossy().into_owned(),
+                pages: vec![
+                    OrganizePageSpec {
+                        source_page: 3,
+                        extra_rotation_cw: 0,
+                    },
+                    OrganizePageSpec {
+                        source_page: 1,
+                        extra_rotation_cw: 90,
+                    },
+                    OrganizePageSpec {
+                        source_page: 4,
+                        extra_rotation_cw: 270,
+                    },
+                ],
+                output_path: out.to_string_lossy().into_owned(),
+                overwrite: Some(false),
+            },
+            &cancel,
+            |_| {},
+        )
+        .expect("organize succeeds");
+
+        assert_eq!(res.output_page_count, 3);
+        assert_eq!(res.rotated_pages, 2);
+        assert_eq!(res.deleted_pages, 1);
+        assert!(res.reordered);
+        assert_eq!(res.summary.signature_invalidated_sources, vec!["deck"]);
+        assert_eq!(res.summary.preserved_external_links, 1);
+        // Page 1's internal link to Page 4 survived and must now point to new Page 3!
+        assert_eq!(res.summary.remapped_internal_links, 1);
+        assert_eq!(res.summary.dropped_dangling_links, 0);
+        // Bookmark for dropped Page 2 was pruned cleanly (3 remaining outlines)
+        assert_eq!(res.summary.remapped_bookmarks, 3);
+        assert_eq!(res.summary.dropped_dangling_bookmarks, 1);
+
+        let mgr = PdfSessionManager::default();
+        let info = mgr
+            .inspect_document(&out.to_string_lossy())
+            .expect("inspect out");
+        assert_eq!(info.page_count, 3);
+        assert_eq!(info.pages[0].rotation, 0);
+        assert_eq!(info.pages[1].rotation, 90);
+        assert_eq!(info.pages[2].rotation, 270);
+        // Rotated A4 page 2 should now be landscape (width > height)!
+        assert!(info.pages[1].width_pt > info.pages[1].height_pt);
+        assert_eq!(info.outlines.len(), 3);
+
+        // Verify page order via selectable text & verify remapped link target == page 3
+        let p1 = mgr.get_page_text(&out.to_string_lossy(), 1).expect("p1");
+        let p2 = mgr.get_page_text(&out.to_string_lossy(), 2).expect("p2");
+        let p3 = mgr.get_page_text(&out.to_string_lossy(), 3).expect("p3");
+        assert!(p1.full_text.contains("Page Three"));
+        assert!(p2.full_text.contains("Page One"));
+        assert!(p3.full_text.contains("Page Four"));
+        assert!(p2
+            .links
+            .iter()
+            .any(|l| l.kind == "internal" && l.target_page == Some(3)));
+    }
+
+    #[test]
+    fn p10_delete_blocks_deleting_all_pages_and_preserves_surviving_structure() {
+        let dir = tempdir().expect("tempdir");
+        let src = dir.path().join("notes.pdf");
+        let out = dir.path().join("notes_trimmed.pdf");
+        create_rich_test_pdf(&src, &["Alpha", "Beta", "Gamma"], false);
+        let cancel = AtomicBool::new(false);
+
+        // Attempting to delete all 3 pages must fail cleanly without creating output
+        let err = delete_pdf_pages_impl(
+            &DeletePdfPagesRequest {
+                task_id: None,
+                path: src.to_string_lossy().into_owned(),
+                delete_pages: vec![1, 2, 3],
+                output_path: out.to_string_lossy().into_owned(),
+                overwrite: Some(false),
+            },
+            &cancel,
+            |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "INVALID_PARAMETER");
+        assert!(!out.exists());
+
+        // Deleting page 2 keeps [1, 3] and remaps Page 1's internal link from old Page 3 -> new Page 2
+        let res = delete_pdf_pages_impl(
+            &DeletePdfPagesRequest {
+                task_id: Some("t-del".into()),
+                path: src.to_string_lossy().into_owned(),
+                delete_pages: vec![2],
+                output_path: out.to_string_lossy().into_owned(),
+                overwrite: Some(false),
+            },
+            &cancel,
+            |_| {},
+        )
+        .expect("delete succeeds");
+        assert_eq!(res.deleted_pages, vec![2]);
+        assert_eq!(res.kept_pages, vec![1, 3]);
+        assert_eq!(res.summary.remapped_internal_links, 1);
+
+        let mgr = PdfSessionManager::default();
+        let p1 = mgr.get_page_text(&out.to_string_lossy(), 1).expect("p1");
+        let p2 = mgr.get_page_text(&out.to_string_lossy(), 2).expect("p2");
+        assert!(p1.full_text.contains("Alpha"));
+        assert!(p2.full_text.contains("Gamma"));
+        assert!(p1
+            .links
+            .iter()
+            .any(|l| l.kind == "internal" && l.target_page == Some(2)));
+    }
+
+    #[test]
+    fn p11_extract_supports_single_and_per_page_modes_with_collision_protection() {
+        let dir = tempdir().expect("tempdir");
+        let src = dir.path().join("book.pdf");
+        let single_out = dir.path().join("book_extract.pdf");
+        let per_page_dir = dir.path().join("pages_out");
+        std::fs::create_dir_all(&per_page_dir).expect("mkdir");
+        create_rich_test_pdf(&src, &["One", "Two", "Three", "Four"], false);
+        let cancel = AtomicBool::new(false);
+
+        // Mode 1: Single PDF with dedupe + ascending sort ([4, 2, 4] -> [2, 4])
+        let single = extract_pdf_pages_impl(
+            &ExtractPdfPagesRequest {
+                task_id: Some("t-ext-1".into()),
+                path: src.to_string_lossy().into_owned(),
+                pages: vec![4, 2, 4],
+                mode: PdfExtractMode::SinglePdf,
+                dedupe_and_sort: Some(true),
+                output_path: Some(single_out.to_string_lossy().into_owned()),
+                output_dir: None,
+                overwrite: Some(false),
+            },
+            &cancel,
+            |_| {},
+        )
+        .expect("single extract");
+        assert_eq!(single.extracted_pages, vec![2, 4]);
+        assert_eq!(single.duplicate_pages_removed, 1);
+        assert_eq!(single.files.len(), 1);
+        assert_eq!(single.files[0].page_count, 2);
+
+        // Mode 2: Per-page PDFs with collision-safe non-overwrite naming
+        let existing = per_page_dir.join("book_p01.pdf");
+        std::fs::write(&existing, b"EXISTING_CONTENT").expect("seed collision");
+        let per_page = extract_pdf_pages_impl(
+            &ExtractPdfPagesRequest {
+                task_id: Some("t-ext-2".into()),
+                path: src.to_string_lossy().into_owned(),
+                pages: vec![1, 3],
+                mode: PdfExtractMode::PerPagePdfs,
+                dedupe_and_sort: Some(true),
+                output_path: None,
+                output_dir: Some(per_page_dir.to_string_lossy().into_owned()),
+                overwrite: None,
+            },
+            &cancel,
+            |_| {},
+        )
+        .expect("per-page extract");
+        assert_eq!(per_page.files.len(), 2);
+        assert!(per_page.files[0].collision_adjusted);
+        assert_eq!(per_page.files[0].file_name, "book_p01_2.pdf");
+        assert_eq!(std::fs::read(&existing).unwrap(), b"EXISTING_CONTENT");
     }
 }

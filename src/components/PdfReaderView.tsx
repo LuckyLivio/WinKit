@@ -715,6 +715,14 @@ export function PdfReaderView() {
             <button
               type="button"
               className="btn"
+              onClick={() => sendPdfToTool(info.path, "P09")}
+              title={pm.organize.title}
+            >
+              <span>P09</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
               onClick={() => sendPdfToTool(info.path, "P07")}
               title={pm.reader.sendToMerge}
             >

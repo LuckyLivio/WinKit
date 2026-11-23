@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 55 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
+  it("registers all 58 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -150,16 +150,34 @@ describe("WinKit desktop workbench shell", () => {
       "A05",
       "P07",
       "P08",
+      "P09",
+      "P10",
+      "P11",
     ]);
     for (const query of ["PDF 合并", "merge pdf", "bookmarks"]) {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
       ).toEqual(["P07"]);
     }
-    for (const query of ["PDF 拆分", "split pdf", "页码范围"]) {
+    for (const query of ["PDF 拆分", "split pdf", "分割pdf"]) {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
       ).toEqual(["P08"]);
+    }
+    for (const query of ["页面重排", "organize pdf", "pdf旋转"]) {
+      expect(
+        filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
+      ).toEqual(["P09"]);
+    }
+    for (const query of ["删除 PDF 页面", "delete pdf pages", "删页"]) {
+      expect(
+        filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
+      ).toEqual(["P10"]);
+    }
+    for (const query of ["提取 PDF 页面", "extract pdf pages", "抽取页面"]) {
+      expect(
+        filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
+      ).toEqual(["P11"]);
     }
     for (const query of ["视频下载", "video download", "yt-dlp"]) {
       expect(

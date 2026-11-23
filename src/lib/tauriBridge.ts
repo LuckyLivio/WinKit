@@ -3338,3 +3338,99 @@ export async function subscribePdfTaskProgress(
     handler(event.payload);
   });
 }
+
+export interface OrganizePageSpec {
+  sourcePage: number;
+  extraRotationCw: number;
+}
+
+export interface OrganizePdfRequest {
+  taskId?: string;
+  path: string;
+  pages: OrganizePageSpec[];
+  outputPath: string;
+  overwrite?: boolean;
+}
+
+export interface OrganizePdfResult {
+  outputPath: string;
+  byteLength: number;
+  sourcePageCount: number;
+  outputPageCount: number;
+  rotatedPages: number;
+  deletedPages: number;
+  reordered: boolean;
+  summary: PdfStructuralSummary;
+  warnings: string[];
+}
+
+export interface DeletePdfPagesRequest {
+  taskId?: string;
+  path: string;
+  deletePages: number[];
+  outputPath: string;
+  overwrite?: boolean;
+}
+
+export interface DeletePdfPagesResult {
+  outputPath: string;
+  byteLength: number;
+  sourcePageCount: number;
+  deletedPages: number[];
+  keptPages: number[];
+  summary: PdfStructuralSummary;
+  warnings: string[];
+}
+
+export type PdfExtractMode = "single_pdf" | "per_page_pdfs";
+
+export interface ExtractPdfPagesRequest {
+  taskId?: string;
+  path: string;
+  pages: number[];
+  mode: PdfExtractMode;
+  dedupeAndSort?: boolean;
+  outputPath?: string;
+  outputDir?: string;
+  overwrite?: boolean;
+}
+
+export interface ExtractPdfOutputFile {
+  path: string;
+  fileName: string;
+  byteLength: number;
+  pageCount: number;
+  rangeLabel: string;
+  collisionAdjusted: boolean;
+}
+
+export interface ExtractPdfPagesResult {
+  mode: PdfExtractMode;
+  sourcePageCount: number;
+  extractedPages: number[];
+  duplicatePagesRemoved: number;
+  files: ExtractPdfOutputFile[];
+  totalOutputBytes: number;
+  cancelled: boolean;
+  summary: PdfStructuralSummary;
+  warnings: string[];
+}
+
+export async function organizePdf(request: OrganizePdfRequest): Promise<OrganizePdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<OrganizePdfResult>("organize_pdf", { request });
+}
+
+export async function deletePdfPages(
+  request: DeletePdfPagesRequest,
+): Promise<DeletePdfPagesResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<DeletePdfPagesResult>("delete_pdf_pages", { request });
+}
+
+export async function extractPdfPages(
+  request: ExtractPdfPagesRequest,
+): Promise<ExtractPdfPagesResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<ExtractPdfPagesResult>("extract_pdf_pages", { request });
+}
