@@ -34,8 +34,10 @@ import { ImageAnnotateWorkspace } from "../tools/image-annotate/ImageAnnotateWor
 import { ImageWatermarkWorkspace } from "../tools/image-watermark/ImageWatermarkWorkspace";
 import { BlurFacesWorkspace } from "../tools/blur-faces/BlurFacesWorkspace";
 import { ColorPickerWorkspace } from "../tools/color-picker/ColorPickerWorkspace";
+import { MediaInfoWorkspace } from "../tools/media-info/MediaInfoWorkspace";
+import { VideoTrimWorkspace } from "../tools/video-trim/VideoTrimWorkspace";
 
-export type ToolCategory = "developer" | "text" | "image" | "file";
+export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
 export type ToolIconName =
   | "braces"
@@ -70,7 +72,13 @@ export type ToolIconName =
   | "color-picker"
   | "image-redact"
   | "image-annotate"
-  | "image-watermark";
+  | "image-watermark"
+  | "media-info"
+  | "video-trim"
+  | "video-mute"
+  | "audio-extract"
+  | "video-frames"
+  | "video-gif";
 
 export interface RegisteredTool {
   id: string;
@@ -1121,6 +1129,65 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "folder-input",
     implementationStatus: "full",
     component: OrganizeDownloadsWorkspace,
+  },
+  {
+    id: "V10",
+    category: "video",
+    name: { "zh-CN": "媒体信息检测", "en-US": "Media Info" },
+    summary: {
+      "zh-CN":
+        "离线检测视频与音频容器、时长、大小、编码、存储与显示尺寸、旋转方向、帧率（含 VFR）、码率及每条音轨信息，支持复制文本与导出 JSON",
+      "en-US":
+        "Inspect video/audio container, duration, size, codecs, storage/display dimensions, rotation, frame rate (including VFR), bitrate, and every audio track with text copy and JSON export",
+    },
+    keywords: [
+      "media info",
+      "ffprobe",
+      "video",
+      "audio",
+      "codec",
+      "bitrate",
+      "fps",
+      "vfr",
+      "metadata",
+      "媒体信息",
+      "视频信息",
+      "编码",
+      "码率",
+      "帧率",
+      "音轨",
+    ],
+    icon: "media-info",
+    implementationStatus: "full",
+    component: MediaInfoWorkspace,
+  },
+  {
+    id: "V11",
+    category: "video",
+    name: { "zh-CN": "视频剪切", "en-US": "Trim Video" },
+    summary: {
+      "zh-CN":
+        "可视化时间轴拖动起止点、按播放头设边界与选段预览；支持快速流复制（导出前展示关键帧偏移）与精确剪切（重编码），兼顾竖屏旋转与无音轨视频",
+      "en-US":
+        "Visual timeline trimming with playhead bounds, segment preview, Fast Stream Copy (with pre-export keyframe offset notice), and Accurate Transcode",
+    },
+    keywords: [
+      "trim",
+      "cut",
+      "clip",
+      "video",
+      "stream copy",
+      "keyframe",
+      "ffmpeg",
+      "视频剪切",
+      "剪辑",
+      "裁剪片段",
+      "流复制",
+      "精确剪切",
+    ],
+    icon: "video-trim",
+    implementationStatus: "full",
+    component: VideoTrimWorkspace,
   },
 ];
 

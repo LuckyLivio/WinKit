@@ -8,13 +8,17 @@ import {
   Compass,
   EyeOff,
   FileArchive,
+  FileAudio,
   FilePenLine,
   FileText,
+  Film,
   Fingerprint,
   FolderInput,
   FolderSearch,
   Frame,
   GitCompareArrows,
+  Images,
+  Info,
   KeyRound,
   Link2,
   LockKeyhole,
@@ -27,11 +31,13 @@ import {
   ScanFace,
   Scaling,
   ScanText,
+  Scissors,
   ShieldCheck,
   ShieldOff,
   Stamp,
   Table2,
   TextQuote,
+  VolumeX,
 } from "lucide-react";
 import type { ToolIconName } from "../registry/tools";
 
@@ -103,5 +109,17 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Stamp size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "table-2":
       return <Table2 size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "media-info":
+      return <Info size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-trim":
+      return <Scissors size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-mute":
+      return <VolumeX size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "audio-extract":
+      return <FileAudio size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-frames":
+      return <Images size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-gif":
+      return <Film size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

@@ -12,6 +12,8 @@ export interface Messages {
   };
   categories: {
     all: string;
+    video: string;
+    audio: string;
     developer: string;
     text: string;
     image: string;
@@ -91,6 +93,11 @@ export interface Messages {
     MODEL_INVALID: string;
     MODEL_LOAD_FAILED: string;
     INFERENCE_FAILED: string;
+    MEDIA_TOOLS_MISSING: string;
+    MEDIA_TOOLS_INVALID: string;
+    DOWNLOAD_FAILED: string;
+    CHECKSUM_MISMATCH: string;
+    MEDIA_PROCESS_FAILED: string;
     TASK_CANCELLED: string;
     INVALID_PARAMETER: string;
     FALLBACK: string;
@@ -945,6 +952,8 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     categories: {
       all: "全部分类",
+      video: "视频",
+      audio: "音频",
       developer: "开发者",
       text: "文本与语音",
       image: "图片",
@@ -1033,6 +1042,11 @@ export const MESSAGES: Record<Locale, Messages> = {
       MODEL_INVALID: "内置人脸检测模型校验失败，请重新安装 WinKit。",
       MODEL_LOAD_FAILED: "本地人脸检测模型加载失败。",
       INFERENCE_FAILED: "本地人脸检测执行失败。",
+      MEDIA_TOOLS_MISSING: "尚未配置本地 FFmpeg / ffprobe 媒体组件，请先完成配置。",
+      MEDIA_TOOLS_INVALID: "选定目录中的 FFmpeg / ffprobe 不可用或校验未通过。",
+      DOWNLOAD_FAILED: "媒体组件下载中断或网络不可用，您可以稍后重试。",
+      CHECKSUM_MISMATCH: "下载的媒体组件包 SHA-256 摘要校验未通过，已自动丢弃。",
+      MEDIA_PROCESS_FAILED: "本地媒体处理进程执行失败。",
       TASK_CANCELLED: "任务已按请求取消。",
       INVALID_PARAMETER: "输入参数或路径格式无效。",
       FALLBACK: "执行本地操作时发生错误。",
@@ -2006,6 +2020,8 @@ export const MESSAGES: Record<Locale, Messages> = {
     },
     categories: {
       all: "All Categories",
+      video: "Video",
+      audio: "Audio",
       developer: "Developer",
       text: "Text & Speech",
       image: "Images",
@@ -2100,6 +2116,14 @@ export const MESSAGES: Record<Locale, Messages> = {
         "Bundled face detection model integrity check failed. Please reinstall WinKit.",
       MODEL_LOAD_FAILED: "Failed to load local offline face detection model.",
       INFERENCE_FAILED: "Local face detection inference failed.",
+      MEDIA_TOOLS_MISSING:
+        "Local FFmpeg / ffprobe media components are not configured yet. Set them up first.",
+      MEDIA_TOOLS_INVALID: "FFmpeg / ffprobe verification failed in the selected directory.",
+      DOWNLOAD_FAILED:
+        "Media component download was interrupted or network is unavailable. You can retry.",
+      CHECKSUM_MISMATCH:
+        "Downloaded media package failed SHA-256 integrity verification and was discarded.",
+      MEDIA_PROCESS_FAILED: "Local media engine process failed.",
       TASK_CANCELLED: "Operation cancelled.",
       INVALID_PARAMETER: "Invalid input parameter or file path.",
       FALLBACK: "An unexpected local error occurred.",

@@ -77,6 +77,14 @@ F04 uses `unrar-rs` (`0.16.x`, read-only extraction) under its Apache-2.0 licens
 - **`D09` Link Tracking & Redirect Rule Catalog (`src/tools/clean-links/linkRules.ts`, `2026.11-r1`)**:
   - Authored directly for WinKit from publicly documented query-parameter specifications of Google Analytics/Ads (`utm_*`, `gclid`, `_ga`), Meta (`fbclid`, `igsh`), Microsoft Advertising (`msclkid`), Mailchimp, HubSpot, Marketo, Matomo, Amazon, YouTube, Spotify, TikTok, X, LinkedIn, Reddit, and Outlook Safe Links.
 
+## Optional User-Installed External Media Tools (`V04`, `V10`, `V11`, `V13`, `V15`, `A04`)
+
+WinKit does **not** statically link FFmpeg or bundle FFmpeg binaries inside the WinKit installer. When a user runs video/audio tools on a machine without FFmpeg/ffprobe on `PATH`, WinKit allows either selecting an existing local FFmpeg folder or triggering a user-initiated one-time download of the pinned static Windows x64 build:
+
+- **Distribution**: `GyanD/codexffmpeg` Release `9.1` (`ffmpeg-9.1-essentials_build.7z`, `36,671,021` bytes, SHA-256 `835b9a733445ba7a56a37a26cf7bde84e2f3ce7da2a8ec984276bb2abb1b922c`, `https://github.com/GyanD/codexffmpeg/releases/tag/9.1`).
+- **Upstream Source**: FFmpeg `9.1` (`https://github.com/FFmpeg/FFmpeg/commit/74e4393595`).
+- **License & Preservation**: GNU General Public License v3 (`GPL-3.0`). During extraction into `%LOCALAPPDATA%\com.luckylivio.winkit\media-tools\ffmpeg-9.1-essentials\`, WinKit preserves the build's verbatim `LICENSE` and `README.txt` (including full library and source attributions) alongside `bin\ffmpeg.exe` and `bin\ffprobe.exe`, and executes them strictly as separate external CLI processes.
+
 ## Application Icons & Visual Assets
 
 All WinKit icons (`src-tauri/icons/*`) and UI styles are original works created specifically for WinKit. No icons, brand marks, screenshots, or code were copied from any third-party reference application.

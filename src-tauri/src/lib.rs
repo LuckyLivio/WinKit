@@ -16,6 +16,9 @@ pub mod image_transform;
 pub mod image_watermark;
 pub mod iso_reader;
 pub mod jwt;
+pub mod media_core;
+pub mod media_info;
+pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
 mod qr;
@@ -97,6 +100,17 @@ use crate::image_watermark::{
     WatermarkImagesBatchRequest,
 };
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
+use crate::media_core::{
+    extract_media_poster_data_url_impl, get_media_tools_status_impl, handle_winkit_media_protocol,
+    install_managed_media_tools_impl, resolve_media_data_root, set_media_tools_custom_dir_impl,
+    MediaPreviewRegistration, MediaPreviewRegistry, MediaToolsStatus, MEDIA_SETUP_PROGRESS_EVENT,
+    MEDIA_TASK_PROGRESS_EVENT,
+};
+use crate::media_info::{probe_media_info_impl, MediaProbeReport};
+use crate::media_trim::{
+    analyze_trim_keyframes_impl, trim_video_file_impl, TrimKeyframeAnalysis,
+    TrimKeyframeAnalysisRequest, TrimVideoRequest, TrimVideoResult,
+};
 use crate::organize_downloads::{
     execute_organize_downloads_impl, preview_organize_downloads_impl, OrganizeExecuteRequest,
     OrganizeExecuteResponse, OrganizePreviewRequest, OrganizePreviewResponse,
@@ -2293,6 +2307,211 @@ async fn extract_image_palette(
         .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image palette worker failed."))?
 }
 
+fn app_media_root<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
+    let local_dir = app.path().app_local_data_dir().ok();
+    resolve_media_data_root(local_dir.as_deref())
+}
+
+#[tauri::command]
+async fn get_media_tools_status<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<MediaToolsStatus, AppError> {
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || get_media_tools_status_impl(&root))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Media status worker failed."))
+}
+
+#[tauri::command]
+async fn set_media_tools_custom_dir<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    dir: Option<String>,
+) -> Result<MediaToolsStatus, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || set_media_tools_custom_dir_impl(&root, dir))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Media config worker failed."))?
+}
+
+#[tauri::command]
+async fn install_managed_media_tools<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+) -> Result<MediaToolsStatus, AppError> {
+    let tid = task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid media setup task ID."));
+    }
+    let guard = registry.register_checked(&tid, "media-setup", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(
+            &tid,
+            "media-setup",
+            Some(crate::media_core::MANAGED_FFMPEG_DOWNLOAD_BYTES),
+        ),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = install_managed_media_tools_impl(&tid, &root, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_SETUP_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "media-setup".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.downloaded_bytes,
+                    total_bytes: Some(ev.total_bytes),
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "media-setup",
+                        crate::media_core::MANAGED_FFMPEG_DOWNLOAD_BYTES,
+                        Some(crate::media_core::MANAGED_FFMPEG_DOWNLOAD_BYTES),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(
+                        &tid,
+                        "media-setup",
+                        0,
+                        Some(crate::media_core::MANAGED_FFMPEG_DOWNLOAD_BYTES),
+                        err,
+                    ),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Media installation worker failed."))?
+}
+
+#[tauri::command]
+fn register_media_preview_path(
+    preview_reg: State<'_, MediaPreviewRegistry>,
+    path: String,
+) -> Result<MediaPreviewRegistration, AppError> {
+    preview_reg.register_path(&path)
+}
+
+#[tauri::command]
+async fn extract_media_poster_data_url<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    path: String,
+    time_sec: Option<f64>,
+) -> Result<String, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_media_poster_data_url_impl(&root, &path, time_sec)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Media poster worker failed."))?
+}
+
+#[tauri::command]
+async fn probe_media_info<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    path: String,
+) -> Result<MediaProbeReport, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || probe_media_info_impl(&root, &path))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Media probe worker failed."))?
+}
+
+#[tauri::command]
+async fn analyze_trim_keyframes<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: TrimKeyframeAnalysisRequest,
+) -> Result<TrimKeyframeAnalysis, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || analyze_trim_keyframes_impl(&root, &req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Keyframe analysis worker failed."))?
+}
+
+#[tauri::command]
+async fn trim_video_file<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: TrimVideoRequest,
+) -> Result<TrimVideoResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid trim task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V11", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V11", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = trim_video_file_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V11".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V11", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V11", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video trim worker failed."))?
+}
+
 #[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
@@ -2332,10 +2551,17 @@ fn abort_graceful_shutdown(registry: State<'_, TaskRegistry>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let preview_registry = MediaPreviewRegistry::default();
+    let preview_registry_for_proto = preview_registry.clone();
+
     tauri::Builder::default()
         .manage(TaskRegistry::default())
         .manage(BatchRenameState::default())
         .manage(ImageAssetStore::default())
+        .manage(preview_registry)
+        .register_uri_scheme_protocol("winkitmedia", move |_ctx, request| {
+            handle_winkit_media_protocol(&preview_registry_for_proto, request)
+        })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
@@ -2413,6 +2639,14 @@ pub fn run() {
             pick_screen_color,
             sample_screen_pixel_at,
             extract_image_palette,
+            get_media_tools_status,
+            set_media_tools_custom_dir,
+            install_managed_media_tools,
+            register_media_preview_path,
+            extract_media_poster_data_url,
+            probe_media_info,
+            analyze_trim_keyframes,
+            trim_video_file,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

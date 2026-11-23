@@ -1519,3 +1519,234 @@ export async function destroyCurrentWindow(): Promise<void> {
   }
   await getCurrentWindow().destroy();
 }
+
+// ---------- Phase 4A: Shared Local Media Runtime (FFmpeg / ffprobe), V10, V11 ----------
+
+export interface ManagedFfmpegSpec {
+  version: string;
+  sourceName: string;
+  releaseUrl: string;
+  sourceCommitUrl: string;
+  downloadUrl: string;
+  downloadBytes: number;
+  sha256: string;
+  estimatedInstalledBytes: number;
+  licenseName: string;
+}
+
+export type MediaToolsMode = "auto" | "custom";
+export type MediaToolsSource = "managed" | "system_path" | "custom" | "missing";
+
+export interface MediaToolsStatus {
+  ready: boolean;
+  source: MediaToolsSource;
+  mode: MediaToolsMode;
+  customDir: string | null;
+  ffmpegPath: string | null;
+  ffprobePath: string | null;
+  ffmpegVersion: string | null;
+  ffprobeVersion: string | null;
+  installDir: string;
+  managedInstalledBytes: number | null;
+  licensePath: string | null;
+  error: string | null;
+  spec: ManagedFfmpegSpec;
+}
+
+export interface MediaSetupProgressPayload {
+  taskId: string;
+  phase: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number | null;
+  message: string;
+}
+
+export interface MediaTaskProgressPayload {
+  taskId: string;
+  toolId: string;
+  phase: string;
+  currentItem: number;
+  totalItems: number;
+  itemName: string | null;
+  percent: number | null;
+  outTimeSec: number | null;
+  totalDurationSec: number | null;
+}
+
+export interface MediaPreviewRegistration {
+  token: string;
+  url: string;
+  mimeType: string;
+  fileName: string;
+  byteLength: number;
+}
+
+export interface VideoStreamInfo {
+  index: number;
+  codecName: string | null;
+  codecLongName: string | null;
+  profile: string | null;
+  pixelFormat: string | null;
+  codedWidth: number | null;
+  codedHeight: number | null;
+  displayWidth: number | null;
+  displayHeight: number | null;
+  sampleAspectRatio: string | null;
+  rotationDegrees: number | null;
+  orientation: string | null;
+  avgFrameRate: number | null;
+  rFrameRate: number | null;
+  avgFrameRateRaw: string | null;
+  rFrameRateRaw: string | null;
+  isVariableFrameRate: boolean | null;
+  bitrateBps: number | null;
+  colorSpace: string | null;
+  colorTransfer: string | null;
+  colorPrimaries: string | null;
+  durationSec: number | null;
+}
+
+export interface AudioStreamInfo {
+  index: number;
+  audioTrackIndex: number;
+  codecName: string | null;
+  codecLongName: string | null;
+  profile: string | null;
+  language: string | null;
+  title: string | null;
+  channels: number | null;
+  channelLayout: string | null;
+  sampleRateHz: number | null;
+  bitrateBps: number | null;
+  durationSec: number | null;
+  isDefault: boolean;
+}
+
+export interface SubtitleStreamInfo {
+  index: number;
+  codecName: string | null;
+  language: string | null;
+  title: string | null;
+}
+
+export interface MediaProbeReport {
+  path: string;
+  fileName: string;
+  byteSize: number;
+  containerFormat: string | null;
+  containerLongName: string | null;
+  durationSec: number | null;
+  overallBitrateBps: number | null;
+  streamCount: number;
+  hasVideo: boolean;
+  hasAudio: boolean;
+  videoStreams: VideoStreamInfo[];
+  audioStreams: AudioStreamInfo[];
+  subtitleStreams: SubtitleStreamInfo[];
+  formatTags: Record<string, string>;
+  summaryText: string;
+  rawJson: string;
+}
+
+export type VideoTrimMode = "stream_copy" | "accurate";
+
+export interface TrimKeyframeAnalysis {
+  requestedStartSec: number;
+  requestedEndSec: number;
+  actualStreamCopyStartSec: number;
+  startDeltaSec: number;
+  estimatedStreamCopyDurationSec: number;
+  hasKeyframeShift: boolean;
+  nearestNextKeyframeSec: number | null;
+  keyframeCountSampled: number;
+}
+
+export interface TrimVideoRequest {
+  taskId: string;
+  sourcePath: string;
+  outputPath: string;
+  startSec: number;
+  endSec: number;
+  mode: VideoTrimMode;
+  allowOverwrite?: boolean;
+}
+
+export interface TrimVideoResult {
+  outputPath: string;
+  byteSize: number;
+  durationSec: number | null;
+  displayWidth: number | null;
+  displayHeight: number | null;
+  rotationDegrees: number | null;
+  mode: VideoTrimMode;
+  requestedStartSec: number;
+  requestedEndSec: number;
+  elapsedMs: number;
+}
+
+export async function getMediaToolsStatus(): Promise<MediaToolsStatus> {
+  return invoke<MediaToolsStatus>("get_media_tools_status");
+}
+
+export async function setMediaToolsCustomDir(dir: string | null): Promise<MediaToolsStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<MediaToolsStatus>("set_media_tools_custom_dir", { dir });
+}
+
+export async function installManagedMediaTools(taskId: string): Promise<MediaToolsStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<MediaToolsStatus>("install_managed_media_tools", { taskId });
+}
+
+export async function registerMediaPreviewPath(path: string): Promise<MediaPreviewRegistration> {
+  return invoke<MediaPreviewRegistration>("register_media_preview_path", { path });
+}
+
+export async function extractMediaPosterDataUrl(path: string, timeSec?: number): Promise<string> {
+  assertFrontendNotShuttingDown();
+  return invoke<string>("extract_media_poster_data_url", { path, timeSec: timeSec ?? null });
+}
+
+export async function probeMediaInfo(path: string): Promise<MediaProbeReport> {
+  assertFrontendNotShuttingDown();
+  return invoke<MediaProbeReport>("probe_media_info", { path });
+}
+
+export async function analyzeTrimKeyframes(
+  path: string,
+  startSec: number,
+  endSec: number,
+): Promise<TrimKeyframeAnalysis> {
+  assertFrontendNotShuttingDown();
+  return invoke<TrimKeyframeAnalysis>("analyze_trim_keyframes", {
+    req: { path, startSec, endSec },
+  });
+}
+
+export async function trimVideoFile(req: TrimVideoRequest): Promise<TrimVideoResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<TrimVideoResult>("trim_video_file", { req });
+}
+
+export async function subscribeMediaSetupProgress(
+  handler: (payload: MediaSetupProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<MediaSetupProgressPayload>("winkit://media-setup-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function subscribeMediaTaskProgress(
+  handler: (payload: MediaTaskProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<MediaTaskProgressPayload>("winkit://media-progress", (event) => {
+    handler(event.payload);
+  });
+}
