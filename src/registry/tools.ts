@@ -36,6 +36,8 @@ import { BlurFacesWorkspace } from "../tools/blur-faces/BlurFacesWorkspace";
 import { ColorPickerWorkspace } from "../tools/color-picker/ColorPickerWorkspace";
 import { MediaInfoWorkspace } from "../tools/media-info/MediaInfoWorkspace";
 import { VideoTrimWorkspace } from "../tools/video-trim/VideoTrimWorkspace";
+import { VideoMuteWorkspace } from "../tools/video-mute/VideoMuteWorkspace";
+import { AudioExtractWorkspace } from "../tools/audio-extract/AudioExtractWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -1188,6 +1190,58 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "video-trim",
     implementationStatus: "full",
     component: VideoTrimWorkspace,
+  },
+  {
+    id: "V13",
+    category: "video",
+    name: { "zh-CN": "视频静音", "en-US": "Mute Video" },
+    summary: {
+      "zh-CN":
+        "无损移除视频中的全部音轨（含多语言第二条及后续音轨），保留原封装容器、画质、方向与时长；原本无音轨素材直接提示不重复写出",
+      "en-US":
+        "Losslessly strip all audio tracks (including multi-language tracks) while keeping original container, video stream, orientation, and duration",
+    },
+    keywords: [
+      "mute",
+      "silent",
+      "remove audio",
+      "strip audio",
+      "video",
+      "视频静音",
+      "去声音",
+      "移除音轨",
+      "消除音频",
+    ],
+    icon: "video-mute",
+    implementationStatus: "full",
+    component: VideoMuteWorkspace,
+  },
+  {
+    id: "A04",
+    category: "audio",
+    name: { "zh-CN": "提取视频音频", "en-US": "Extract Audio" },
+    summary: {
+      "zh-CN":
+        "从视频中按语言选择指定音轨并支持试听，导出为 M4A、MP3、WAV 或 FLAC；兼容编码原样无损提取，其余明确标注转码，无音轨不生成空文件",
+      "en-US":
+        "Select and audition any audio track from videos and export as M4A, MP3, WAV, or FLAC with stream copy when compatible or explicit transcoding",
+    },
+    keywords: [
+      "extract audio",
+      "audio",
+      "m4a",
+      "mp3",
+      "wav",
+      "flac",
+      "track",
+      "提取音频",
+      "分离音轨",
+      "视频转音频",
+      "音轨",
+    ],
+    icon: "audio-extract",
+    implementationStatus: "full",
+    component: AudioExtractWorkspace,
   },
 ];
 
