@@ -6,6 +6,7 @@ pub mod error;
 pub mod find_duplicates;
 pub mod fs_guard;
 pub mod hasher;
+pub mod image_assets;
 pub mod image_core;
 pub mod image_metadata;
 pub mod image_transform;
@@ -14,6 +15,7 @@ pub mod jwt;
 pub mod organize_downloads;
 pub mod password_gen;
 mod qr;
+pub mod screen_capture;
 pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
@@ -31,8 +33,9 @@ use crate::batch_rename::{
     BatchRenameUndoStatus, RenamePairInput,
 };
 use crate::beautifier::{
-    export_beautified_png_cancellable, inspect_source_image, BeautifyExportParams,
-    BeautifyExportResult, SourceImageInspection,
+    beautify_images_batch_impl, export_beautified_png_with_store, inspect_source_image,
+    render_beautified_to_asset_impl, BeautifyBatchRequest, BeautifyExportParams,
+    BeautifyExportResult, BeautifyRenderAssetRequest, SourceImageInspection,
 };
 use crate::codec::{
     compute_full_utf8_result, export_codec_result_to_file, transform_file_payload,
@@ -54,6 +57,11 @@ use crate::hasher::{
     prepare_batch_hash_task, prepare_file_hash_task, BatchHashInputItem, HashAlgorithm,
     MultiFileBatchHashResult, MultiFileHashResult, MultiTextHashResult, HASH_BATCH_ITEM_EVENT,
 };
+use crate::image_assets::{
+    copy_png_to_system_clipboard, decode_png_data_url_or_base64, load_local_image_into_store,
+    read_system_clipboard_image_into_store, save_png_bytes_to_disk, ImageAssetPayload,
+    ImageAssetStore, SaveAssetFormat, SavedImageAssetResult,
+};
 use crate::image_core::{
     compress_images_batch_impl, convert_images_batch_impl, inspect_batch_images_impl,
     preview_compress_image_impl, preview_convert_image_impl, BatchImageJobResponse,
@@ -73,6 +81,12 @@ use crate::organize_downloads::{
     OrganizeExecuteResponse, OrganizePreviewRequest, OrganizePreviewResponse,
 };
 use crate::password_gen::{generate_secrets_with_os_rng, SecretGenRequest, SecretGenResponse};
+use crate::screen_capture::{
+    capture_monitor_impl, capture_region_impl, capture_scroll_impl, capture_window_impl,
+    list_capture_monitors_impl, list_capture_windows_impl, CaptureMonitorInfo,
+    CaptureMonitorRequest, CaptureRegionRequest, CaptureResultPayload, CaptureScrollRequest,
+    CaptureWindowInfo, CaptureWindowRequest, CAPTURE_PROGRESS_EVENT,
+};
 use crate::tasks::{
     CloseRequestDecision, ShutdownDrainResult, TaskProgressPayload, TaskRegistry,
     TaskRegistrySnapshot, TaskTokenGuard, TASK_PROGRESS_EVENT,
@@ -87,7 +101,7 @@ use crate::wic_heic::{get_heic_capabilities, HeicCapabilities};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 static INTERNAL_TASK_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -303,6 +317,7 @@ where
 pub fn execute_beautifier_export_with_guard<E>(
     guard: TaskTokenGuard,
     params: &BeautifyExportParams,
+    store: Option<&ImageAssetStore>,
     mut on_event: E,
 ) -> Result<BeautifyExportResult, AppError>
 where
@@ -313,7 +328,7 @@ where
     on_event(&TaskProgressPayload::running(&task_id, &tool_id, None));
 
     let cancel_flag = guard.cancel_flag();
-    let res = export_beautified_png_cancellable(params, Some(&cancel_flag));
+    let res = export_beautified_png_with_store(params, store, Some(&cancel_flag));
     drop(guard);
 
     match &res {
@@ -705,17 +720,494 @@ async fn inspect_beautifier_image(
 async fn export_beautified_png<R: Runtime>(
     app: AppHandle<R>,
     registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
     params: BeautifyExportParams,
 ) -> Result<BeautifyExportResult, AppError> {
     let task_id = next_internal_task_id("export-i03");
     let guard = registry.register_checked(&task_id, "I03", false)?;
+    let store = asset_store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        execute_beautifier_export_with_guard(guard, &params, |payload| {
+        execute_beautifier_export_with_guard(guard, &params, Some(&store), |payload| {
             let _ = app.emit(TASK_PROGRESS_EVENT, payload);
         })
     })
     .await
     .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Background PNG exporter failed."))?
+}
+
+#[tauri::command]
+async fn render_beautified_asset(
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    req: BeautifyRenderAssetRequest,
+) -> Result<ImageAssetPayload, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || render_beautified_to_asset_impl(&req, &store))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "INTERNAL_JOIN_ERROR",
+                "Background beautifier renderer failed.",
+            )
+        })?
+}
+
+#[tauri::command]
+async fn beautify_images_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: BeautifyBatchRequest,
+) -> Result<BatchImageJobResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid beautify batch task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I03", true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = beautify_images_batch_impl(&tid, &req, &cancel_flag, |ev| {
+            let _ = app.emit(IMAGE_BATCH_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = done.succeeded_count as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Batch beautifier worker failed."))?
+}
+
+struct MainWindowHideGuard<R: Runtime> {
+    app: AppHandle<R>,
+    was_hidden: bool,
+}
+
+impl<R: Runtime> MainWindowHideGuard<R> {
+    fn hide_if(app: &AppHandle<R>, should_hide: bool) -> Self {
+        let mut was_hidden = false;
+        if should_hide {
+            if let Some(win) = app.get_webview_window("main") {
+                if win.is_visible().unwrap_or(true) && win.hide().is_ok() {
+                    was_hidden = true;
+                    std::thread::sleep(Duration::from_millis(140));
+                }
+            }
+        }
+        Self {
+            app: app.clone(),
+            was_hidden,
+        }
+    }
+}
+
+impl<R: Runtime> Drop for MainWindowHideGuard<R> {
+    fn drop(&mut self) {
+        if self.was_hidden {
+            if let Some(win) = self.app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn list_capture_monitors(
+    registry: State<'_, TaskRegistry>,
+) -> Result<Vec<CaptureMonitorInfo>, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(list_capture_monitors_impl)
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Monitor enumeration failed."))
+}
+
+#[tauri::command]
+async fn list_capture_windows(
+    registry: State<'_, TaskRegistry>,
+) -> Result<Vec<CaptureWindowInfo>, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(list_capture_windows_impl)
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Window enumeration failed."))
+}
+
+#[tauri::command]
+async fn capture_screen_region<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    task_id: String,
+    req: CaptureRegionRequest,
+) -> Result<CaptureResultPayload, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty() || trimmed_id.len() > 64 {
+        return Err(AppError::invalid_param("Invalid capture task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I01", true)?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let hide_guard = MainWindowHideGuard::hide_if(&app, req.hide_main_window.unwrap_or(true));
+        let res = capture_region_impl(&tid, &req, &store, &cancel_flag, |ev| {
+            let _ = app.emit(CAPTURE_PROGRESS_EVENT, ev);
+        });
+        drop(hide_guard);
+        drop(guard);
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, 1, Some(1)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Region capture worker failed."))?
+}
+
+#[tauri::command]
+async fn capture_screen_monitor<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    task_id: String,
+    req: CaptureMonitorRequest,
+) -> Result<CaptureResultPayload, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty() || trimmed_id.len() > 64 {
+        return Err(AppError::invalid_param("Invalid capture task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I01", true)?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let hide_guard = MainWindowHideGuard::hide_if(&app, req.hide_main_window.unwrap_or(true));
+        let res = capture_monitor_impl(&tid, &req, &store, &cancel_flag, |ev| {
+            let _ = app.emit(CAPTURE_PROGRESS_EVENT, ev);
+        });
+        drop(hide_guard);
+        drop(guard);
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, 1, Some(1)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Monitor capture worker failed."))?
+}
+
+#[tauri::command]
+async fn capture_screen_window<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    task_id: String,
+    req: CaptureWindowRequest,
+) -> Result<CaptureResultPayload, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty() || trimmed_id.len() > 64 {
+        return Err(AppError::invalid_param("Invalid capture task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I01", true)?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let hide_guard = MainWindowHideGuard::hide_if(&app, req.hide_main_window.unwrap_or(true));
+        let res = capture_window_impl(&tid, &req, &store, &cancel_flag, |ev| {
+            let _ = app.emit(CAPTURE_PROGRESS_EVENT, ev);
+        });
+        drop(hide_guard);
+        drop(guard);
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, 1, Some(1)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Window capture worker failed."))?
+}
+
+#[tauri::command]
+async fn capture_screen_scroll<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    task_id: String,
+    req: CaptureScrollRequest,
+) -> Result<CaptureResultPayload, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty() || trimmed_id.len() > 64 {
+        return Err(AppError::invalid_param("Invalid scroll capture task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I01", true)?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let hide_guard = MainWindowHideGuard::hide_if(&app, req.hide_main_window.unwrap_or(true));
+        let res = capture_scroll_impl(&tid, &req, &store, &cancel_flag, |ev| {
+            let _ = app.emit(CAPTURE_PROGRESS_EVENT, ev);
+        });
+        drop(hide_guard);
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                let n = done.frame_count as u64;
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Scrolling capture worker failed."))?
+}
+
+#[tauri::command]
+async fn store_png_asset(
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    data_url: String,
+    label: String,
+) -> Result<ImageAssetPayload, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = decode_png_data_url_or_base64(&data_url)?;
+        store.insert_png_bytes(bytes, label)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image asset storage failed."))?
+}
+
+#[tauri::command]
+async fn load_file_as_image_asset(
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    path: String,
+) -> Result<ImageAssetPayload, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || load_local_image_into_store(&store, &path))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image file loader failed."))?
+}
+
+#[tauri::command]
+async fn get_image_asset(
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    asset_id: String,
+) -> Result<ImageAssetPayload, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || store.get_payload(&asset_id))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image asset lookup failed."))?
+}
+
+#[tauri::command]
+async fn copy_image_asset_to_clipboard(
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    asset_id: Option<String>,
+    data_url: Option<String>,
+) -> Result<(), AppError> {
+    let guard = registry.register_checked(&next_internal_task_id("img-copy"), "I01", false)?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        let bytes = if let Some(aid) = asset_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        {
+            store.get_png_bytes(aid)?.0
+        } else if let Some(du) = data_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            decode_png_data_url_or_base64(du)?
+        } else {
+            return Err(AppError::invalid_param("Missing image payload to copy."));
+        };
+        copy_png_to_system_clipboard(&bytes)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Clipboard image copy failed."))?
+}
+
+#[tauri::command]
+async fn read_clipboard_image_as_asset(
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+) -> Result<ImageAssetPayload, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || read_system_clipboard_image_into_store(&store))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Clipboard image read failed."))?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn save_image_asset_file<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asset_store: State<'_, ImageAssetStore>,
+    asset_id: Option<String>,
+    data_url: Option<String>,
+    output_path: String,
+    format: SaveAssetFormat,
+    jpeg_quality: Option<u8>,
+    overwrite: bool,
+    tool_id: Option<String>,
+) -> Result<SavedImageAssetResult, AppError> {
+    let resolved_tool = sanitize_tool_id(tool_id.as_deref(), "I01")?;
+    let task_id = next_internal_task_id("save-img");
+    let guard = registry.register_checked(&task_id, &resolved_tool, false)?;
+    let store = asset_store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = (|| {
+            let bytes = if let Some(aid) =
+                asset_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
+            {
+                store.get_png_bytes(aid)?.0
+            } else if let Some(du) = data_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                decode_png_data_url_or_base64(du)?
+            } else {
+                return Err(AppError::invalid_param("Missing image payload to save."));
+            };
+            save_png_bytes_to_disk(
+                &bytes,
+                &output_path,
+                None,
+                format,
+                jpeg_quality.unwrap_or(92),
+                overwrite,
+                Some(&cancel_flag),
+            )
+        })();
+        drop(guard);
+        match &res {
+            Ok(saved) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        &tool,
+                        saved.byte_length,
+                        Some(saved.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image file save failed."))?
 }
 
 #[tauri::command]
@@ -1540,6 +2032,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(TaskRegistry::default())
         .manage(BatchRenameState::default())
+        .manage(ImageAssetStore::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
@@ -1593,6 +2086,20 @@ pub fn run() {
             strip_images_metadata_batch,
             inspect_beautifier_image,
             export_beautified_png,
+            render_beautified_asset,
+            beautify_images_batch,
+            list_capture_monitors,
+            list_capture_windows,
+            capture_screen_region,
+            capture_screen_monitor,
+            capture_screen_window,
+            capture_screen_scroll,
+            store_png_asset,
+            load_file_as_image_asset,
+            get_image_asset,
+            copy_image_asset_to_clipboard,
+            read_clipboard_image_as_asset,
+            save_image_asset_file,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

@@ -68,4 +68,93 @@ describe("I03 ScreenshotBeautifierWorkspace UI", () => {
 
     vi.restoreAllMocks();
   });
+
+  it("supports 4:5 & 9:16 presets, gradient background, clipboard paste, and batch style apply", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(tauriBridge, "readClipboardImageAsAsset").mockResolvedValueOnce({
+      assetId: "asset-clip-1",
+      label: "clipboard.png",
+      width: 1000,
+      height: 600,
+      hasAlpha: false,
+      byteLength: 12345,
+      dataUrl:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    });
+
+    renderBeautifier();
+
+    await user.click(screen.getByRole("button", { name: "粘贴剪贴板图片" }));
+    await waitFor(() => {
+      expect(screen.getByText(/1096×696 px/)).toBeInTheDocument();
+    });
+
+    // Switch to 4:5 -> 1096 * 5 / 4 = 1370
+    await user.click(screen.getByRole("button", { name: "4 : 5" }));
+    expect(screen.getByText(/1096×1370 px/)).toBeInTheDocument();
+
+    // Switch to 9:16 -> 1096 * 16 / 9 = 1948
+    await user.click(screen.getByRole("button", { name: "9 : 16" }));
+    expect(screen.getByText(/1096×1948 px/)).toBeInTheDocument();
+
+    // Switch to Gradient background
+    await user.click(screen.getByRole("button", { name: "渐变" }));
+    const canvas = screen.getByTestId("beautifier-preview-canvas");
+    expect(canvas.style.background).toContain("linear-gradient");
+
+    // Switch to batch apply mode and add images
+    await user.click(screen.getByRole("button", { name: "批量套用" }));
+    vi.spyOn(tauriBridge, "pickMultipleFiles").mockResolvedValueOnce([
+      "D:\\Samples\\a.png",
+      "D:\\Samples\\b.png",
+    ]);
+    vi.spyOn(tauriBridge, "inspectBatchImages").mockResolvedValueOnce({
+      items: [
+        {
+          path: "D:\\Samples\\a.png",
+          fileName: "a.png",
+          format: "png",
+          byteLength: 1024,
+          rawWidth: 800,
+          rawHeight: 600,
+          displayWidth: 800,
+          displayHeight: 600,
+          exifOrientation: 1,
+          hasAlpha: false,
+          isAnimated: false,
+          pageCount: 1,
+          hasIccProfile: false,
+          metadataFlags: {
+            hasExif: false,
+            hasGps: false,
+            hasXmp: false,
+            hasIptc: false,
+            hasIcc: false,
+            hasComments: false,
+            hasCameraInfo: false,
+            hasDatetime: false,
+            duplicateSegmentCount: 0,
+            tagHighlights: [],
+          },
+          thumbnailDataUrl:
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          warnings: [],
+          error: null,
+        },
+      ],
+      skipped: [],
+      heicCapabilities: {
+        decodeAvailable: true,
+        encodeAvailable: false,
+        decodeNote: "ok",
+        encodeNote: "missing",
+      },
+    });
+    await user.click(screen.getAllByRole("button", { name: "添加多张图片" })[0]!);
+    await waitFor(() => {
+      expect(screen.getAllByText("a.png").length).toBeGreaterThan(0);
+    });
+
+    vi.restoreAllMocks();
+  });
 });

@@ -1,0 +1,202 @@
+.capture-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+}
+
+.capture-toolbar-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.capture-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.capture-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.capture-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  gap: 12px;
+  align-items: start;
+}
+
+.capture-main-grid.is-full {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 1020px) {
+  .capture-main-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.capture-stage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  min-height: 400px;
+}
+
+.capture-stage-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 320px;
+  max-height: 540px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background-color: var(--bg-subtle);
+  background-image:
+    linear-gradient(45deg, rgba(128, 128, 128, 0.08) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(128, 128, 128, 0.08) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.08) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.08) 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
+
+.capture-stage-canvas.is-scroll-view {
+  overflow: auto;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px;
+}
+
+.capture-preview-img {
+  max-width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  display: block;
+}
+
+.capture-stage-canvas.is-scroll-view .capture-preview-img {
+  max-width: 100%;
+  max-height: none;
+  height: auto;
+}
+
+.capture-target-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  max-height: 540px;
+  overflow-y: auto;
+}
+
+.capture-target-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: border-color 120ms ease;
+}
+
+.capture-target-item:hover {
+  background: var(--bg-hover);
+}
+
+.capture-target-item.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.capture-target-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capture-target-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.capture-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.capture-pill.is-ok {
+  background: var(--status-ok-bg);
+  border-color: transparent;
+  color: var(--status-ok);
+}
+
+.capture-pill.is-warn {
+  background: var(--status-warn-bg);
+  border-color: transparent;
+  color: var(--status-warn);
+}
+
+.capture-pill.is-err {
+  background: var(--status-err-bg);
+  border-color: transparent;
+  color: var(--status-err);
+}
+
+.capture-partial-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--status-warn);
+  background: var(--status-warn-bg);
+  color: var(--text-primary);
+  font-size: 12.5px;
+}

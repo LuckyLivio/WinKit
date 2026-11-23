@@ -1,9 +1,9 @@
 import type { BeautifierAspect } from "../../lib/sessionStore";
 
 export const MAX_INPUT_FILE_BYTES = 50 * 1024 * 1024;
-export const MAX_SOURCE_DIMENSION = 8192;
+export const MAX_SOURCE_DIMENSION = 16_384;
 export const MAX_SOURCE_PIXELS = 33_554_432;
-export const MAX_OUTPUT_DIMENSION = 10000;
+export const MAX_OUTPUT_DIMENSION = 16_800;
 export const MAX_OUTPUT_PIXELS = 48_000_000;
 
 export const PRESET_SOLID_BACKGROUNDS: Array<{ hex: string; labelZh: string; labelEn: string }> = [
@@ -14,6 +14,64 @@ export const PRESET_SOLID_BACKGROUNDS: Array<{ hex: string; labelZh: string; lab
   { hex: "#FFFFFF", labelZh: "纯白", labelEn: "Pure White" },
   { hex: "#232933", labelZh: "深石墨", labelEn: "Deep Graphite" },
   { hex: "#151921", labelZh: "暗夜炭黑", labelEn: "Charcoal" },
+];
+
+export const PRESET_GRADIENT_BACKGROUNDS: Array<{
+  id: string;
+  startHex: string;
+  endHex: string;
+  angleDeg: number;
+  labelZh: string;
+  labelEn: string;
+}> = [
+  {
+    id: "soft-sky",
+    startHex: "#DBEAFE",
+    endHex: "#E0E7FF",
+    angleDeg: 135,
+    labelZh: "晴空浅蓝",
+    labelEn: "Soft Sky",
+  },
+  {
+    id: "ocean-dusk",
+    startHex: "#2563EB",
+    endHex: "#0F172A",
+    angleDeg: 135,
+    labelZh: "深海暮蓝",
+    labelEn: "Ocean Dusk",
+  },
+  {
+    id: "mint-breeze",
+    startHex: "#D1FAE5",
+    endHex: "#DBEAFE",
+    angleDeg: 120,
+    labelZh: "薄荷晴风",
+    labelEn: "Mint Breeze",
+  },
+  {
+    id: "warm-peach",
+    startHex: "#FDE68A",
+    endHex: "#FECACA",
+    angleDeg: 135,
+    labelZh: "暖阳杏桃",
+    labelEn: "Warm Peach",
+  },
+  {
+    id: "violet-mist",
+    startHex: "#4F46E5",
+    endHex: "#9333EA",
+    angleDeg: 135,
+    labelZh: "靛紫微光",
+    labelEn: "Indigo Glow",
+  },
+  {
+    id: "slate-carbon",
+    startHex: "#334155",
+    endHex: "#0F172A",
+    angleDeg: 160,
+    labelZh: "石墨渐变",
+    labelEn: "Slate Carbon",
+  },
 ];
 
 export interface FrameLayoutMetrics {
@@ -41,6 +99,13 @@ export function normalizeHexColor(input: string): string | null {
   return null;
 }
 
+function fitAspect(baseW: number, baseH: number, numW: number, numH: number): [number, number] {
+  if (baseW * numH >= baseH * numW) {
+    return [baseW, Math.max(baseH, Math.round((baseW * numH) / numW))];
+  }
+  return [Math.max(baseW, Math.round((baseH * numW) / numH)), baseH];
+}
+
 export function computeFrameLayout(params: {
   sourceWidth: number;
   sourceHeight: number;
@@ -66,13 +131,11 @@ export function computeFrameLayout(params: {
     canvasWidth = side;
     canvasHeight = side;
   } else if (params.aspectRatio === "16:9") {
-    if (baseW * 9 >= baseH * 16) {
-      canvasWidth = baseW;
-      canvasHeight = Math.max(baseH, Math.round((baseW * 9) / 16));
-    } else {
-      canvasHeight = baseH;
-      canvasWidth = Math.max(baseW, Math.round((baseH * 16) / 9));
-    }
+    [canvasWidth, canvasHeight] = fitAspect(baseW, baseH, 16, 9);
+  } else if (params.aspectRatio === "4:5") {
+    [canvasWidth, canvasHeight] = fitAspect(baseW, baseH, 4, 5);
+  } else if (params.aspectRatio === "9:16") {
+    [canvasWidth, canvasHeight] = fitAspect(baseW, baseH, 9, 16);
   }
 
   const imageX = Math.floor((canvasWidth - srcW) / 2);

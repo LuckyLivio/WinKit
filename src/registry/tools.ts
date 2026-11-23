@@ -12,6 +12,7 @@ import { JwtDecoderWorkspace } from "../tools/jwt-decoder/JwtDecoderWorkspace";
 import { LoremIpsumWorkspace } from "../tools/lorem-ipsum/LoremIpsumWorkspace";
 import { PasswordGeneratorWorkspace } from "../tools/password-generator/PasswordGeneratorWorkspace";
 import { RegexTesterWorkspace } from "../tools/regex-tester/RegexTesterWorkspace";
+import { ScreenCaptureWorkspace } from "../tools/screen-capture/ScreenCaptureWorkspace";
 import { ScreenshotBeautifierWorkspace } from "../tools/screenshot-beautifier/ScreenshotBeautifierWorkspace";
 import { TimestampConverterWorkspace } from "../tools/timestamp-converter/TimestampConverterWorkspace";
 import { UnicodeInspectorWorkspace } from "../tools/unicode-inspector/UnicodeInspectorWorkspace";
@@ -54,6 +55,7 @@ export type ToolIconName =
   | "file-archive"
   | "folder-input"
   | "frame"
+  | "screenshot"
   | "image-convert"
   | "image-compress"
   | "image-resize"
@@ -584,6 +586,39 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     component: CaseConverterWorkspace,
   },
   {
+    id: "I01",
+    category: "image",
+    name: {
+      "zh-CN": "屏幕截图与长截图",
+      "en-US": "Screenshot & Scrolling Capture",
+    },
+    summary: {
+      "zh-CN":
+        "原生捕获区域、指定窗口（含被遮挡窗口）、指定显示器与自动滚动拼接长截图，自动排除自身浮层，支持剪贴板与无损直传编辑",
+      "en-US":
+        "Capture a region, specific window (including occluded windows), display, or auto-stitched scrolling page with native clipboard and zero-disk editor handoff",
+    },
+    keywords: [
+      "screenshot",
+      "capture",
+      "scrolling",
+      "long screenshot",
+      "window",
+      "monitor",
+      "region",
+      "snip",
+      "截图",
+      "长截图",
+      "滚动截图",
+      "区域截图",
+      "窗口截图",
+      "抓图",
+    ],
+    icon: "screenshot",
+    implementationStatus: "full",
+    component: ScreenCaptureWorkspace,
+  },
+  {
     id: "I03",
     category: "image",
     name: {
@@ -592,9 +627,9 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     },
     summary: {
       "zh-CN":
-        "为 PNG/JPEG 图片添加纯色背景、留白、圆角与柔和投影，按原始/1:1/16:9 导出原分辨率 PNG",
+        "支持纯色、渐变与自选背景图，留白、圆角与柔和阴影，原始/1:1/16:9/4:5/9:16 比例及同配置批量套用导出高清 PNG",
       "en-US":
-        "Frame PNG/JPEG screenshots on solid backgrounds with padding, rounded corners, and soft drop shadows at full native resolution",
+        "Frame screenshots with solid, gradient, or custom background images, padding, rounded corners, shadows, 5 aspect presets, and batch apply",
     },
     keywords: [
       "screenshot",
@@ -603,15 +638,20 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
       "mockup",
       "shadow",
       "rounded",
+      "gradient",
+      "4:5",
+      "9:16",
       "png",
       "截图",
       "美化",
       "装裱",
       "圆角",
       "阴影",
+      "渐变",
+      "批量美化",
     ],
     icon: "frame",
-    implementationStatus: "partial",
+    implementationStatus: "full",
     component: ScreenshotBeautifierWorkspace,
   },
   {

@@ -324,7 +324,7 @@ export function App({ toolsOverride }: AppProps = {}) {
 
   return (
     <I18nContext.Provider value={i18nValue}>
-      <SessionStoreProvider>
+      <SessionStoreProvider onNavigateToTool={openTool}>
         <div className="app-shell">
           <Sidebar
             route={route}
