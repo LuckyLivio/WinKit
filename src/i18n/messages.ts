@@ -99,6 +99,17 @@ export interface Messages {
     INFERENCE_FAILED: string;
     MEDIA_TOOLS_MISSING: string;
     MEDIA_TOOLS_INVALID: string;
+    YTDLP_MISSING: string;
+    YTDLP_INVALID: string;
+    LOGIN_REQUIRED: string;
+    AGE_RESTRICTED: string;
+    GEO_BLOCKED: string;
+    DRM_PROTECTED: string;
+    ACCESS_FORBIDDEN: string;
+    NOT_FOUND: string;
+    JS_RUNTIME_REQUIRED: string;
+    UNSUPPORTED_URL: string;
+    NETWORK_ERROR: string;
     DOWNLOAD_FAILED: string;
     CHECKSUM_MISMATCH: string;
     MEDIA_PROCESS_FAILED: string;
@@ -1059,7 +1070,20 @@ export const MESSAGES: Record<Locale, Messages> = {
       INFERENCE_FAILED: "本地人脸检测执行失败。",
       MEDIA_TOOLS_MISSING: "尚未配置本地 FFmpeg / ffprobe 媒体组件，请先完成配置。",
       MEDIA_TOOLS_INVALID: "选定目录中的 FFmpeg / ffprobe 不可用或校验未通过。",
-      DOWNLOAD_FAILED: "媒体组件下载中断或网络不可用，您可以稍后重试。",
+      YTDLP_MISSING:
+        "尚未配置本地 yt-dlp 组件。网页视频或自适应清单需要 yt-dlp（普通直链媒体文件可直接使用）。",
+      YTDLP_INVALID: "选定的 yt-dlp 程序不可用或版本自检未通过。",
+      LOGIN_REQUIRED: "该链接需要登录账号、提供凭据或会员权限，暂不支持匿名直接下载。",
+      AGE_RESTRICTED: "该内容受年龄限制，需要登录验证后才能访问。",
+      GEO_BLOCKED: "该内容在当前地区受限或无法访问。",
+      DRM_PROTECTED: "该媒体受 DRM 数字版权加密保护，无法下载。",
+      ACCESS_FORBIDDEN: "目标服务器拒绝访问（HTTP 403），可能需要授权或受防盗链限制。",
+      NOT_FOUND: "目标视频或媒体资源不存在或已被移除（HTTP 404）。",
+      JS_RUNTIME_REQUIRED:
+        "该站点需要外部 JavaScript 运行时（如 Deno 或 Node.js）协助解析，请安装后重新检测。",
+      UNSUPPORTED_URL: "暂不支持解析该页面链接或未在页面中找到可下载视频流。",
+      NETWORK_ERROR: "网络连接中断、超时或服务器暂不可达，可稍后点击重试。",
+      DOWNLOAD_FAILED: "下载中断或远端返回错误，请查看详情或稍后重试。",
       CHECKSUM_MISMATCH: "下载的媒体组件包 SHA-256 摘要校验未通过，已自动丢弃。",
       MEDIA_PROCESS_FAILED: "本地媒体处理进程执行失败。",
       MIC_PERMISSION_DENIED:
@@ -2146,8 +2170,22 @@ export const MESSAGES: Record<Locale, Messages> = {
       MEDIA_TOOLS_MISSING:
         "Local FFmpeg / ffprobe media components are not configured yet. Set them up first.",
       MEDIA_TOOLS_INVALID: "FFmpeg / ffprobe verification failed in the selected directory.",
+      YTDLP_MISSING:
+        "yt-dlp is not configured yet. Web video pages and adaptive manifests require yt-dlp (direct media links work without it).",
+      YTDLP_INVALID: "The selected yt-dlp binary failed verification.",
+      LOGIN_REQUIRED:
+        "This link requires sign-in, cookies, or account access and cannot be downloaded anonymously.",
+      AGE_RESTRICTED: "This video is age-restricted and requires account verification.",
+      GEO_BLOCKED: "This content is restricted or unavailable in your region.",
+      DRM_PROTECTED: "This content is DRM-protected and cannot be downloaded.",
+      ACCESS_FORBIDDEN: "Access was denied by the remote server (HTTP 403).",
+      NOT_FOUND: "The requested video or media URL was not found or has been removed (HTTP 404).",
+      JS_RUNTIME_REQUIRED:
+        "This site requires an external JavaScript runtime (Deno or Node.js) for yt-dlp challenge solving.",
+      UNSUPPORTED_URL: "This URL is not a supported video page or contains no downloadable stream.",
+      NETWORK_ERROR: "Network transfer was interrupted or timed out. You can retry.",
       DOWNLOAD_FAILED:
-        "Media component download was interrupted or network is unavailable. You can retry.",
+        "Download failed or was interrupted by the remote server. Check details or retry.",
       CHECKSUM_MISMATCH:
         "Downloaded media package failed SHA-256 integrity verification and was discarded.",
       MEDIA_PROCESS_FAILED: "Local media engine process failed.",

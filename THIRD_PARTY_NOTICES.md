@@ -77,13 +77,15 @@ F04 uses `unrar-rs` (`0.16.x`, read-only extraction) under its Apache-2.0 licens
 - **`D09` Link Tracking & Redirect Rule Catalog (`src/tools/clean-links/linkRules.ts`, `2026.11-r1`)**:
   - Authored directly for WinKit from publicly documented query-parameter specifications of Google Analytics/Ads (`utm_*`, `gclid`, `_ga`), Meta (`fbclid`, `igsh`), Microsoft Advertising (`msclkid`), Mailchimp, HubSpot, Marketo, Matomo, Amazon, YouTube, Spotify, TikTok, X, LinkedIn, Reddit, and Outlook Safe Links.
 
-## Optional User-Installed External Media Tools (`V04`, `V10`, `V11`, `V13`, `V15`, `A04`)
+## Optional User-Installed External Media Tools (`V01`–`V15`, `A01`–`A05`, `I13`)
 
-WinKit does **not** statically link FFmpeg or bundle FFmpeg binaries inside the WinKit installer. When a user runs video/audio tools on a machine without FFmpeg/ffprobe on `PATH`, WinKit allows either selecting an existing local FFmpeg folder or triggering a user-initiated one-time download of the pinned static Windows x64 build:
+WinKit does **not** statically link FFmpeg or bundle FFmpeg or `yt-dlp` binaries inside the WinKit installer. When a user runs video/audio tools on a machine without these binaries on `PATH`, WinKit allows either selecting an existing local binary/folder or triggering a user-initiated one-time download of the pinned static Windows x64 builds:
 
-- **Distribution**: `GyanD/codexffmpeg` Release `9.1` (`ffmpeg-9.1-essentials_build.7z`, `36,671,021` bytes, SHA-256 `835b9a733445ba7a56a37a26cf7bde84e2f3ce7da2a8ec984276bb2abb1b922c`, `https://github.com/GyanD/codexffmpeg/releases/tag/9.1`).
-- **Upstream Source**: FFmpeg `9.1` (`https://github.com/FFmpeg/FFmpeg/commit/74e4393595`).
-- **License & Preservation**: GNU General Public License v3 (`GPL-3.0`). During extraction into `%LOCALAPPDATA%\com.luckylivio.winkit\media-tools\ffmpeg-9.1-essentials\`, WinKit preserves the build's verbatim `LICENSE` and `README.txt` (including full library and source attributions) alongside `bin\ffmpeg.exe` and `bin\ffprobe.exe`, and executes them strictly as separate external CLI processes.
+- **FFmpeg / ffprobe Distribution**: `GyanD/codexffmpeg` Release `9.1` (`ffmpeg-9.1-essentials_build.7z`, `36,671,021` bytes, SHA-256 `835b9a733445ba7a56a37a26cf7bde84e2f3ce7da2a8ec984276bb2abb1b922c`, `https://github.com/GyanD/codexffmpeg/releases/tag/9.1`).
+  - **Upstream Source**: FFmpeg `9.1` (`https://github.com/FFmpeg/FFmpeg/commit/74e4393595`).
+  - **License & Preservation**: GNU General Public License v3 (`GPL-3.0`). During extraction into `%LOCALAPPDATA%\com.luckylivio.winkit\media-tools\ffmpeg-9.1-essentials\`, WinKit preserves the build's verbatim `LICENSE` and `README.txt` (including full library and source attributions) alongside `bin\ffmpeg.exe` and `bin\ffprobe.exe`, and executes them strictly as separate external CLI processes.
+- **yt-dlp Distribution (`V01` Video Downloader)**: `yt-dlp/yt-dlp` Official Windows x64 Release `2026.10.26` (`yt-dlp.exe`, `23,575,744` bytes, SHA-256 `f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d`, `https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.26`).
+  - **License & Preservation**: `yt-dlp` upstream code is dedicated to the public domain under **The Unlicense**; the official standalone Windows x64 executable is packaged with PyInstaller and bundles the CPython runtime and open-source Python packages (`certifi`, `mutagen`, `pycryptodomex`, `requests`, `urllib3`, `websockets`, `brotli`) under their respective open-source licenses. Upon user-initiated install/update into `%LOCALAPPDATA%\com.luckylivio.winkit\media-tools\yt-dlp\active\`, WinKit verifies the SHA-256 digest and `--version` self-check before atomic activation (preserving any previously working binary if verification fails), writes `LICENSE-yt-dlp.txt` alongside `yt-dlp.exe`, and invokes `yt-dlp.exe` strictly as an external child process. Direct HTTP(S) media links work independently without `yt-dlp`.
 
 ## Application Icons & Visual Assets
 

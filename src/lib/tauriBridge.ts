@@ -2876,3 +2876,184 @@ export async function subscribeScreenRecorderState(
     handler(event.payload);
   });
 }
+
+// =============================================================================
+// V01 Video Downloader & yt-dlp Setup
+// =============================================================================
+
+export type YtdlpMode = "auto" | "custom";
+export type YtdlpSource = "managed" | "system_path" | "custom" | "missing";
+
+export interface ManagedYtdlpSpec {
+  version: string;
+  sourceName: string;
+  releaseUrl: string;
+  downloadUrl: string;
+  downloadBytes: number;
+  sha256: string;
+  licenseName: string;
+}
+
+export interface JsRuntimeInfo {
+  name: string;
+  path: string;
+  version: string;
+  recommended: boolean;
+}
+
+export interface YtdlpToolsStatus {
+  ready: boolean;
+  source: YtdlpSource;
+  mode: YtdlpMode;
+  customPath: string | null;
+  ytdlpPath: string | null;
+  ytdlpVersion: string | null;
+  installDir: string;
+  managedInstalledBytes: number | null;
+  licensePath: string | null;
+  jsRuntimes: JsRuntimeInfo[];
+  hasJsRuntime: boolean;
+  error: string | null;
+  spec: ManagedYtdlpSpec;
+}
+
+export interface YtdlpSetupProgressPayload {
+  taskId: string;
+  phase: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number | null;
+  message: string;
+}
+
+export type VideoDownloadQuality = "best" | "max_1080p" | "max_720p" | "audio_m4a";
+
+export interface VideoDownloadFormatOption {
+  formatId: string;
+  ext: string;
+  resolution: string | null;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  vcodec: string | null;
+  acodec: string | null;
+  language: string | null;
+  filesizeBytes: number | null;
+  hasVideo: boolean;
+  hasAudio: boolean;
+  note: string | null;
+}
+
+export interface VideoDownloadAudioTrackOption {
+  language: string;
+  label: string;
+  codec: string | null;
+}
+
+export interface VideoDownloadProbeResult {
+  sanitizedUrl: string;
+  title: string;
+  extractor: string;
+  webpageDomain: string | null;
+  durationSec: number | null;
+  isDirectMedia: boolean;
+  usedYtdlp: boolean;
+  availableResolutions: number[];
+  availableAudioLanguages: VideoDownloadAudioTrackOption[];
+  hasH264: boolean;
+  estimatedBestBytes: number | null;
+  warnings: string[];
+  formatsSummary: VideoDownloadFormatOption[];
+}
+
+export interface StartVideoDownloadItemRequest {
+  taskId: string;
+  itemId: string;
+  url: string;
+  outputDir: string;
+  suggestedTitle?: string | null;
+  quality: VideoDownloadQuality;
+  preferH264: boolean;
+  preferredAudioLanguage?: string | null;
+}
+
+export interface VideoDownloadProgressPayload {
+  taskId: string;
+  itemId: string;
+  phase: string;
+  percent: number | null;
+  downloadedBytes: number | null;
+  totalBytes: number | null;
+  speedBytesPerSec: number | null;
+  etaSec: number | null;
+  message: string | null;
+}
+
+export interface VideoDownloadItemResult {
+  itemId: string;
+  sanitizedUrl: string;
+  outputPath: string;
+  fileName: string;
+  byteSize: number;
+  sha256: string | null;
+  title: string;
+  extractor: string;
+  usedYtdlp: boolean;
+  durationSec: number | null;
+  width: number | null;
+  height: number | null;
+  videoCodec: string | null;
+  audioCodec: string | null;
+  audioLanguage: string | null;
+  containerFormat: string | null;
+  renamedForCollision: boolean;
+  warnings: string[];
+}
+
+export async function getYtdlpToolsStatus(): Promise<YtdlpToolsStatus> {
+  return invoke<YtdlpToolsStatus>("get_ytdlp_tools_status");
+}
+
+export async function setYtdlpCustomPath(path: string | null): Promise<YtdlpToolsStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<YtdlpToolsStatus>("set_ytdlp_custom_path", { path });
+}
+
+export async function installManagedYtdlp(taskId: string): Promise<YtdlpToolsStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<YtdlpToolsStatus>("install_managed_ytdlp", { taskId });
+}
+
+export async function subscribeYtdlpSetupProgress(
+  handler: (payload: YtdlpSetupProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<YtdlpSetupProgressPayload>("winkit://ytdlp-setup-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function probeVideoDownloadUrl(url: string): Promise<VideoDownloadProbeResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<VideoDownloadProbeResult>("probe_video_download_url", { req: { url } });
+}
+
+export async function downloadVideoItem(
+  req: StartVideoDownloadItemRequest,
+): Promise<VideoDownloadItemResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<VideoDownloadItemResult>("download_video_item", { req });
+}
+
+export async function subscribeVideoDownloadProgress(
+  handler: (payload: VideoDownloadProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<VideoDownloadProgressPayload>("winkit://video-download-progress", (event) => {
+    handler(event.payload);
+  });
+}

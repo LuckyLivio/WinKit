@@ -11,6 +11,7 @@ import {
   Combine,
   Compass,
   Crop,
+  Download,
   EyeOff,
   FileArchive,
   FileAudio,
@@ -157,5 +158,7 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Captions size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "screen-record":
       return <Video size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-download":
+      return <Download size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

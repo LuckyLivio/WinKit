@@ -896,7 +896,7 @@ pub fn install_managed_media_tools_impl(
 }
 
 #[cfg(windows)]
-fn download_https_with_sha256(
+pub(crate) fn download_https_with_sha256(
     url: &str,
     dest_path: &Path,
     expected_bytes: u64,
@@ -941,7 +941,7 @@ fn download_https_with_sha256(
         None => (rest, "/"),
     };
 
-    let ua = to_wide("WinKit/0.13.0");
+    let ua = to_wide(concat!("WinKit/", env!("CARGO_PKG_VERSION")));
     let host_w = to_wide(host);
     let path_w = to_wide(path);
     let method_w = to_wide("GET");
@@ -1139,7 +1139,7 @@ fn download_https_with_sha256(
 }
 
 #[cfg(not(windows))]
-fn download_https_with_sha256(
+pub(crate) fn download_https_with_sha256(
     _url: &str,
     _dest_path: &Path,
     _expected_bytes: u64,

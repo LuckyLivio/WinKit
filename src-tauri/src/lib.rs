@@ -43,9 +43,11 @@ pub mod screen_recorder;
 pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
+pub mod video_download;
 pub mod video_replace_audio;
 pub mod video_watermark;
 pub mod wic_heic;
+pub mod ytdlp_core;
 
 use crate::archive::{
     create_archive_impl, extract_archives_batch_with_limit, inspect_archive_impl,
@@ -206,12 +208,21 @@ use crate::unicode_inspector::{
 use crate::uuid_tool::{
     generate_uuid_batch, inspect_uuid_string, UuidGenVersion, UuidInspectResult,
 };
+use crate::video_download::{
+    download_video_item_impl, probe_video_download_url_impl, StartVideoDownloadItemRequest,
+    VideoDownloadItemResult, VideoDownloadProbeRequest, VideoDownloadProbeResult,
+    VIDEO_DOWNLOAD_PROGRESS_EVENT,
+};
 use crate::video_replace_audio::{
     preview_replace_audio_impl, replace_video_audio_impl, PreviewReplaceAudioRequest,
     PreviewReplaceAudioResult, ReplaceAudioRequest, ReplaceAudioResult,
 };
 use crate::video_watermark::{watermark_video_impl, WatermarkVideoRequest, WatermarkVideoResult};
 use crate::wic_heic::{get_heic_capabilities, HeicCapabilities};
+use crate::ytdlp_core::{
+    get_ytdlp_tools_status_impl, install_managed_ytdlp_impl, set_ytdlp_custom_path_impl,
+    YtdlpToolsStatus, YTDLP_SETUP_PROGRESS_EVENT,
+};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -3832,6 +3843,163 @@ async fn discard_screen_recording(
 }
 
 #[tauri::command]
+async fn get_ytdlp_tools_status<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<YtdlpToolsStatus, AppError> {
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || get_ytdlp_tools_status_impl(&root))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "yt-dlp status check failed."))
+}
+
+#[tauri::command]
+async fn set_ytdlp_custom_path<R: Runtime>(
+    app: AppHandle<R>,
+    path: Option<String>,
+) -> Result<YtdlpToolsStatus, AppError> {
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || set_ytdlp_custom_path_impl(&root, path))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "yt-dlp path configuration failed."))?
+}
+
+#[tauri::command]
+async fn install_managed_ytdlp<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+) -> Result<YtdlpToolsStatus, AppError> {
+    let tid = task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid yt-dlp setup task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V01", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V01", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = install_managed_ytdlp_impl(&tid, &root, &cancel_flag, |ev| {
+            let _ = app.emit(YTDLP_SETUP_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V01".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.downloaded_bytes,
+                    total_bytes: Some(ev.total_bytes),
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V01", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V01", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "yt-dlp installation worker failed."))?
+}
+
+#[tauri::command]
+async fn probe_video_download_url<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: VideoDownloadProbeRequest,
+) -> Result<VideoDownloadProbeResult, AppError> {
+    let tid = next_internal_task_id("v01-probe");
+    let guard = registry.register_checked(&tid, "V01", false)?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = probe_video_download_url_impl(&root, &req.url, &cancel_flag);
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video URL probe worker failed."))?
+}
+
+#[tauri::command]
+async fn download_video_item<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: StartVideoDownloadItemRequest,
+) -> Result<VideoDownloadItemResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid video download task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V01", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V01", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = download_video_item_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(VIDEO_DOWNLOAD_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V01".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.downloaded_bytes.unwrap_or(0),
+                    total_bytes: ev.total_bytes,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "V01",
+                        done.byte_size,
+                        Some(done.byte_size),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V01", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video download worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -4030,6 +4198,11 @@ pub fn run() {
             start_screen_recording,
             stop_screen_recording,
             discard_screen_recording,
+            get_ytdlp_tools_status,
+            set_ytdlp_custom_path,
+            install_managed_ytdlp,
+            probe_video_download_url,
+            download_video_item,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
