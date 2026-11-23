@@ -10,9 +10,10 @@
   - **`src-tauri/src/pdf_ops.rs` + `src/tools/pdf-merge/`（`P07`）+ `src/tools/pdf-split/`（`P08`）**：基于 `lopdf 0.47` 纯矢量页面组装（不光栅化页面，保留文字/矢量/页面尺寸/外链与重映射内链及书签）；`P07` 支持多 PDF 与图片混排、首页缩略图、拖拽调序与可选文件名书签；`P08` 支持逐页、每 N 页与自定义多段区间（中英文标点兼容、预览输出文件清单与越界/重叠校验）及取消清理 `.tmp`。
 - **PR #30（`074f3b5`）｜`P09` 页面整理 + `P10` 删除页面 + `P11` 提取页面**：
   - **`src/tools/pdf-shared/PdfPageGrid.tsx` + `pageRangeUtils.ts` + `pdf-organize/` + `pdf-delete/` + `pdf-extract/`**：抽离复用懒加载缩略图网格（72 项有界缓存、Shift 多选、拖拽/按钮调序、旋转预览、待删标红与现/原页码对照）。`P09` 支持重排/90°·180°·270° 旋转/标记删除/撤销重做；`P10` 支持勾选+页码表达式双联动删页并强制拦截删空全部页面；`P11` 支持合并单一新 PDF（去重保序）或每页独立导出；后端统一保留矢量文字、自动重映射保留页的内部跳转与书签并剔除悬空链接。
-- **PR #31｜`P12` 图片转 PDF + `P17` PDF 转图片 + `v0.17.0` 发布与全链路实测**：
+- **PR #31（`dbdb400`）｜`P12` 图片转 PDF + `P17` PDF 转图片 + `v0.17.0` 发布与全链路实测**：
   - **`src-tauri/src/pdf_ops.rs`（`images_to_pdf_impl`）+ `src/tools/pdf-images-to-pdf/`（`P12`）**：支持 PNG/JPEG/WebP/BMP/TIFF（及系统 WIC HEIC）拖拽排序，按 EXIF 自动矫正正立像素、透明图按底色合成避免黑底、提供原图尺寸 / A4 / Letter、自动/竖向/横向方向与无/小/中/大边距排版，输出单 PDF 并可直达 `C08`/`P07`/`P09`。
   - **`src-tauri/src/pdf_export_images.rs` + `src/tools/pdf-to-images/`（`P17`）**：经 `--pdf-worker` 渲染输出全部页面或指定页码为 `72`/`150`/`300 DPI` 的 PNG/JPEG/WebP（及系统 WIC 编码可用时的 HEIC），导出前实时预估首页与最大页像素并对超大图纸按 `8,192 px` / `48 MP` 安全上限等比缩放并明示提示，默认建立防重名子目录、逐页错误隔离与随时取消清理 `.tmp`。
+  - **正式 Release `v0.17.0` 与公开升级复测**：已由 `main` CI（[Actions #45240344992](https://github.com/LuckyLivio/WinKit/actions/runs/45240344992)）构建发布 `WinKit_0.17.0_x64-setup.exe`（`15,928,546` B，SHA-256 `2b76683865c3e613146208cf4558e0cf4cf9a0c95c7aecd98a79a0828b3a8fa1`，Authenticode `NotSigned`），并完成公网回下校验与隔离沙箱内的 `v0.16.0 → v0.17.0` 原地覆盖升级与离线 PDF 复测（详见 `docs/VERIFICATION.md`）。
 
 ## 下一阶段
 
