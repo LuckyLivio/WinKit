@@ -955,6 +955,20 @@ export function VideoCropWorkspace() {
                   <button
                     type="button"
                     className="btn"
+                    onClick={() => handoffMediaFileToTool("V03", state.lastResult!.outputPath)}
+                  >
+                    {isZh ? "继续变速 (V03)" : "Speed (V03)"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => handoffMediaFileToTool("V12", state.lastResult!.outputPath)}
+                  >
+                    {isZh ? "去合并 (V12)" : "Merge (V12)"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
                     onClick={() => handoffMediaFileToTool("V06", state.lastResult!.outputPath)}
                   >
                     {isZh ? "继续压缩 (V06)" : "Compress (V06)"}

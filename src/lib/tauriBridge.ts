@@ -651,7 +651,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.13.0",
+      version: "0.14.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -2228,4 +2228,80 @@ export async function extractOrientedPreviewFrame(
 export async function cropRotateVideo(req: CropRotateVideoRequest): Promise<CropRotateVideoResult> {
   assertFrontendNotShuttingDown();
   return invoke<CropRotateVideoResult>("crop_rotate_video", { req });
+}
+
+// ---------- Phase 4B1 PR 3: V03 Change Speed & V12 Merge Videos ----------
+
+export interface ChangeVideoSpeedBatchRequest {
+  taskId: string;
+  sourcePaths: string[];
+  outputDir: string;
+  speedFactor: number;
+  preservePitch?: boolean;
+  muteAudio?: boolean;
+}
+
+export type SpeedItemStatus = "completed" | "skipped" | "failed";
+
+export interface ChangeVideoSpeedItemResult {
+  sourcePath: string;
+  fileName: string;
+  status: SpeedItemStatus;
+  outputPath: string | null;
+  outputBytes: number | null;
+  sourceDurationSec: number | null;
+  outputDurationSec: number | null;
+  hasOutputAudio: boolean;
+  speedFactor: number;
+  elapsedMs: number;
+  message: string | null;
+}
+
+export interface ChangeVideoSpeedBatchResponse {
+  taskId: string;
+  outputDir: string;
+  speedFactor: number;
+  cancelled: boolean;
+  completedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  elapsedMs: number;
+  items: ChangeVideoSpeedItemResult[];
+}
+
+export type MergeResolutionPreset =
+  "match_first" | "p1080" | "p720" | "vertical1080" | "square1080";
+
+export type MergeFitMode = "pad" | "fill";
+
+export interface MergeVideosRequest {
+  taskId: string;
+  sourcePaths: string[];
+  outputPath: string;
+  resolutionPreset: MergeResolutionPreset;
+  fitMode?: MergeFitMode;
+  allowOverwrite?: boolean;
+}
+
+export interface MergeVideosResult {
+  outputPath: string;
+  byteSize: number;
+  clipCount: number;
+  outputWidth: number;
+  outputHeight: number;
+  outputDurationSec: number | null;
+  hasAudio: boolean;
+  elapsedMs: number;
+}
+
+export async function changeVideoSpeedBatch(
+  req: ChangeVideoSpeedBatchRequest,
+): Promise<ChangeVideoSpeedBatchResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<ChangeVideoSpeedBatchResponse>("change_video_speed_batch", { req });
+}
+
+export async function mergeVideos(req: MergeVideosRequest): Promise<MergeVideosResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<MergeVideosResult>("merge_videos", { req });
 }

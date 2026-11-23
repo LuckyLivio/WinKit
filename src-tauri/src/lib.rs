@@ -24,8 +24,10 @@ pub mod media_extract_audio;
 pub mod media_frames;
 pub mod media_gif;
 pub mod media_info;
+pub mod media_merge;
 pub mod media_mute;
 pub mod media_resize;
+pub mod media_speed;
 pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
@@ -135,9 +137,13 @@ use crate::media_gif::{
     convert_video_to_gif_impl, ConvertVideoToGifRequest, ConvertVideoToGifResult,
 };
 use crate::media_info::{probe_media_info_impl, MediaProbeReport};
+use crate::media_merge::{merge_videos_impl, MergeVideosRequest, MergeVideosResult};
 use crate::media_mute::{mute_videos_batch_impl, MuteVideosBatchRequest, MuteVideosBatchResponse};
 use crate::media_resize::{
     resize_videos_batch_impl, ResizeVideosBatchRequest, ResizeVideosBatchResponse,
+};
+use crate::media_speed::{
+    change_video_speed_batch_impl, ChangeVideoSpeedBatchRequest, ChangeVideoSpeedBatchResponse,
 };
 use crate::media_trim::{
     analyze_trim_keyframes_impl, trim_video_file_impl, TrimKeyframeAnalysis,
@@ -3054,6 +3060,118 @@ async fn crop_rotate_video<R: Runtime>(
 }
 
 #[tauri::command]
+async fn change_video_speed_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: ChangeVideoSpeedBatchRequest,
+) -> Result<ChangeVideoSpeedBatchResponse, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid video speed task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V03", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V03", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = change_video_speed_batch_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V03".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V03", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V03", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video speed worker failed."))?
+}
+
+#[tauri::command]
+async fn merge_videos<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: MergeVideosRequest,
+) -> Result<MergeVideosResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid video merge task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V12", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V12", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = merge_videos_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V12".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V12", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V12", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video merge worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -3200,6 +3318,8 @@ pub fn run() {
             resize_videos_batch,
             extract_oriented_preview_frame,
             crop_rotate_video,
+            change_video_speed_batch,
+            merge_videos,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

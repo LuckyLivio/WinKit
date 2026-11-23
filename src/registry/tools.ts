@@ -44,6 +44,8 @@ import { VideoConvertWorkspace } from "../tools/video-convert/VideoConvertWorksp
 import { VideoCompressWorkspace } from "../tools/video-compress/VideoCompressWorkspace";
 import { VideoResizeWorkspace } from "../tools/video-resize/VideoResizeWorkspace";
 import { VideoCropWorkspace } from "../tools/video-crop/VideoCropWorkspace";
+import { VideoSpeedWorkspace } from "../tools/video-speed/VideoSpeedWorkspace";
+import { VideoMergeWorkspace } from "../tools/video-merge/VideoMergeWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -90,7 +92,9 @@ export type ToolIconName =
   | "video-convert"
   | "video-compress"
   | "video-resize"
-  | "video-crop";
+  | "video-crop"
+  | "video-speed"
+  | "video-merge";
 
 export interface RegisteredTool {
   id: string;
@@ -1143,6 +1147,36 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     component: OrganizeDownloadsWorkspace,
   },
   {
+    id: "V03",
+    category: "video",
+    name: { "zh-CN": "视频变速", "en-US": "Change Speed" },
+    summary: {
+      "zh-CN":
+        "支持 0.25× 至 4× 单文件与批量变速，提供常用预设与预计时长，默认多级 atempo 保持原音调并可选静音，兼容无音轨视频",
+      "en-US":
+        "Adjust video playback speed from 0.25x to 4x for single or batch files with duration estimates, default pitch preservation, optional mute, and silent-clip support",
+    },
+    keywords: [
+      "speed",
+      "change speed",
+      "slow motion",
+      "fast forward",
+      "timelapse",
+      "atempo",
+      "pitch",
+      "2x",
+      "0.5x",
+      "视频变速",
+      "慢动作",
+      "倍速",
+      "加速",
+      "减速",
+    ],
+    icon: "video-speed",
+    implementationStatus: "full",
+    component: VideoSpeedWorkspace,
+  },
+  {
     id: "V04",
     category: "video",
     name: { "zh-CN": "视频抽帧", "en-US": "Extract Frames" },
@@ -1335,6 +1369,33 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "video-trim",
     implementationStatus: "full",
     component: VideoTrimWorkspace,
+  },
+  {
+    id: "V12",
+    category: "video",
+    name: { "zh-CN": "视频合并", "en-US": "Merge Videos" },
+    summary: {
+      "zh-CN":
+        "选择两段及以上视频展示缩略图、顺序调整与总时长，统一封装为 H.264 MP4；横竖屏混排默认等比留黑，有声与无声段混拼自动补静音对齐",
+      "en-US":
+        "Merge two or more clips in order with thumbnails, drag/button reorder, total duration, resolution presets, default letterboxing, and exact silence padding for mixed audio/silent clips",
+    },
+    keywords: [
+      "merge",
+      "concat",
+      "join",
+      "combine",
+      "stitch",
+      "video",
+      "mp4",
+      "视频合并",
+      "拼接",
+      "合并视频",
+      "串联",
+    ],
+    icon: "video-merge",
+    implementationStatus: "full",
+    component: VideoMergeWorkspace,
   },
   {
     id: "V13",
