@@ -8,7 +8,7 @@
   - **`src-tauri/src/audio_wasapi.rs` + `audio_recorder.rs` + `src/tools/audio-recorder/`**：新增可复用 Windows 原生 WASAPI 枚举与采集引擎（仅读设备属性不主动激活 `IAudioClient`，在用户主动监听或开始录制时才占麦），支持麦克风选择、实时电平/削波表、开始/暂停（暂停期间零帧写入）/继续/停止试听、展示实际采样率与声道、导出无损 WAV（无需 FFmpeg）或 M4A/AAC、一键送往 `A03`/`A01`，完善处理无麦克风、系统权限被拒、设备断开保留已录内容与三态录制关窗保护，停止/放弃同步释放设备并支持立即重录。离线语音转写留阶段 6（矩阵标记 `部分实现`）。
 - **PR #26（`64ac47f`）｜`V05` 屏幕录制**：
   - **`src-tauri/src/screen_recorder.rs` + `screen_capture.rs` 区域选框复用 + `src/tools/screen-recorder/`**：基于 Windows.Graphics.Capture（Direct3D 11，非 DWM 表面自动安全回退 `PrintWindow` / Z 序合成并如实报告 `captureEngine`）支持显示器、单个窗口与复用 `I01` 物理 DPI 坐标的框选区域；集成独立或双路混录的 WASAPI 系统播放回环与麦克风音频（开始前清晰说明「录哪里 / 录哪些声音」及单窗口下设备级系统回环范围）；默认 H.264 MP4（支持 MOV）、原尺寸/1440p/1080p/720p、30/60 fps、指针显示、点击高亮与 `WDA_EXCLUDEFROMCAPTURE` 悬浮状态停止条；壁钟主节拍 + 流式 FFmpeg 编码保持长录制有界内存与音画同步，明确区分「停止并保存」与「放弃」，并在目标窗口关闭/设备失效/关窗时尽可能保留已录内容。
-- **PR #27｜`V01` 视频下载 + `v0.16.0` 发布与全链路实测**：
+- **PR #27（`b5bd544`）｜`V01` 视频下载 + `v0.16.0` 发布与全链路实测**：
   - **`src-tauri/src/ytdlp_core.rs` + `video_download.rs` + `src/components/YtdlpSetupPanel.tsx` + `src/tools/video-download/`**：支持粘贴一条或多条 HTTP(S) 链接解析标题、可用清晰度与音轨语言，提供最佳/最高 1080p/最高 720p/仅音频 M4A 与优先 H.264，队列逐项展示进度、取消（Windows Job Object 终止 `yt-dlp` 与子级 `ffmpeg` 进程树并清理 `.part`/`.tmp`）、准确错误分类（登录/年龄/地区/DRM/JS 运行时/断网等）与重试，完成后经本地 `ffprobe` 展示实际分辨率、视频/音频编码与音轨语言并一键送往 `V10`/`V11`/`V04`/`A03`。普通直链媒体无需 `yt-dlp` 即可独立下载并保持原字节 SHA-256；受管 `yt-dlp` 固定官方 `2026.10.26`（校验 SHA-256 与 `The Unlicense` 许可、更新或自检失败保留可用旧版、自动检测 Deno/Node.js 等 JS 运行时、不修改系统 `PATH`）；全部界面、日志与错误提示自动脱敏令牌、认证与签名参数。
 
 ## 下一阶段
