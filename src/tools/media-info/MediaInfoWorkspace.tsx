@@ -334,13 +334,31 @@ export function MediaInfoWorkspace() {
                 <span>{isZh ? "导出 JSON…" : "Export JSON..."}</span>
               </button>
               {report?.hasVideo && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("V11", report.path)}
+                  >
+                    <Scissors size={14} aria-hidden="true" />
+                    <span>{isZh ? "视频剪切 (V11)" : "Trim (V11)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("V13", report.path)}
+                  >
+                    <span>{isZh ? "静音 (V13)" : "Mute (V13)"}</span>
+                  </button>
+                </>
+              )}
+              {report?.hasAudio && (
                 <button
                   type="button"
                   className="btn btn-ghost"
-                  onClick={() => handoffMediaFileToTool("V11", report.path)}
+                  onClick={() => handoffMediaFileToTool("A04", report.path)}
                 >
-                  <Scissors size={14} aria-hidden="true" />
-                  <span>{isZh ? "送入视频剪切 (V11)" : "Open in Trim Video (V11)"}</span>
+                  <span>{isZh ? "提取音频 (A04)" : "Extract Audio (A04)"}</span>
                 </button>
               )}
             </div>

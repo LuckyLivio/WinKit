@@ -10,10 +10,17 @@ import {
 import {
   bindDisposableListener,
   cancelBackendTask,
+  extractAudioBatch,
+  muteVideosBatch,
   subscribeMediaTaskProgress,
   trimVideoFile,
+  type AudioExtractFormat,
+  type ExtractAudioBatchRequest,
+  type ExtractAudioBatchResponse,
   type MediaProbeReport,
   type MediaTaskProgressPayload,
+  type MuteVideosBatchRequest,
+  type MuteVideosBatchResponse,
   type TrimKeyframeAnalysis,
   type TrimVideoRequest,
   type TrimVideoResult,
@@ -52,9 +59,44 @@ export interface VideoTrimSessionState {
   errorMessage: string | null;
 }
 
+export interface MediaQueuedProbeItem {
+  path: string;
+  fileName: string;
+  status: "loading" | "ready" | "error";
+  probe: MediaProbeReport | null;
+  errorMessage: string | null;
+  selectedAudioTrackIndex: number;
+}
+
+export interface VideoMuteSessionState {
+  items: MediaQueuedProbeItem[];
+  outputDir: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastReport: MuteVideosBatchResponse | null;
+  errorMessage: string | null;
+}
+
+export interface AudioExtractSessionState {
+  items: MediaQueuedProbeItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  format: AudioExtractFormat;
+  preferStreamCopy: boolean;
+  bitrateKbps: number | null;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastReport: ExtractAudioBatchResponse | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
+  videoMute: VideoMuteSessionState;
+  audioExtract: AudioExtractSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -80,6 +122,28 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  videoMute: {
+    items: [],
+    outputDir: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
+  audioExtract: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    format: "m4a",
+    preferStreamCopy: true,
+    bitrateKbps: null,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -91,6 +155,20 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<TrimVideoResult | null>;
   cancelVideoTrimTask: () => Promise<void>;
+  updateVideoMuteSession: (updater: (prev: VideoMuteSessionState) => VideoMuteSessionState) => void;
+  startVideoMuteBatch: (
+    req: Omit<MuteVideosBatchRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<MuteVideosBatchResponse | null>;
+  cancelVideoMuteBatch: () => Promise<void>;
+  updateAudioExtractSession: (
+    updater: (prev: AudioExtractSessionState) => AudioExtractSessionState,
+  ) => void;
+  startAudioExtractBatch: (
+    req: Omit<ExtractAudioBatchRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<ExtractAudioBatchResponse | null>;
+  cancelAudioExtractBatch: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -114,6 +192,8 @@ export function MediaSessionProvider({
 
   const taskSeqRef = useRef(1);
   const activeTrimTaskRef = useRef<string | null>(null);
+  const activeMuteTaskRef = useRef<string | null>(null);
+  const activeAudioExtractTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
 
@@ -124,10 +204,20 @@ export function MediaSessionProvider({
           if (payload.toolId === "V11" && payload.taskId === activeTrimTaskRef.current) {
             setMediaSession((prev) => ({
               ...prev,
-              videoTrim: {
-                ...prev.videoTrim,
-                liveProgress: payload,
-              },
+              videoTrim: { ...prev.videoTrim, liveProgress: payload },
+            }));
+          } else if (payload.toolId === "V13" && payload.taskId === activeMuteTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoMute: { ...prev.videoMute, liveProgress: payload },
+            }));
+          } else if (
+            payload.toolId === "A04" &&
+            payload.taskId === activeAudioExtractTaskRef.current
+          ) {
+            setMediaSession((prev) => ({
+              ...prev,
+              audioExtract: { ...prev.audioExtract, liveProgress: payload },
             }));
           }
         }),
@@ -221,9 +311,163 @@ export function MediaSessionProvider({
 
   const cancelVideoTrimTask = useCallback(async () => {
     const tid = activeTrimTaskRef.current;
-    if (tid) {
-      await cancelBackendTask(tid);
-    }
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateVideoMuteSession = useCallback(
+    (updater: (prev: VideoMuteSessionState) => VideoMuteSessionState) => {
+      setMediaSession((prev) => ({
+        ...prev,
+        videoMute: updater(prev.videoMute),
+      }));
+    },
+    [],
+  );
+
+  const startVideoMuteBatch = useCallback(
+    async (
+      req: Omit<MuteVideosBatchRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<MuteVideosBatchResponse | null> => {
+      if (activeMuteTaskRef.current) return null;
+      const taskId = `v13-mute-${Date.now()}-${taskSeqRef.current++}`;
+      activeMuteTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoMute: {
+          ...prev.videoMute,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V13",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.sourcePaths.length,
+            itemName: req.sourcePaths[0] ?? null,
+            percent: 0,
+            outTimeSec: null,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await muteVideosBatch({ ...req, taskId });
+        if (activeMuteTaskRef.current !== taskId) return null;
+        activeMuteTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoMute: {
+            ...prev.videoMute,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeMuteTaskRef.current !== taskId) return null;
+        activeMuteTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoMute: {
+            ...prev.videoMute,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoMuteBatch = useCallback(async () => {
+    const tid = activeMuteTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateAudioExtractSession = useCallback(
+    (updater: (prev: AudioExtractSessionState) => AudioExtractSessionState) => {
+      setMediaSession((prev) => ({
+        ...prev,
+        audioExtract: updater(prev.audioExtract),
+      }));
+    },
+    [],
+  );
+
+  const startAudioExtractBatch = useCallback(
+    async (
+      req: Omit<ExtractAudioBatchRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<ExtractAudioBatchResponse | null> => {
+      if (activeAudioExtractTaskRef.current) return null;
+      const taskId = `a04-audio-${Date.now()}-${taskSeqRef.current++}`;
+      activeAudioExtractTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        audioExtract: {
+          ...prev.audioExtract,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "A04",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.items.length,
+            itemName: req.items[0]?.sourcePath ?? null,
+            percent: 0,
+            outTimeSec: null,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await extractAudioBatch({ ...req, taskId });
+        if (activeAudioExtractTaskRef.current !== taskId) return null;
+        activeAudioExtractTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          audioExtract: {
+            ...prev.audioExtract,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeAudioExtractTaskRef.current !== taskId) return null;
+        activeAudioExtractTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          audioExtract: {
+            ...prev.audioExtract,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelAudioExtractBatch = useCallback(async () => {
+    const tid = activeAudioExtractTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
   }, []);
 
   const handoffMediaFileToTool = useCallback(
@@ -254,6 +498,12 @@ export function MediaSessionProvider({
         updateVideoTrimSession,
         startVideoTrimTask,
         cancelVideoTrimTask,
+        updateVideoMuteSession,
+        startVideoMuteBatch,
+        cancelVideoMuteBatch,
+        updateAudioExtractSession,
+        startAudioExtractBatch,
+        cancelAudioExtractBatch,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,

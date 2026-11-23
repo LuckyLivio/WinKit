@@ -1750,3 +1750,114 @@ export async function subscribeMediaTaskProgress(
     handler(event.payload);
   });
 }
+
+// ---------- Phase 4A Batch 2: V13 Mute Video & A04 Extract Audio ----------
+
+export interface MuteVideosBatchRequest {
+  taskId: string;
+  sourcePaths: string[];
+  outputDir: string;
+}
+
+export type MuteItemStatus = "muted" | "already_muted" | "skipped" | "failed";
+
+export interface MuteVideoItemResult {
+  sourcePath: string;
+  fileName: string;
+  status: MuteItemStatus;
+  outputPath: string | null;
+  byteSize: number | null;
+  removedAudioTracks: number;
+  durationSec: number | null;
+  displayWidth: number | null;
+  displayHeight: number | null;
+  rotationDegrees: number | null;
+  message: string | null;
+}
+
+export interface MuteVideosBatchResponse {
+  taskId: string;
+  outputDir: string;
+  cancelled: boolean;
+  mutedCount: number;
+  alreadyMutedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  elapsedMs: number;
+  items: MuteVideoItemResult[];
+}
+
+export type AudioExtractFormat = "m4a" | "mp3" | "wav" | "flac";
+
+export interface ExtractAudioItemInput {
+  sourcePath: string;
+  audioTrackIndex: number;
+}
+
+export interface ExtractAudioBatchRequest {
+  taskId: string;
+  items: ExtractAudioItemInput[];
+  outputDir: string;
+  format: AudioExtractFormat;
+  preferStreamCopy: boolean;
+  bitrateKbps: number | null;
+}
+
+export type ExtractAudioItemStatus = "extracted" | "no_audio" | "skipped" | "failed";
+
+export interface ExtractAudioItemResult {
+  sourcePath: string;
+  fileName: string;
+  audioTrackIndex: number;
+  trackLanguage: string | null;
+  status: ExtractAudioItemStatus;
+  usedStreamCopy: boolean;
+  outputPath: string | null;
+  byteSize: number | null;
+  durationSec: number | null;
+  outputCodec: string | null;
+  message: string | null;
+}
+
+export interface ExtractAudioBatchResponse {
+  taskId: string;
+  outputDir: string;
+  cancelled: boolean;
+  extractedCount: number;
+  noAudioCount: number;
+  skippedCount: number;
+  failedCount: number;
+  elapsedMs: number;
+  items: ExtractAudioItemResult[];
+}
+
+export interface AudioTrackPreviewResult {
+  previewUrl: string;
+  audioTrackIndex: number;
+  durationSec: number | null;
+}
+
+export async function muteVideosBatch(
+  req: MuteVideosBatchRequest,
+): Promise<MuteVideosBatchResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<MuteVideosBatchResponse>("mute_videos_batch", { req });
+}
+
+export async function previewAudioTrack(
+  path: string,
+  audioTrackIndex: number,
+): Promise<AudioTrackPreviewResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<AudioTrackPreviewResult>("preview_audio_track", {
+    path,
+    audioTrackIndex,
+  });
+}
+
+export async function extractAudioBatch(
+  req: ExtractAudioBatchRequest,
+): Promise<ExtractAudioBatchResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<ExtractAudioBatchResponse>("extract_audio_batch", { req });
+}

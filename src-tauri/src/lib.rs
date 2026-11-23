@@ -17,7 +17,9 @@ pub mod image_watermark;
 pub mod iso_reader;
 pub mod jwt;
 pub mod media_core;
+pub mod media_extract_audio;
 pub mod media_info;
+pub mod media_mute;
 pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
@@ -106,7 +108,12 @@ use crate::media_core::{
     MediaPreviewRegistration, MediaPreviewRegistry, MediaToolsStatus, MEDIA_SETUP_PROGRESS_EVENT,
     MEDIA_TASK_PROGRESS_EVENT,
 };
+use crate::media_extract_audio::{
+    extract_audio_batch_impl, preview_audio_track_impl, AudioTrackPreviewResult,
+    ExtractAudioBatchRequest, ExtractAudioBatchResponse,
+};
 use crate::media_info::{probe_media_info_impl, MediaProbeReport};
+use crate::media_mute::{mute_videos_batch_impl, MuteVideosBatchRequest, MuteVideosBatchResponse};
 use crate::media_trim::{
     analyze_trim_keyframes_impl, trim_video_file_impl, TrimKeyframeAnalysis,
     TrimKeyframeAnalysisRequest, TrimVideoRequest, TrimVideoResult,
@@ -2513,6 +2520,136 @@ async fn trim_video_file<R: Runtime>(
 }
 
 #[tauri::command]
+async fn mute_videos_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: MuteVideosBatchRequest,
+) -> Result<MuteVideosBatchResponse, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid mute task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V13", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V13", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = mute_videos_batch_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V13".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V13", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V13", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video mute worker failed."))?
+}
+
+#[tauri::command]
+async fn preview_audio_track<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    preview_reg: State<'_, MediaPreviewRegistry>,
+    path: String,
+    audio_track_index: usize,
+) -> Result<AudioTrackPreviewResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    let reg = preview_reg.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_audio_track_impl(&root, &reg, &path, audio_track_index)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio track preview worker failed."))?
+}
+
+#[tauri::command]
+async fn extract_audio_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: ExtractAudioBatchRequest,
+) -> Result<ExtractAudioBatchResponse, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid audio extract task ID."));
+    }
+    let guard = registry.register_checked(&tid, "A04", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "A04", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = extract_audio_batch_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "A04".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "A04", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "A04", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio extract worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -2647,6 +2784,9 @@ pub fn run() {
             probe_media_info,
             analyze_trim_keyframes,
             trim_video_file,
+            mute_videos_batch,
+            preview_audio_track,
+            extract_audio_batch,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
