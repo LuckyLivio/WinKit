@@ -1,10 +1,11 @@
-import { Clock, LayoutGrid, Settings, Star } from "lucide-react";
+import { Clock, FileSearch, LayoutGrid, Settings, Star } from "lucide-react";
 import { useI18n } from "../i18n/I18nContext";
 import type { RegisteredTool } from "../registry/tools";
 import { ToolIcon } from "./ToolIcon";
 
 export type ActiveRoute =
   | { kind: "home"; filter: "all" | "favorites" | "recent" }
+  | { kind: "pdf-reader" }
   | { kind: "settings" }
   | { kind: "tool"; toolId: string };
 
@@ -72,6 +73,19 @@ export function Sidebar({ route, tools, favoritesCount, recentCount, onNavigate 
               <span className="nav-item-text">{t.nav.recent}</span>
             </span>
             {recentCount > 0 && <span className="nav-item-code mono">{recentCount}</span>}
+          </button>
+
+          <button
+            type="button"
+            className={`nav-item ${route.kind === "pdf-reader" ? "is-active" : ""}`}
+            aria-current={route.kind === "pdf-reader" ? "page" : undefined}
+            onClick={() => onNavigate({ kind: "pdf-reader" })}
+          >
+            <span className="nav-item-main">
+              <FileSearch size={16} strokeWidth={1.75} aria-hidden="true" />
+              <span className="nav-item-text">{t.nav.pdfReader}</span>
+            </span>
+            <span className="nav-item-code mono">C08</span>
           </button>
         </nav>
 

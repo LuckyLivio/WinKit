@@ -37,6 +37,10 @@ pub mod media_subtitles;
 pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
+pub mod pdf_core;
+pub mod pdf_ops;
+pub mod pdf_pdfium;
+pub mod pdf_worker;
 mod qr;
 pub mod screen_capture;
 pub mod screen_recorder;
@@ -186,6 +190,15 @@ use crate::organize_downloads::{
     OrganizeExecuteResponse, OrganizePreviewRequest, OrganizePreviewResponse,
 };
 use crate::password_gen::{generate_secrets_with_os_rng, SecretGenRequest, SecretGenResponse};
+use crate::pdf_core::{
+    PdfDocumentInspection, PdfRenderRequest, PdfSessionManager, RenderedPdfPagePayload,
+    PDF_TASK_PROGRESS_EVENT,
+};
+use crate::pdf_ops::{
+    merge_pdfs_impl, preview_split_pdf_plan_impl, split_pdf_impl, MergePdfsRequest,
+    MergePdfsResult, SplitPdfPlanPreview, SplitPdfPlanRequest, SplitPdfRequest, SplitPdfResult,
+};
+use crate::pdf_pdfium::{PdfPageTextPayload, PdfSearchResult};
 use crate::screen_capture::{
     capture_monitor_impl, capture_region_impl, capture_scroll_impl, capture_window_impl,
     list_capture_monitors_impl, list_capture_windows_impl, pick_screen_region_rect_impl,
@@ -4000,6 +4013,245 @@ async fn download_video_item<R: Runtime>(
 }
 
 #[tauri::command]
+async fn inspect_pdf_document(
+    app: AppHandle,
+    pdf: State<'_, PdfSessionManager>,
+    path: String,
+) -> Result<PdfDocumentInspection, AppError> {
+    let mgr = pdf.inner().clone();
+    if let Ok(res_dir) = app.path().resource_dir() {
+        mgr.set_resource_dir(res_dir);
+    }
+    tauri::async_runtime::spawn_blocking(move || mgr.inspect_document(&path))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF inspection worker failed."))?
+}
+
+#[tauri::command]
+async fn render_pdf_page(
+    app: AppHandle,
+    pdf: State<'_, PdfSessionManager>,
+    request: PdfRenderRequest,
+) -> Result<RenderedPdfPagePayload, AppError> {
+    let mgr = pdf.inner().clone();
+    if let Ok(res_dir) = app.path().resource_dir() {
+        mgr.set_resource_dir(res_dir);
+    }
+    tauri::async_runtime::spawn_blocking(move || mgr.render_page(&request))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF render worker failed."))?
+}
+
+#[tauri::command]
+async fn get_pdf_page_text(
+    app: AppHandle,
+    pdf: State<'_, PdfSessionManager>,
+    path: String,
+    page_number: usize,
+) -> Result<PdfPageTextPayload, AppError> {
+    let mgr = pdf.inner().clone();
+    if let Ok(res_dir) = app.path().resource_dir() {
+        mgr.set_resource_dir(res_dir);
+    }
+    tauri::async_runtime::spawn_blocking(move || mgr.get_page_text(&path, page_number))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF text worker failed."))?
+}
+
+#[tauri::command]
+async fn search_pdf_text(
+    app: AppHandle,
+    pdf: State<'_, PdfSessionManager>,
+    path: String,
+    query: String,
+    case_sensitive: Option<bool>,
+) -> Result<PdfSearchResult, AppError> {
+    let mgr = pdf.inner().clone();
+    if let Ok(res_dir) = app.path().resource_dir() {
+        mgr.set_resource_dir(res_dir);
+    }
+    let cs = case_sensitive.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || mgr.search_text(&path, &query, cs))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF search worker failed."))?
+}
+
+#[tauri::command]
+fn clear_pdf_render_cache(pdf: State<'_, PdfSessionManager>) {
+    pdf.clear_cache();
+}
+
+#[tauri::command]
+async fn merge_pdfs(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: MergePdfsRequest,
+) -> Result<MergePdfsResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-merge"));
+    let guard = registry.register_checked(&tid, "P07", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P07".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = merge_pdfs_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P07".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P07",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P07", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF merge worker failed."))?
+}
+
+#[tauri::command]
+async fn preview_split_pdf_plan(
+    request: SplitPdfPlanRequest,
+) -> Result<SplitPdfPlanPreview, AppError> {
+    tauri::async_runtime::spawn_blocking(move || preview_split_pdf_plan_impl(&request))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "INTERNAL_JOIN_ERROR",
+                "PDF split plan preview worker failed.",
+            )
+        })?
+}
+
+#[tauri::command]
+async fn split_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: SplitPdfRequest,
+) -> Result<SplitPdfResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-split"));
+    let guard = registry.register_checked(&tid, "P08", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P08".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = split_pdf_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P08".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let cancel_err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(
+                            &tid,
+                            "P08",
+                            done.total_output_bytes,
+                            None,
+                            &cancel_err,
+                        ),
+                    );
+                } else {
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(
+                            &tid,
+                            "P08",
+                            done.total_output_bytes,
+                            Some(done.total_output_bytes),
+                        ),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P08", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF split worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -4019,11 +4271,13 @@ fn request_window_close(
     registry: State<'_, TaskRegistry>,
     recorder: State<'_, AudioRecorderManager>,
     screen_recorder: State<'_, ScreenRecorderManager>,
+    pdf: State<'_, PdfSessionManager>,
 ) -> CloseRequestDecision {
     let decision = registry.evaluate_close_request();
     if decision.immediate_close_allowed {
         recorder.cleanup_on_exit();
         screen_recorder.cleanup_on_exit();
+        pdf.cleanup_on_exit();
     }
     decision
 }
@@ -4033,17 +4287,20 @@ async fn begin_graceful_shutdown(
     registry: State<'_, TaskRegistry>,
     recorder: State<'_, AudioRecorderManager>,
     screen_recorder: State<'_, ScreenRecorderManager>,
+    pdf: State<'_, PdfSessionManager>,
     timeout_ms: Option<u64>,
 ) -> Result<ShutdownDrainResult, AppError> {
     let reg = registry.inner().clone();
     let mgr = recorder.inner().clone();
     let scr = screen_recorder.inner().clone();
+    let pdf_mgr = pdf.inner().clone();
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(8_000).clamp(100, 30_000));
     tauri::async_runtime::spawn_blocking(move || {
         let res = reg.begin_shutdown_and_drain(timeout);
         if res.ready_to_close {
             mgr.cleanup_on_exit();
             scr.cleanup_on_exit();
+            pdf_mgr.cleanup_on_exit();
         }
         res
     })
@@ -4068,6 +4325,7 @@ pub fn run() {
         .manage(preview_registry)
         .manage(AudioRecorderManager::new())
         .manage(ScreenRecorderManager::new())
+        .manage(PdfSessionManager::default())
         .register_uri_scheme_protocol("winkitmedia", move |_ctx, request| {
             handle_winkit_media_protocol(&preview_registry_for_proto, request)
         })
@@ -4203,6 +4461,14 @@ pub fn run() {
             install_managed_ytdlp,
             probe_video_download_url,
             download_video_item,
+            inspect_pdf_document,
+            render_pdf_page,
+            get_pdf_page_text,
+            search_pdf_text,
+            clear_pdf_render_cache,
+            merge_pdfs,
+            preview_split_pdf_plan,
+            split_pdf,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

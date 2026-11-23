@@ -8,8 +8,9 @@
   "scripts": {
     "dev": "vite",
     "ensure-face-model": "node scripts/ensure-face-model.mjs",
+    "ensure-pdfium": "node scripts/ensure-pdfium.mjs",
     "build": "vite build",
-    "build:desktop": "node scripts/ensure-face-model.mjs && vite build",
+    "build:desktop": "node scripts/ensure-face-model.mjs && node scripts/ensure-pdfium.mjs && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

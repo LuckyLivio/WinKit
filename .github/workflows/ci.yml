@@ -54,6 +54,9 @@ jobs:
       - name: Ensure verified I02 YuNet ONNX model
         run: npm run ensure-face-model
 
+      - name: Ensure verified Windows x64 PDFium runtime
+        run: npm run ensure-pdfium
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
@@ -118,6 +121,15 @@ jobs:
           $modelHash = (Get-FileHash -Algorithm SHA256 $bundledModel.FullName).Hash.ToLowerInvariant()
           if ($bundledModel.Length -ne 232589 -or $modelHash -ne '8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4') {
             throw "Bundled I02 model mismatch: $($bundledModel.Length) B / $modelHash"
+          }
+          $bundledPdfium = Get-Item "$env:LOCALAPPDATA/WinKit/pdfium/pdfium.dll"
+          $pdfiumHash = (Get-FileHash -Algorithm SHA256 $bundledPdfium.FullName).Hash.ToLowerInvariant()
+          if ($bundledPdfium.Length -ne 7849984 -or $pdfiumHash -ne 'b9324fe77556753e24443b8ff1d03b39a3aa01ccd6e56e7debb82922438e8965') {
+            throw "Bundled PDFium DLL mismatch: $($bundledPdfium.Length) B / $pdfiumHash"
+          }
+          $pdfiumNotice = Get-Item "$env:LOCALAPPDATA/WinKit/licenses/pdfium-notices.txt"
+          if ($pdfiumNotice.Length -lt 1024) {
+            throw "Bundled PDFium license notices file is missing or unexpectedly small: $($pdfiumNotice.Length) B"
           }
 
           $desktopCheck = 'No interactive main window on runner'

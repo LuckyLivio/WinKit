@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 53 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
+  it("registers all 55 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -148,7 +148,19 @@ describe("WinKit desktop workbench shell", () => {
       "A03",
       "A04",
       "A05",
+      "P07",
+      "P08",
     ]);
+    for (const query of ["PDF 合并", "merge pdf", "bookmarks"]) {
+      expect(
+        filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
+      ).toEqual(["P07"]);
+    }
+    for (const query of ["PDF 拆分", "split pdf", "页码范围"]) {
+      expect(
+        filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
+      ).toEqual(["P08"]);
+    }
     for (const query of ["视频下载", "video download", "yt-dlp"]) {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "video" }).map((tool) => tool.id),

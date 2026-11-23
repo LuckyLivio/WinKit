@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HomeView } from "./components/HomeView";
+import { PdfReaderView } from "./components/PdfReaderView";
 import { SettingsView } from "./components/SettingsView";
 import { ShutdownDialog, type ShutdownDialogState } from "./components/ShutdownDialog";
 import { Sidebar, type ActiveRoute } from "./components/Sidebar";
@@ -16,6 +17,7 @@ import {
   type UserPreferences,
 } from "./lib/preferences";
 import { MediaSessionProvider } from "./lib/mediaSessionStore";
+import { PdfSessionProvider } from "./lib/pdfSessionStore";
 import { SessionStoreProvider } from "./lib/sessionStore";
 import {
   enterFrontendShutdownGate,
@@ -348,11 +350,14 @@ export function App({ toolsOverride }: AppProps = {}) {
 
   const topbarTitle = (() => {
     if (activeTool) return activeTool.name[prefs.locale];
+    if (route.kind === "pdf-reader") return t.nav.pdfReader;
     if (route.kind === "settings") return t.settings.title;
     if (route.kind === "home" && route.filter === "favorites") return t.home.titleFavorites;
     if (route.kind === "home" && route.filter === "recent") return t.home.titleRecent;
     return t.home.titleAll;
   })();
+
+  const topbarCode = activeTool?.id ?? (route.kind === "pdf-reader" ? "C08" : undefined);
 
   const validFavoritesCount = tools.filter((tool) => prefs.favorites.includes(tool.id)).length;
   const validRecentCount = prefs.recentTools.filter((r) =>
@@ -363,71 +368,78 @@ export function App({ toolsOverride }: AppProps = {}) {
     <I18nContext.Provider value={i18nValue}>
       <SessionStoreProvider onNavigateToTool={openTool}>
         <MediaSessionProvider onNavigateToTool={openTool}>
-          <div className="app-shell">
-            <Sidebar
-              route={route}
-              tools={tools}
-              favoritesCount={validFavoritesCount}
-              recentCount={validRecentCount}
-              onNavigate={handleNavigate}
-            />
-
-            <div className="main-column">
-              <TopBar
-                title={topbarTitle}
-                toolCode={activeTool?.id}
-                searchQuery={searchQuery}
-                searchInputRef={searchInputRef}
-                effectiveTheme={effectiveTheme}
-                runningTaskCount={activeTaskIds.length}
-                onSearchChange={handleSearchChange}
-                onToggleQuickTheme={() => setTheme(effectiveTheme === "dark" ? "light" : "dark")}
-                onToggleLanguage={() => setLocale(prefs.locale === "zh-CN" ? "en-US" : "zh-CN")}
+          <PdfSessionProvider
+            onNavigateToReader={() => setRoute({ kind: "pdf-reader" })}
+            onNavigateToTool={openTool}
+          >
+            <div className="app-shell">
+              <Sidebar
+                route={route}
+                tools={tools}
+                favoritesCount={validFavoritesCount}
+                recentCount={validRecentCount}
+                onNavigate={handleNavigate}
               />
 
-              <main className="workspace-scroll">
-                {route.kind === "settings" ? (
-                  <SettingsView
-                    theme={prefs.theme}
-                    locale={prefs.locale}
-                    recentCount={validRecentCount}
-                    runtime={runtime}
-                    onChangeTheme={setTheme}
-                    onChangeLocale={setLocale}
-                    onClearRecent={() => setPrefs((prev) => ({ ...prev, recentTools: [] }))}
-                    onResetPreferences={() =>
-                      setPrefs((prev) => ({
-                        ...DEFAULT_PREFERENCES,
-                        favorites: prev.favorites,
-                        recentTools: prev.recentTools,
-                      }))
-                    }
-                  />
-                ) : activeTool ? (
-                  <activeTool.component />
-                ) : (
-                  <HomeView
-                    mode={route.kind === "home" ? route.filter : "all"}
-                    tools={tools}
-                    favorites={prefs.favorites}
-                    recentTools={prefs.recentTools}
-                    searchQuery={searchQuery}
-                    onOpenTool={openTool}
-                    onToggleFavorite={handleToggleFavorite}
-                    onClearSearch={() => setSearchQuery("")}
-                  />
-                )}
-              </main>
-            </div>
-          </div>
+              <div className="main-column">
+                <TopBar
+                  title={topbarTitle}
+                  toolCode={topbarCode}
+                  searchQuery={searchQuery}
+                  searchInputRef={searchInputRef}
+                  effectiveTheme={effectiveTheme}
+                  runningTaskCount={activeTaskIds.length}
+                  onSearchChange={handleSearchChange}
+                  onToggleQuickTheme={() => setTheme(effectiveTheme === "dark" ? "light" : "dark")}
+                  onToggleLanguage={() => setLocale(prefs.locale === "zh-CN" ? "en-US" : "zh-CN")}
+                />
 
-          <ShutdownDialog
-            state={shutdownState}
-            liveActiveCount={activeTaskIds.length}
-            onStay={handleStayInApp}
-            onStopAndKeepRecording={() => void handleStopAndKeepRecording()}
-            onConfirmQuit={() => void handleConfirmQuit()}
-          />
+                <main className="workspace-scroll">
+                  {route.kind === "settings" ? (
+                    <SettingsView
+                      theme={prefs.theme}
+                      locale={prefs.locale}
+                      recentCount={validRecentCount}
+                      runtime={runtime}
+                      onChangeTheme={setTheme}
+                      onChangeLocale={setLocale}
+                      onClearRecent={() => setPrefs((prev) => ({ ...prev, recentTools: [] }))}
+                      onResetPreferences={() =>
+                        setPrefs((prev) => ({
+                          ...DEFAULT_PREFERENCES,
+                          favorites: prev.favorites,
+                          recentTools: prev.recentTools,
+                        }))
+                      }
+                    />
+                  ) : route.kind === "pdf-reader" ? (
+                    <PdfReaderView />
+                  ) : activeTool ? (
+                    <activeTool.component />
+                  ) : (
+                    <HomeView
+                      mode={route.kind === "home" ? route.filter : "all"}
+                      tools={tools}
+                      favorites={prefs.favorites}
+                      recentTools={prefs.recentTools}
+                      searchQuery={searchQuery}
+                      onOpenTool={openTool}
+                      onToggleFavorite={handleToggleFavorite}
+                      onClearSearch={() => setSearchQuery("")}
+                    />
+                  )}
+                </main>
+              </div>
+            </div>
+
+            <ShutdownDialog
+              state={shutdownState}
+              liveActiveCount={activeTaskIds.length}
+              onStay={handleStayInApp}
+              onStopAndKeepRecording={() => void handleStopAndKeepRecording()}
+              onConfirmQuit={() => void handleConfirmQuit()}
+            />
+          </PdfSessionProvider>
         </MediaSessionProvider>
       </SessionStoreProvider>
     </I18nContext.Provider>

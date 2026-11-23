@@ -10,6 +10,7 @@ coverage/
 src-tauri/target/
 src-tauri/gen/schemas/
 src-tauri/resources/models/
+src-tauri/resources/pdfium/
 *.exe
 *.msi
 *.pdb
