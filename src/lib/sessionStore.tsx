@@ -109,6 +109,7 @@ import {
   subscribeArchiveProgress,
   subscribeDuplicateScanProgress,
   subscribeImageBatchProgress,
+  watermarkImagesBatch,
   type BatchRenameSkippedItem,
   type BeautifyBackgroundKind,
   type BeautifyBatchRequest,
@@ -118,6 +119,8 @@ import {
   type CaptureWindowInfo,
   type ImageAssetPayload,
   type RedactionKind,
+  type WatermarkImagesBatchRequest,
+  type WatermarkPlacement,
 } from "./tauriBridge";
 
 export type JsonIndentOption = "2" | "4" | "tab";
@@ -555,6 +558,39 @@ export interface ImageAnnotateSessionState {
   lastSavedMessage: string | null;
 }
 
+export interface ImageWatermarkSessionState {
+  mode: "single" | "batch";
+  assetId: string | null;
+  sourcePath: string | null;
+  sourceFileName: string | null;
+  previewDataUrl: string | null;
+  sourceWidth: number | null;
+  sourceHeight: number | null;
+  kind: "text" | "logo";
+  text: string;
+  textColorHex: string;
+  textBold: boolean;
+  textShadow: boolean;
+  logoPath: string | null;
+  logoFileName: string | null;
+  logoPreviewDataUrl: string | null;
+  placement: WatermarkPlacement;
+  scalePercent: number;
+  marginPercent: number;
+  opacityPercent: number;
+  tileAngleDeg: number;
+  tileSpacingPercent: number;
+  lastSavedMessage: string | null;
+  batchItems: InspectedImageItem[];
+  batchSelectedPath: string | null;
+  batchOutputDir: string;
+  batchStatus: "idle" | "running";
+  batchActiveTaskId: string | null;
+  batchLiveProgress: ImageBatchProgressPayload | null;
+  batchLastReport: BatchImageJobResponse | null;
+  batchErrorMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -576,6 +612,7 @@ export interface SessionWorkspaces {
   beautifier: BeautifierSessionState;
   imageRedact: ImageRedactSessionState;
   imageAnnotate: ImageAnnotateSessionState;
+  imageWatermark: ImageWatermarkSessionState;
   batchRename: BatchRenameSessionState;
   findDuplicates: FindDuplicatesSessionState;
   archive: ArchiveSessionState;
@@ -953,6 +990,38 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     viewport: { ...DEFAULT_VIEWPORT },
     lastSavedMessage: null,
   },
+  imageWatermark: {
+    mode: "batch",
+    assetId: null,
+    sourcePath: null,
+    sourceFileName: null,
+    previewDataUrl: null,
+    sourceWidth: null,
+    sourceHeight: null,
+    kind: "text",
+    text: "WinKit 仅供审阅",
+    textColorHex: "#FFFFFF",
+    textBold: true,
+    textShadow: true,
+    logoPath: null,
+    logoFileName: null,
+    logoPreviewDataUrl: null,
+    placement: "bottom_right",
+    scalePercent: 24,
+    marginPercent: 4,
+    opacityPercent: 70,
+    tileAngleDeg: -30,
+    tileSpacingPercent: 110,
+    lastSavedMessage: null,
+    batchItems: [],
+    batchSelectedPath: null,
+    batchOutputDir: "",
+    batchStatus: "idle",
+    batchActiveTaskId: null,
+    batchLiveProgress: null,
+    batchLastReport: null,
+    batchErrorMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -999,6 +1068,16 @@ interface SessionStoreContextValue {
       | Partial<ImageAnnotateSessionState>
       | ((prev: ImageAnnotateSessionState) => ImageAnnotateSessionState),
   ) => void;
+  updateImageWatermarkSession: (
+    patchOrUpdater:
+      | Partial<ImageWatermarkSessionState>
+      | ((prev: ImageWatermarkSessionState) => ImageWatermarkSessionState),
+  ) => void;
+  startImageWatermarkBatch: (
+    req: WatermarkImagesBatchRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<BatchImageJobResponse | null>;
+  cancelImageWatermarkBatch: () => Promise<void>;
   handoffImageToTool: (targetToolId: ImageHandoffTarget, asset: ImageAssetPayload) => void;
   updateBatchRenameSession: (
     patchOrUpdater:
@@ -1245,6 +1324,23 @@ export function SessionStoreProvider({
     [],
   );
 
+  const updateImageWatermarkSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ImageWatermarkSessionState>
+        | ((prev: ImageWatermarkSessionState) => ImageWatermarkSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        imageWatermark:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.imageWatermark)
+            : { ...prev.imageWatermark, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
   const handoffImageToTool = useCallback(
     (targetToolId: ImageHandoffTarget, asset: ImageAssetPayload) => {
       if (targetToolId === "I03") {
@@ -1302,6 +1398,21 @@ export function SessionStoreProvider({
             selectedId: null,
             nextNumber: 1,
             viewport: { ...DEFAULT_VIEWPORT },
+            lastSavedMessage: null,
+          },
+        }));
+      } else if (targetToolId === "I13") {
+        setSession((prev) => ({
+          ...prev,
+          imageWatermark: {
+            ...prev.imageWatermark,
+            mode: "single",
+            assetId: asset.assetId,
+            sourcePath: null,
+            sourceFileName: asset.label,
+            previewDataUrl: asset.dataUrl,
+            sourceWidth: asset.width,
+            sourceHeight: asset.height,
             lastSavedMessage: null,
           },
         }));
@@ -1652,6 +1763,7 @@ export function SessionStoreProvider({
   const activeRotateTaskRef = useRef<string | null>(null);
   const activeMetadataTaskRef = useRef<string | null>(null);
   const activeBeautifyBatchTaskRef = useRef<string | null>(null);
+  const activeWatermarkBatchTaskRef = useRef<string | null>(null);
 
   const updateImageConvertSession = useCallback(
     (
@@ -1726,6 +1838,12 @@ export function SessionStoreProvider({
               return {
                 ...prev,
                 beautifier: { ...prev.beautifier, batchLiveProgress: payload },
+              };
+            }
+            if (prev.imageWatermark.batchActiveTaskId === payload.taskId) {
+              return {
+                ...prev,
+                imageWatermark: { ...prev.imageWatermark, batchLiveProgress: payload },
               };
             }
             return prev;
@@ -2170,6 +2288,70 @@ export function SessionStoreProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const startImageWatermarkBatch = useCallback(
+    async (
+      req: WatermarkImagesBatchRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<BatchImageJobResponse | null> => {
+      if (activeWatermarkBatchTaskRef.current) return null;
+      const taskId = `i13-watermark-${Date.now()}-${imgBatchSeqRef.current++}`;
+      activeWatermarkBatchTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        imageWatermark: {
+          ...prev.imageWatermark,
+          batchStatus: "running",
+          batchActiveTaskId: taskId,
+          batchLiveProgress: {
+            taskId,
+            toolId: "I13",
+            currentIndex: 1,
+            totalItems: req.sourcePaths.length,
+            currentFileName: req.sourcePaths[0] ?? "",
+          },
+          batchErrorMessage: null,
+        },
+      }));
+      try {
+        const res = await watermarkImagesBatch(taskId, req);
+        if (activeWatermarkBatchTaskRef.current !== taskId) return null;
+        activeWatermarkBatchTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageWatermark: {
+            ...prev.imageWatermark,
+            batchStatus: "idle",
+            batchActiveTaskId: null,
+            batchLiveProgress: null,
+            batchLastReport: res,
+            batchErrorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeWatermarkBatchTaskRef.current !== taskId) return null;
+        activeWatermarkBatchTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageWatermark: {
+            ...prev.imageWatermark,
+            batchStatus: "idle",
+            batchActiveTaskId: null,
+            batchLiveProgress: null,
+            batchErrorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelImageWatermarkBatch = useCallback(async () => {
+    const tid = activeWatermarkBatchTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -2196,6 +2378,9 @@ export function SessionStoreProvider({
         cancelBeautifyBatch,
         updateImageRedactSession,
         updateImageAnnotateSession,
+        updateImageWatermarkSession,
+        startImageWatermarkBatch,
+        cancelImageWatermarkBatch,
         handoffImageToTool,
         updateBatchRenameSession,
         updateFindDuplicatesSession,

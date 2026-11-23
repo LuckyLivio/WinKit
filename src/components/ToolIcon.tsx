@@ -27,6 +27,7 @@ import {
   ScanText,
   ShieldCheck,
   ShieldOff,
+  Stamp,
   Table2,
   TextQuote,
 } from "lucide-react";
@@ -92,6 +93,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <EyeOff size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-annotate":
       return <Pencil size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "image-watermark":
+      return <Stamp size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "table-2":
       return <Table2 size={size} strokeWidth={1.75} aria-hidden="true" />;
   }

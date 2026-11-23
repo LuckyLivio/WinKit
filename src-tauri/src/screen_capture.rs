@@ -678,6 +678,10 @@ mod win_impl {
     };
     use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::StationsAndDesktops::{
+        CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_ACCESS_FLAGS,
+        DESKTOP_CONTROL_FLAGS, UOI_NAME,
+    };
     use windows::Win32::System::Threading::{
         GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
         PROCESS_QUERY_LIMITED_INFORMATION,
@@ -692,14 +696,14 @@ mod win_impl {
         GetCursorInfo, GetIconInfo, GetMessageW, GetSystemMetrics, GetWindowDisplayAffinity,
         GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, KillTimer, LoadCursorW,
-        PeekMessageW, PostQuitMessage, RegisterClassExW, SetCursorPos, SetTimer,
-        SetWindowDisplayAffinity, SetWindowLongPtrW, ShowWindow, TranslateMessage, CS_HREDRAW,
-        CS_VREDRAW, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, GWLP_USERDATA, GWL_EXSTYLE, ICONINFO,
-        IDC_ARROW, IDC_CROSS, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SetCursorPos, SetTimer,
+        SetWindowDisplayAffinity, SetWindowLongPtrW, ShowWindow, TranslateMessage, WindowFromPoint,
+        CS_HREDRAW, CS_VREDRAW, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, GWLP_USERDATA, GWL_EXSTYLE,
+        ICONINFO, IDC_ARROW, IDC_CROSS, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
         SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOW, SW_SHOWNA, WDA_EXCLUDEFROMCAPTURE,
         WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-        WM_PAINT, WM_RBUTTONDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+        WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_APPWINDOW,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
     };
 
     const PW_RENDERFULLCONTENT_FLAG: u32 = 0x0000_0002;
@@ -951,7 +955,233 @@ mod win_impl {
         }
     }
 
-    /// Captures an exact physical screen rectangle via GDI BitBlt into a 32-bit top-down DIB.
+    /// Verifies that the interactive user desktop (`Default`) is currently active — never falls
+    /// back when the workstation is locked (`Winlogon`) or showing a UAC secure desktop.
+    unsafe fn is_default_desktop_active() -> bool {
+        const DESKTOP_READOBJECTS_MASK: u32 = 0x0001;
+        let Ok(hdesk) = OpenInputDesktop(
+            DESKTOP_CONTROL_FLAGS(0),
+            false,
+            DESKTOP_ACCESS_FLAGS(DESKTOP_READOBJECTS_MASK),
+        ) else {
+            return false;
+        };
+        let mut buf = [0u16; 128];
+        let mut needed = 0u32;
+        let ok = GetUserObjectInformationW(
+            windows::Win32::Foundation::HANDLE(hdesk.0),
+            UOI_NAME,
+            Some(buf.as_mut_ptr() as *mut std::ffi::c_void),
+            (buf.len() * std::mem::size_of::<u16>()) as u32,
+            Some(&mut needed),
+        )
+        .is_ok();
+        let _ = CloseDesktop(hdesk);
+        if !ok {
+            return false;
+        }
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        let name = OsString::from_wide(&buf[..end])
+            .to_string_lossy()
+            .into_owned();
+        name.eq_ignore_ascii_case("Default")
+    }
+
+    /// Fallback when GDI desktop `BitBlt` is unavailable on an unlocked user desktop (e.g. display
+    /// panel asleep on a hybrid-GPU laptop): composites visible top-level windows overlapping `rect`
+    /// bottom-to-top using `PrintWindow(PW_RENDERFULLCONTENT)`, strictly excluding WinKit's own PID
+    /// and blacking out any protected (`GetWindowDisplayAffinity != 0`) windows.
+    unsafe fn composite_unlocked_windows_fallback(
+        mem_dc: HDC,
+        screen_dc: HDC,
+        rect: CaptureRect,
+    ) -> bool {
+        if !is_default_desktop_active() {
+            return false;
+        }
+
+        struct Candidate {
+            hwnd: HWND,
+            win_rc: RECT,
+            ext_rc: RECT,
+            is_protected: bool,
+        }
+        struct EnumState {
+            self_pid: u32,
+            target: RECT,
+            list: Vec<Candidate>,
+        }
+
+        unsafe extern "system" fn collect_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let st = &mut *(lparam.0 as *mut EnumState);
+            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+                return BOOL(1);
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == 0 || pid == st.self_pid {
+                return BOOL(1);
+            }
+            let mut cloaked: u32 = 0;
+            if DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut _ as *mut _,
+                std::mem::size_of::<u32>() as u32,
+            )
+            .is_ok()
+                && cloaked != 0
+            {
+                return BOOL(1);
+            }
+            let mut win_rc: RECT = std::mem::zeroed();
+            if GetWindowRect(hwnd, &mut win_rc).is_err() {
+                return BOOL(1);
+            }
+            let ext_rc = get_window_extended_bounds(hwnd).unwrap_or(win_rc);
+            if ext_rc.right <= st.target.left
+                || ext_rc.left >= st.target.right
+                || ext_rc.bottom <= st.target.top
+                || ext_rc.top >= st.target.bottom
+            {
+                return BOOL(1);
+            }
+            let mut affinity = 0u32;
+            let is_protected =
+                GetWindowDisplayAffinity(hwnd, &mut affinity).is_ok() && affinity != 0;
+            st.list.push(Candidate {
+                hwnd,
+                win_rc,
+                ext_rc,
+                is_protected,
+            });
+            BOOL(1)
+        }
+
+        let target = RECT {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x.saturating_add(rect.width as i32),
+            bottom: rect.y.saturating_add(rect.height as i32),
+        };
+        let mut state = EnumState {
+            self_pid: GetCurrentProcessId(),
+            target,
+            list: Vec::new(),
+        };
+        let _ = EnumWindows(
+            Some(collect_proc),
+            LPARAM(&mut state as *mut EnumState as isize),
+        );
+        if state.list.is_empty() {
+            return false;
+        }
+
+        // Composite bottom-to-top in Z-order
+        state.list.reverse();
+        let black_brush = CreateSolidBrush(COLORREF(0x0000_0000));
+        let mut rendered_any = false;
+
+        for cand in state.list {
+            let il = cand.ext_rc.left.max(target.left);
+            let it = cand.ext_rc.top.max(target.top);
+            let ir = cand.ext_rc.right.min(target.right);
+            let ib = cand.ext_rc.bottom.min(target.bottom);
+            if ir <= il || ib <= it {
+                continue;
+            }
+
+            if cand.is_protected {
+                let local = RECT {
+                    left: il - target.left,
+                    top: it - target.top,
+                    right: ir - target.left,
+                    bottom: ib - target.top,
+                };
+                let _ = FillRect(mem_dc, &local, black_brush);
+                rendered_any = true;
+                continue;
+            }
+
+            let ww = (cand.win_rc.right - cand.win_rc.left).max(0) as u32;
+            let wh = (cand.win_rc.bottom - cand.win_rc.top).max(0) as u32;
+            if ww == 0
+                || wh == 0
+                || ww > MAX_ASSET_SIDE
+                || wh > MAX_ASSET_SIDE
+                || u64::from(ww) * u64::from(wh) > MAX_ASSET_PIXELS
+            {
+                continue;
+            }
+
+            let win_dc = CreateCompatibleDC(Some(screen_dc));
+            if win_dc.is_invalid() {
+                continue;
+            }
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: ww as i32,
+                    biHeight: -(wh as i32),
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..std::mem::zeroed()
+                },
+                ..std::mem::zeroed()
+            };
+            let mut tmp_bits: *mut std::ffi::c_void = null_mut();
+            if let Ok(wbmp) = CreateDIBSection(
+                Some(screen_dc),
+                &bmi,
+                DIB_RGB_COLORS,
+                &mut tmp_bits,
+                None,
+                0,
+            ) {
+                let wold = SelectObject(win_dc, HGDIOBJ(wbmp.0));
+                if PrintWindow(
+                    cand.hwnd,
+                    win_dc,
+                    PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT_FLAG),
+                )
+                .as_bool()
+                {
+                    let dst_x = il - target.left;
+                    let dst_y = it - target.top;
+                    let src_x = il - cand.win_rc.left;
+                    let src_y = it - cand.win_rc.top;
+                    let cw = ir - il;
+                    let ch = ib - it;
+                    if BitBlt(
+                        mem_dc,
+                        dst_x,
+                        dst_y,
+                        cw,
+                        ch,
+                        Some(win_dc),
+                        src_x,
+                        src_y,
+                        SRCCOPY,
+                    )
+                    .is_ok()
+                    {
+                        rendered_any = true;
+                    }
+                }
+                let _ = SelectObject(win_dc, wold);
+                let _ = DeleteObject(HGDIOBJ(wbmp.0));
+            }
+            let _ = DeleteDC(win_dc);
+        }
+
+        let _ = DeleteObject(HGDIOBJ(black_brush.0));
+        rendered_any
+    }
+
+    /// Captures an exact physical screen rectangle via GDI BitBlt into a 32-bit top-down DIB,
+    /// falling back to Z-ordered `PrintWindow` compositing on unlocked desktops if the GDI screen
+    /// surface is temporarily unavailable (e.g. display panel off on hybrid-GPU laptops).
     pub fn capture_screen_rect(
         rect: CaptureRect,
         include_cursor: bool,
@@ -1019,7 +1249,7 @@ mod win_impl {
             };
 
             let old = SelectObject(mem_dc, HGDIOBJ(hbitmap.0));
-            let blt_ok = BitBlt(
+            let mut blt_ok = BitBlt(
                 mem_dc,
                 0,
                 0,
@@ -1031,6 +1261,10 @@ mod win_impl {
                 SRCCOPY,
             )
             .is_ok();
+
+            if !blt_ok {
+                blt_ok = composite_unlocked_windows_fallback(mem_dc, screen_dc, rect);
+            }
 
             if blt_ok && include_cursor {
                 draw_cursor_onto_dc(mem_dc, rect.x, rect.y, rect.width, rect.height);
@@ -1869,8 +2103,8 @@ mod win_impl {
         }
     }
 
-    fn send_wheel_down(notches: u32) {
-        let delta = -((notches.clamp(1, 8) as i32) * 120);
+    fn send_wheel_down_at(cx: i32, cy: i32, notches: u32) {
+        let delta = -((notches.clamp(1, 6) as i32) * 120);
         let input = INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -1885,7 +2119,21 @@ mod win_impl {
             },
         };
         unsafe {
-            let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+            let sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+            if sent == 0 {
+                let target = WindowFromPoint(POINT { x: cx, y: cy });
+                if !target.0.is_null() {
+                    let mut pid = 0u32;
+                    GetWindowThreadProcessId(target, Some(&mut pid));
+                    if pid != 0 && pid != GetCurrentProcessId() {
+                        let wparam = WPARAM(((delta as i16 as u16) as usize) << 16);
+                        let lparam = LPARAM(
+                            (((cy as i16 as u16) as isize) << 16) | ((cx as i16 as u16) as isize),
+                        );
+                        let _ = PostMessageW(Some(target), WM_MOUSEWHEEL, wparam, lparam);
+                    }
+                }
+            }
         }
     }
 
@@ -1972,7 +2220,7 @@ mod win_impl {
             unsafe {
                 let _ = SetCursorPos(cx, cy);
             }
-            send_wheel_down(wheel_notches);
+            send_wheel_down_at(cx, cy, wheel_notches);
 
             // Wait in 20ms responsive slices so stop/Esc halts immediately with zero extra scrolls
             let deadline = Instant::now() + Duration::from_millis(delay_ms);
@@ -2316,8 +2564,8 @@ where
 
         let max_frames = req.max_frames.unwrap_or(DEFAULT_MAX_SCROLL_FRAMES);
         let max_height = req.max_height.unwrap_or(DEFAULT_MAX_STITCH_HEIGHT);
-        let wheel_notches = req.wheel_notches.unwrap_or(3);
-        let step_delay_ms = req.step_delay_ms.unwrap_or(280);
+        let wheel_notches = req.wheel_notches.unwrap_or(2);
+        let step_delay_ms = req.step_delay_ms.unwrap_or(300);
 
         let (stitched, frame_count, stop_reason, is_partial) = win_impl::run_scrolling_capture(
             rect,
