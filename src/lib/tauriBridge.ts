@@ -651,7 +651,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.15.0",
+      version: "0.17.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -3433,4 +3433,120 @@ export async function extractPdfPages(
 ): Promise<ExtractPdfPagesResult> {
   assertFrontendNotShuttingDown();
   return invoke<ExtractPdfPagesResult>("extract_pdf_pages", { request });
+}
+
+export interface ImagesToPdfRequest {
+  taskId?: string;
+  imagePaths: string[];
+  outputPath: string;
+  overwrite?: boolean;
+  pageSize: PdfPageSizePreset;
+  orientation: PdfPageOrientation;
+  marginPt: number;
+  backgroundHex: string;
+  jpegQuality?: number;
+  losslessPngImages?: boolean;
+  assumedDpi?: number;
+}
+
+export interface ImagePdfPageSummary {
+  pageNumber: number;
+  sourceFileName: string;
+  widthPt: number;
+  heightPt: number;
+}
+
+export interface ImagesToPdfResult {
+  outputPath: string;
+  byteLength: number;
+  pageCount: number;
+  pages: ImagePdfPageSummary[];
+  warnings: string[];
+}
+
+export type PdfExportImageFormat = "png" | "jpeg" | "webp" | "heic";
+export type PdfExportPageScope = "all" | "single_page" | "custom_range";
+
+export interface PdfToImagesPlanRequest {
+  path: string;
+  scope: PdfExportPageScope;
+  singlePage?: number;
+  customRange?: string;
+  dpi: number;
+  format: PdfExportImageFormat;
+}
+
+export interface PdfToImagesPageEstimate {
+  pageNumber: number;
+  widthPx: number;
+  heightPx: number;
+  capped: boolean;
+}
+
+export interface PdfToImagesPlanPreview {
+  valid: boolean;
+  sourcePageCount: number;
+  targetPageCount: number;
+  maxWidthPx: number;
+  maxHeightPx: number;
+  cappedCount: number;
+  heicEncodeAvailable: boolean;
+  sampleEstimates: PdfToImagesPageEstimate[];
+  errors: string[];
+  warnings: string[];
+}
+
+export interface PdfToImagesRequest {
+  taskId?: string;
+  path: string;
+  scope: PdfExportPageScope;
+  singlePage?: number;
+  customRange?: string;
+  dpi: number;
+  format: PdfExportImageFormat;
+  quality?: number;
+  webpLossless?: boolean;
+  outputDir: string;
+  createSubfolder?: boolean;
+}
+
+export interface PdfExportImageItemOutcome {
+  pageNumber: number;
+  status: "ok" | "error";
+  outputPath: string | null;
+  fileName: string | null;
+  widthPx: number | null;
+  heightPx: number | null;
+  byteLength: number;
+  capped: boolean;
+  collisionAdjusted: boolean;
+  errorMessage: string | null;
+}
+
+export interface PdfToImagesResult {
+  outputDir: string;
+  totalRequested: number;
+  succeededCount: number;
+  failedCount: number;
+  cancelled: boolean;
+  totalOutputBytes: number;
+  items: PdfExportImageItemOutcome[];
+  warnings: string[];
+}
+
+export async function imagesToPdf(request: ImagesToPdfRequest): Promise<ImagesToPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImagesToPdfResult>("images_to_pdf", { request });
+}
+
+export async function previewPdfToImagesPlan(
+  request: PdfToImagesPlanRequest,
+): Promise<PdfToImagesPlanPreview> {
+  assertFrontendNotShuttingDown();
+  return invoke<PdfToImagesPlanPreview>("preview_pdf_to_images_plan", { request });
+}
+
+export async function pdfToImages(request: PdfToImagesRequest): Promise<PdfToImagesResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<PdfToImagesResult>("pdf_to_images", { request });
 }

@@ -38,6 +38,7 @@ pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
 pub mod pdf_core;
+pub mod pdf_export_images;
 pub mod pdf_ops;
 pub mod pdf_pdfium;
 pub mod pdf_worker;
@@ -194,12 +195,16 @@ use crate::pdf_core::{
     PdfDocumentInspection, PdfRenderRequest, PdfSessionManager, RenderedPdfPagePayload,
     PDF_TASK_PROGRESS_EVENT,
 };
+use crate::pdf_export_images::{
+    pdf_to_images_impl, preview_pdf_to_images_plan_impl, PdfToImagesPlanPreview,
+    PdfToImagesPlanRequest, PdfToImagesRequest, PdfToImagesResult,
+};
 use crate::pdf_ops::{
-    delete_pdf_pages_impl, extract_pdf_pages_impl, merge_pdfs_impl, organize_pdf_impl,
-    preview_split_pdf_plan_impl, split_pdf_impl, DeletePdfPagesRequest, DeletePdfPagesResult,
-    ExtractPdfPagesRequest, ExtractPdfPagesResult, MergePdfsRequest, MergePdfsResult,
-    OrganizePdfRequest, OrganizePdfResult, SplitPdfPlanPreview, SplitPdfPlanRequest,
-    SplitPdfRequest, SplitPdfResult,
+    delete_pdf_pages_impl, extract_pdf_pages_impl, images_to_pdf_impl, merge_pdfs_impl,
+    organize_pdf_impl, preview_split_pdf_plan_impl, split_pdf_impl, DeletePdfPagesRequest,
+    DeletePdfPagesResult, ExtractPdfPagesRequest, ExtractPdfPagesResult, ImagesToPdfRequest,
+    ImagesToPdfResult, MergePdfsRequest, MergePdfsResult, OrganizePdfRequest, OrganizePdfResult,
+    SplitPdfPlanPreview, SplitPdfPlanRequest, SplitPdfRequest, SplitPdfResult,
 };
 use crate::pdf_pdfium::{PdfPageTextPayload, PdfSearchResult};
 use crate::screen_capture::{
@@ -4482,6 +4487,182 @@ async fn extract_pdf_pages(
 }
 
 #[tauri::command]
+async fn images_to_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: ImagesToPdfRequest,
+) -> Result<ImagesToPdfResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-images-to-pdf"));
+    let guard = registry.register_checked(&tid, "P12", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P12".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = images_to_pdf_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P12".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P12",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P12", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Images to PDF worker failed."))?
+}
+
+#[tauri::command]
+async fn preview_pdf_to_images_plan(
+    app: AppHandle,
+    pdf: State<'_, PdfSessionManager>,
+    request: PdfToImagesPlanRequest,
+) -> Result<PdfToImagesPlanPreview, AppError> {
+    let mgr = pdf.inner().clone();
+    if let Ok(res_dir) = app.path().resource_dir() {
+        mgr.set_resource_dir(res_dir);
+    }
+    tauri::async_runtime::spawn_blocking(move || preview_pdf_to_images_plan_impl(&mgr, &request))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF to images plan worker failed."))?
+}
+
+#[tauri::command]
+async fn pdf_to_images(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    request: PdfToImagesRequest,
+) -> Result<PdfToImagesResult, AppError> {
+    let mgr = pdf.inner().clone();
+    if let Ok(res_dir) = app.path().resource_dir() {
+        mgr.set_resource_dir(res_dir);
+    }
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-to-images"));
+    let guard = registry.register_checked(&tid, "P17", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P17".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = pdf_to_images_impl(&mgr, &req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P17".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let cancel_err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(
+                            &tid,
+                            "P17",
+                            done.total_output_bytes,
+                            None,
+                            &cancel_err,
+                        ),
+                    );
+                } else {
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(
+                            &tid,
+                            "P17",
+                            done.total_output_bytes,
+                            Some(done.total_output_bytes),
+                        ),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P17", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF to images worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -4702,6 +4883,9 @@ pub fn run() {
             organize_pdf,
             delete_pdf_pages,
             extract_pdf_pages,
+            images_to_pdf,
+            preview_pdf_to_images_plan,
+            pdf_to_images,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
