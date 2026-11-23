@@ -195,8 +195,11 @@ use crate::pdf_core::{
     PDF_TASK_PROGRESS_EVENT,
 };
 use crate::pdf_ops::{
-    merge_pdfs_impl, preview_split_pdf_plan_impl, split_pdf_impl, MergePdfsRequest,
-    MergePdfsResult, SplitPdfPlanPreview, SplitPdfPlanRequest, SplitPdfRequest, SplitPdfResult,
+    delete_pdf_pages_impl, extract_pdf_pages_impl, merge_pdfs_impl, organize_pdf_impl,
+    preview_split_pdf_plan_impl, split_pdf_impl, DeletePdfPagesRequest, DeletePdfPagesResult,
+    ExtractPdfPagesRequest, ExtractPdfPagesResult, MergePdfsRequest, MergePdfsResult,
+    OrganizePdfRequest, OrganizePdfResult, SplitPdfPlanPreview, SplitPdfPlanRequest,
+    SplitPdfRequest, SplitPdfResult,
 };
 use crate::pdf_pdfium::{PdfPageTextPayload, PdfSearchResult};
 use crate::screen_capture::{
@@ -4252,6 +4255,233 @@ async fn split_pdf(
 }
 
 #[tauri::command]
+async fn organize_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: OrganizePdfRequest,
+) -> Result<OrganizePdfResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-organize"));
+    let guard = registry.register_checked(&tid, "P09", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P09".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = organize_pdf_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P09".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P09",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P09", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF organize worker failed."))?
+}
+
+#[tauri::command]
+async fn delete_pdf_pages(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: DeletePdfPagesRequest,
+) -> Result<DeletePdfPagesResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-delete"));
+    let guard = registry.register_checked(&tid, "P10", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P10".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = delete_pdf_pages_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P10".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P10",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P10", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF delete worker failed."))?
+}
+
+#[tauri::command]
+async fn extract_pdf_pages(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: ExtractPdfPagesRequest,
+) -> Result<ExtractPdfPagesResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-extract"));
+    let guard = registry.register_checked(&tid, "P11", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P11".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = extract_pdf_pages_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P11".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let cancel_err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(
+                            &tid,
+                            "P11",
+                            done.total_output_bytes,
+                            None,
+                            &cancel_err,
+                        ),
+                    );
+                } else {
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(
+                            &tid,
+                            "P11",
+                            done.total_output_bytes,
+                            Some(done.total_output_bytes),
+                        ),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P11", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF extract worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -4469,6 +4699,9 @@ pub fn run() {
             merge_pdfs,
             preview_split_pdf_plan,
             split_pdf,
+            organize_pdf,
+            delete_pdf_pages,
+            extract_pdf_pages,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

@@ -1,13 +1,18 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import type {
+  DeletePdfPagesResult,
+  ExtractPdfPagesResult,
   MergePdfsResult,
+  OrganizePdfResult,
   PdfDocumentInspection,
+  PdfExtractMode,
   PdfSearchResult,
   PdfSplitMode,
   PdfTaskProgressPayload,
   SplitPdfPlanPreview,
   SplitPdfResult,
 } from "./tauriBridge";
+import type { PdfPageGridItem } from "../tools/pdf-shared/PdfPageGrid";
 
 export type PdfZoomMode = "fit_width" | "fit_page" | "custom";
 export type PdfReaderSidebarTab = "thumbs" | "outlines" | "info";
@@ -73,10 +78,59 @@ export interface PdfSplitSessionState {
   errorMessage: string | null;
 }
 
+export interface PdfOrganizeSessionState {
+  sourcePath: string | null;
+  inspection: PdfDocumentInspection | null;
+  inspectLoading: boolean;
+  items: PdfPageGridItem[];
+  undoStack: PdfPageGridItem[][];
+  redoStack: PdfPageGridItem[][];
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: OrganizePdfResult | null;
+  errorMessage: string | null;
+}
+
+export interface PdfDeleteSessionState {
+  sourcePath: string | null;
+  inspection: PdfDocumentInspection | null;
+  inspectLoading: boolean;
+  deletedPages: number[];
+  rangeInput: string;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: DeletePdfPagesResult | null;
+  errorMessage: string | null;
+}
+
+export interface PdfExtractSessionState {
+  sourcePath: string | null;
+  inspection: PdfDocumentInspection | null;
+  inspectLoading: boolean;
+  selectedPages: number[];
+  rangeInput: string;
+  dedupeAndSort: boolean;
+  mode: PdfExtractMode;
+  outputPath: string;
+  outputDir: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: ExtractPdfPagesResult | null;
+  errorMessage: string | null;
+}
+
 export interface PdfSessionRoot {
   reader: PdfReaderSessionState;
   merge: PdfMergeSessionState;
   split: PdfSplitSessionState;
+  organize: PdfOrganizeSessionState;
+  deletePages: PdfDeleteSessionState;
+  extract: PdfExtractSessionState;
 }
 
 const INITIAL_PDF_SESSION: PdfSessionRoot = {
@@ -123,15 +177,65 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  organize: {
+    sourcePath: null,
+    inspection: null,
+    inspectLoading: false,
+    items: [],
+    undoStack: [],
+    redoStack: [],
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  deletePages: {
+    sourcePath: null,
+    inspection: null,
+    inspectLoading: false,
+    deletedPages: [],
+    rangeInput: "",
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  extract: {
+    sourcePath: null,
+    inspection: null,
+    inspectLoading: false,
+    selectedPages: [],
+    rangeInput: "",
+    dedupeAndSort: true,
+    mode: "single_pdf",
+    outputPath: "",
+    outputDir: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
+
+export type PdfTargetToolId = "P07" | "P08" | "P09" | "P10" | "P11";
 
 export interface PdfSessionContextValue {
   pdfSession: PdfSessionRoot;
   updateReaderSession: (updater: (prev: PdfReaderSessionState) => PdfReaderSessionState) => void;
   updateMergeSession: (updater: (prev: PdfMergeSessionState) => PdfMergeSessionState) => void;
   updateSplitSession: (updater: (prev: PdfSplitSessionState) => PdfSplitSessionState) => void;
+  updateOrganizeSession: (
+    updater: (prev: PdfOrganizeSessionState) => PdfOrganizeSessionState,
+  ) => void;
+  updateDeleteSession: (updater: (prev: PdfDeleteSessionState) => PdfDeleteSessionState) => void;
+  updateExtractSession: (updater: (prev: PdfExtractSessionState) => PdfExtractSessionState) => void;
   openInPdfReader: (path: string) => void;
-  sendPdfToTool: (path: string, toolId: "P07" | "P08") => void;
+  sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
   pendingReaderPath: string | null;
   clearPendingReaderPath: () => void;
   pendingToolIntake: { toolId: string; path: string } | null;
@@ -177,6 +281,27 @@ export function PdfSessionProvider({
     [],
   );
 
+  const updateOrganizeSession = useCallback(
+    (updater: (prev: PdfOrganizeSessionState) => PdfOrganizeSessionState) => {
+      setPdfSession((prev) => ({ ...prev, organize: updater(prev.organize) }));
+    },
+    [],
+  );
+
+  const updateDeleteSession = useCallback(
+    (updater: (prev: PdfDeleteSessionState) => PdfDeleteSessionState) => {
+      setPdfSession((prev) => ({ ...prev, deletePages: updater(prev.deletePages) }));
+    },
+    [],
+  );
+
+  const updateExtractSession = useCallback(
+    (updater: (prev: PdfExtractSessionState) => PdfExtractSessionState) => {
+      setPdfSession((prev) => ({ ...prev, extract: updater(prev.extract) }));
+    },
+    [],
+  );
+
   const openInPdfReader = useCallback(
     (path: string) => {
       setPendingReaderPath(path);
@@ -186,7 +311,7 @@ export function PdfSessionProvider({
   );
 
   const sendPdfToTool = useCallback(
-    (path: string, toolId: "P07" | "P08") => {
+    (path: string, toolId: PdfTargetToolId) => {
       setPendingToolIntake({ toolId, path });
       onNavigateToTool(toolId);
     },
@@ -208,6 +333,9 @@ export function PdfSessionProvider({
         updateReaderSession,
         updateMergeSession,
         updateSplitSession,
+        updateOrganizeSession,
+        updateDeleteSession,
+        updateExtractSession,
         openInPdfReader,
         sendPdfToTool,
         pendingReaderPath,

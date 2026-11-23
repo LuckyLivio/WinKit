@@ -127,6 +127,81 @@ export interface PdfMessages {
     resultTitle: (count: number, pages: number, bytes: string) => string;
     cancelledNotice: string;
   };
+  grid: {
+    pageTag: (origPage: number) => string;
+    newOrderTag: (newIdx: number, origPage: number) => string;
+    selectedDeleteBadge: string;
+    selectedExtractBadge: string;
+    rotateLeft: string;
+    rotateRight: string;
+    rotate180: string;
+    moveLeft: string;
+    moveRight: string;
+    deletePage: string;
+    rotatedBadge: (deg: number) => string;
+    selectAll: string;
+    clearSelection: string;
+    invertSelection: string;
+    selectedCount: (count: number) => string;
+    undo: string;
+    redo: string;
+    reset: string;
+  };
+  organize: {
+    title: string;
+    subtitle: string;
+    selectSourceBtn: string;
+    emptySource: string;
+    rotateSelected90: string;
+    rotateSelected180: string;
+    rotateSelected270: string;
+    deleteSelected: string;
+    summaryLine: (total: number, kept: number, deleted: number, rotated: number) => string;
+    outputPathLabel: string;
+    outputPathPlaceholder: string;
+    exportBtn: string;
+    resultSummary: (pages: number, bytes: string, rotated: number, deleted: number) => string;
+    cannotDeleteAll: string;
+  };
+  deletePages: {
+    title: string;
+    subtitle: string;
+    selectSourceBtn: string;
+    emptySource: string;
+    rangeInputLabel: string;
+    rangePlaceholder: string;
+    applyRangeBtn: string;
+    previewSummary: (kept: number, deleted: number) => string;
+    keptPreviewLabel: (list: string) => string;
+    deletedPreviewLabel: (list: string) => string;
+    cannotDeleteAllWarning: string;
+    selectAtLeastOne: string;
+    outputPathLabel: string;
+    exportBtn: string;
+    resultSummary: (deleted: number, kept: number, bytes: string) => string;
+  };
+  extract: {
+    title: string;
+    subtitle: string;
+    selectSourceBtn: string;
+    emptySource: string;
+    rangeInputLabel: string;
+    rangePlaceholder: string;
+    applyRangeBtn: string;
+    selectOdd: string;
+    selectEven: string;
+    dedupeAndSortLabel: string;
+    dedupeAndSortHint: string;
+    modeLabel: string;
+    modeSingle: string;
+    modePerPage: string;
+    selectedPreview: (count: number, list: string) => string;
+    outputPathLabel: string;
+    outputDirLabel: string;
+    exportBtn: string;
+    resultSummary: (files: number, pages: number, bytes: string) => string;
+    duplicatesRemovedNote: (count: number) => string;
+  };
 }
 
 export function formatByteSize(bytes: number): string {
@@ -272,6 +347,88 @@ export const PDF_MESSAGES: Record<Locale, PdfMessages> = {
       resultTitle: (count, pages, bytes) =>
         `拆分完成：已生成 ${count} 个 PDF，共 ${pages} 页（总计 ${bytes}）`,
       cancelledNotice: "任务已取消，已保留取消前完成提交的文件并清理未完成临时文件。",
+    },
+    grid: {
+      pageTag: (origPage) => `第 ${origPage} 页`,
+      newOrderTag: (newIdx, origPage) =>
+        newIdx === origPage ? `第 ${newIdx} 页` : `现 ${newIdx} ← 原 ${origPage}`,
+      selectedDeleteBadge: "待删",
+      selectedExtractBadge: "已选",
+      rotateLeft: "逆时针旋转 90°",
+      rotateRight: "顺时针旋转 90°",
+      rotate180: "旋转 180°",
+      moveLeft: "前移一页",
+      moveRight: "后移一页",
+      deletePage: "移除此页",
+      rotatedBadge: (deg) => `${deg}°`,
+      selectAll: "全选",
+      clearSelection: "取消选择",
+      invertSelection: "反选",
+      selectedCount: (count) => `已选 ${count} 页`,
+      undo: "撤销",
+      redo: "重做",
+      reset: "重置",
+    },
+    organize: {
+      title: "PDF 页面重排与旋转",
+      subtitle:
+        "缩略图网格拖拽调整页面顺序、批量旋转 90°/180°/270°、移除多余页面，支持撤销重做并导出新 PDF",
+      selectSourceBtn: "选择要整理的 PDF…",
+      emptySource: "选择或拖入 1 个本地 PDF，在缩略图网格中自由拖拽排序、旋转角度与删减页面。",
+      rotateSelected90: "选中页 +90°",
+      rotateSelected180: "选中页 180°",
+      rotateSelected270: "选中页 -90°",
+      deleteSelected: "移除选中页",
+      summaryLine: (total, kept, deleted, rotated) =>
+        `原文档 ${total} 页 · 输出 ${kept} 页 · 已移除 ${deleted} 页 · 已旋转 ${rotated} 页`,
+      outputPathLabel: "导出新 PDF 路径",
+      outputPathPlaceholder: "选择整理后保存的新 PDF 文件路径…",
+      exportBtn: "导出新 PDF",
+      resultSummary: (pages, bytes, rotated, deleted) =>
+        `已导出 ${pages} 页新 PDF（${bytes}；旋转 ${rotated} 页，移除 ${deleted} 页）`,
+      cannotDeleteAll: "至少需保留 1 页，不能移除全部页面。",
+    },
+    deletePages: {
+      title: "删除 PDF 页面",
+      subtitle:
+        "通过缩略图点选、Shift 连续多选、反选或页码范围精准删除不需要的页面，导出前确认保留页数",
+      selectSourceBtn: "选择要删页的 PDF…",
+      emptySource: "选择或拖入 1 个本地 PDF，点选缩略图或输入页码范围标记要删除的页面。",
+      rangeInputLabel: "按页码范围标记删除（如 2, 4-6）",
+      rangePlaceholder: "例如：2, 4-6, 9",
+      applyRangeBtn: "标记删除",
+      previewSummary: (kept, deleted) => `导出预览：保留 ${kept} 页 · 删除 ${deleted} 页`,
+      keptPreviewLabel: (list) => `保留页码：${list}`,
+      deletedPreviewLabel: (list) => `将删除页码：${list}`,
+      cannotDeleteAllWarning: "不能删除全部页面！请至少取消标记 1 页以保留有效 PDF。",
+      selectAtLeastOne: "请至少标记 1 个要删除的页面。",
+      outputPathLabel: "导出新 PDF 路径",
+      exportBtn: "导出删页后的新 PDF",
+      resultSummary: (deleted, kept, bytes) =>
+        `已删除 ${deleted} 页，保留 ${kept} 页并导出新 PDF（${bytes}）`,
+    },
+    extract: {
+      title: "提取 PDF 页面",
+      subtitle: "支持不连续页码与多选缩略图提取，可合并为单个新 PDF 或按页拆分为多个单页 PDF",
+      selectSourceBtn: "选择要提取的 PDF…",
+      emptySource: "选择或拖入 1 个本地 PDF，点选需要提取的页面或输入不连续页码范围。",
+      rangeInputLabel: "按页码范围选择提取（如 1, 3-5, 8）",
+      rangePlaceholder: "例如：1, 3-5, 8",
+      applyRangeBtn: "应用选区",
+      selectOdd: "选奇数页",
+      selectEven: "选偶数页",
+      dedupeAndSortLabel: "按原页码升序排列并自动去重",
+      dedupeAndSortHint: "推荐开启，确保不连续选区输出确定且无重复页。",
+      modeLabel: "导出模式",
+      modeSingle: "合并为单个新 PDF",
+      modePerPage: "每页一个独立 PDF",
+      selectedPreview: (count, list) => `待提取 ${count} 页：${list}`,
+      outputPathLabel: "导出新 PDF 路径",
+      outputDirLabel: "输出文件夹（自动防覆盖命名）",
+      exportBtn: "开始提取",
+      resultSummary: (files, pages, bytes) =>
+        `提取完成：生成 ${files} 个 PDF，共 ${pages} 页（${bytes}）`,
+      duplicatesRemovedNote: (count) => `已自动去除 ${count} 个重复页码。`,
     },
   },
   "en-US": {
@@ -419,6 +576,93 @@ export const PDF_MESSAGES: Record<Locale, PdfMessages> = {
         `Split Complete: ${count} PDF(s), ${pages} pages (${bytes} total)`,
       cancelledNotice:
         "Operation cancelled. Already finalized files were kept and unfinished temp files were removed.",
+    },
+    grid: {
+      pageTag: (origPage) => `Page ${origPage}`,
+      newOrderTag: (newIdx, origPage) =>
+        newIdx === origPage ? `Page ${newIdx}` : `#${newIdx} ← Orig ${origPage}`,
+      selectedDeleteBadge: "Delete",
+      selectedExtractBadge: "Selected",
+      rotateLeft: "Rotate 90° CCW",
+      rotateRight: "Rotate 90° CW",
+      rotate180: "Rotate 180°",
+      moveLeft: "Move left",
+      moveRight: "Move right",
+      deletePage: "Remove page",
+      rotatedBadge: (deg) => `${deg}°`,
+      selectAll: "Select All",
+      clearSelection: "Clear",
+      invertSelection: "Invert",
+      selectedCount: (count) => `${count} selected`,
+      undo: "Undo",
+      redo: "Redo",
+      reset: "Reset",
+    },
+    organize: {
+      title: "Organize PDF",
+      subtitle:
+        "Drag thumbnails to reorder pages, rotate 90°/180°/270°, remove unwanted pages with undo/redo, and export a new PDF",
+      selectSourceBtn: "Select PDF to Organize…",
+      emptySource:
+        "Select or drop a local PDF to drag-reorder pages, adjust rotations, and remove unwanted pages.",
+      rotateSelected90: "Rotate +90°",
+      rotateSelected180: "Rotate 180°",
+      rotateSelected270: "Rotate -90°",
+      deleteSelected: "Remove Selected",
+      summaryLine: (total, kept, deleted, rotated) =>
+        `Original: ${total} · Output: ${kept} · Removed: ${deleted} · Rotated: ${rotated}`,
+      outputPathLabel: "Output PDF Path",
+      outputPathPlaceholder: "Choose where to save the organized PDF…",
+      exportBtn: "Export New PDF",
+      resultSummary: (pages, bytes, rotated, deleted) =>
+        `Exported ${pages} pages (${bytes}; ${rotated} rotated, ${deleted} removed)`,
+      cannotDeleteAll: "At least 1 page must remain in the PDF.",
+    },
+    deletePages: {
+      title: "Delete PDF Pages",
+      subtitle:
+        "Mark pages for deletion via thumbnail click, Shift-select, invert, or page ranges with clear kept/deleted counts before export",
+      selectSourceBtn: "Select PDF…",
+      emptySource:
+        "Select or drop a local PDF, then click thumbnails or enter page ranges to mark pages for deletion.",
+      rangeInputLabel: "Mark pages to delete by range (e.g. 2, 4-6)",
+      rangePlaceholder: "Example: 2, 4-6, 9",
+      applyRangeBtn: "Mark Delete",
+      previewSummary: (kept, deleted) => `Preview: Keep ${kept} · Delete ${deleted}`,
+      keptPreviewLabel: (list) => `Pages kept: ${list}`,
+      deletedPreviewLabel: (list) => `Pages deleted: ${list}`,
+      cannotDeleteAllWarning:
+        "Cannot delete every page in the PDF. Unmark at least 1 page to keep.",
+      selectAtLeastOne: "Mark at least 1 page to delete.",
+      outputPathLabel: "Output PDF Path",
+      exportBtn: "Export Trimmed PDF",
+      resultSummary: (deleted, kept, bytes) =>
+        `Deleted ${deleted} page(s), kept ${kept} page(s) (${bytes})`,
+    },
+    extract: {
+      title: "Extract PDF Pages",
+      subtitle:
+        "Select non-contiguous pages via thumbnails or range expressions and export as one combined PDF or individual per-page PDFs",
+      selectSourceBtn: "Select PDF…",
+      emptySource:
+        "Select or drop a local PDF, then pick pages or enter ranges to extract into new PDF(s).",
+      rangeInputLabel: "Select pages to extract (e.g. 1, 3-5, 8)",
+      rangePlaceholder: "Example: 1, 3-5, 8",
+      applyRangeBtn: "Apply Range",
+      selectOdd: "Odd Pages",
+      selectEven: "Even Pages",
+      dedupeAndSortLabel: "Sort ascending & deduplicate pages",
+      dedupeAndSortHint: "Recommended for deterministic, duplicate-free extraction.",
+      modeLabel: "Export Mode",
+      modeSingle: "Single Combined PDF",
+      modePerPage: "One PDF per Page",
+      selectedPreview: (count, list) => `${count} page(s) to extract: ${list}`,
+      outputPathLabel: "Output PDF Path",
+      outputDirLabel: "Output Folder (collision-safe, never overwrites)",
+      exportBtn: "Extract Pages",
+      resultSummary: (files, pages, bytes) =>
+        `Extracted ${pages} page(s) into ${files} PDF file(s) (${bytes})`,
+      duplicatesRemovedNote: (count) => `${count} duplicate page entry/entries removed.`,
     },
   },
 };

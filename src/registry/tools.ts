@@ -56,6 +56,9 @@ import { ScreenRecorderWorkspace } from "../tools/screen-recorder/ScreenRecorder
 import { VideoDownloadWorkspace } from "../tools/video-download/VideoDownloadWorkspace";
 import { PdfMergeWorkspace } from "../tools/pdf-merge/PdfMergeWorkspace";
 import { PdfSplitWorkspace } from "../tools/pdf-split/PdfSplitWorkspace";
+import { PdfOrganizeWorkspace } from "../tools/pdf-organize/PdfOrganizeWorkspace";
+import { PdfDeleteWorkspace } from "../tools/pdf-delete/PdfDeleteWorkspace";
+import { PdfExtractWorkspace } from "../tools/pdf-extract/PdfExtractWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -114,7 +117,10 @@ export type ToolIconName =
   | "screen-record"
   | "video-download"
   | "pdf-merge"
-  | "pdf-split";
+  | "pdf-split"
+  | "pdf-organize"
+  | "pdf-delete"
+  | "pdf-extract";
 
 export interface RegisteredTool {
   id: string;
@@ -1786,6 +1792,67 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "pdf-split",
     implementationStatus: "full",
     component: PdfSplitWorkspace,
+  },
+  {
+    id: "P09",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 页面重排与旋转",
+      "en-US": "Organize PDF",
+    },
+    summary: {
+      "zh-CN": "缩略图网格拖拽调整页面顺序、90°/180°/270° 旋转、删除与撤销重做，无损导出新 PDF",
+      "en-US":
+        "Reorder, rotate 90°/180°/270°, and remove PDF pages visually in a thumbnail grid with undo/redo",
+    },
+    keywords: [
+      "pdf",
+      "organize",
+      "reorder",
+      "rotate",
+      "arrange",
+      "pdf重排",
+      "页面重排",
+      "pdf旋转",
+      "整理pdf",
+    ],
+    icon: "pdf-organize",
+    implementationStatus: "full",
+    component: PdfOrganizeWorkspace,
+  },
+  {
+    id: "P10",
+    category: "pdf",
+    name: {
+      "zh-CN": "删除 PDF 页面",
+      "en-US": "Delete PDF Pages",
+    },
+    summary: {
+      "zh-CN": "按页码范围、多选缩略图与反选精准删页，导出前核对保留/删除页数并禁止删空文档",
+      "en-US":
+        "Delete selected PDF pages via thumbnail grid, invert selection, or ranges with upfront kept/deleted confirmation",
+    },
+    keywords: ["pdf", "delete", "remove pages", "trim", "删除pdf页面", "删页", "移除页面"],
+    icon: "pdf-delete",
+    implementationStatus: "full",
+    component: PdfDeleteWorkspace,
+  },
+  {
+    id: "P11",
+    category: "pdf",
+    name: {
+      "zh-CN": "提取 PDF 页面",
+      "en-US": "Extract PDF Pages",
+    },
+    summary: {
+      "zh-CN": "提取指定或不连续页面，支持导出为单个合并新 PDF 或按页拆分为多个独立单页 PDF",
+      "en-US":
+        "Extract contiguous or non-contiguous PDF pages into a single combined PDF or individual per-page PDFs",
+    },
+    keywords: ["pdf", "extract", "pages", "export pages", "提取pdf页面", "抽取页面", "另存页面"],
+    icon: "pdf-extract",
+    implementationStatus: "full",
+    component: PdfExtractWorkspace,
   },
 ];
 

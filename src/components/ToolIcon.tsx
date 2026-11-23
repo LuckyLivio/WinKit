@@ -15,6 +15,8 @@ import {
   EyeOff,
   FileArchive,
   FileAudio,
+  FileMinus2,
+  FileOutput,
   FilePenLine,
   FileText,
   Film,
@@ -27,6 +29,7 @@ import {
   Images,
   Info,
   KeyRound,
+  LayoutGrid,
   Link2,
   LockKeyhole,
   Mic,
@@ -164,5 +167,11 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Combine size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "pdf-split":
       return <Scissors size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-organize":
+      return <LayoutGrid size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-delete":
+      return <FileMinus2 size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-extract":
+      return <FileOutput size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }
