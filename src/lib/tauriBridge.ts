@@ -3057,3 +3057,284 @@ export async function subscribeVideoDownloadProgress(
     handler(event.payload);
   });
 }
+
+/* ==================== Phase 5A: Offline PDF Workbench (C08, P07–P12, P17) ==================== */
+
+export interface PdfPageGeometry {
+  pageNumber: number;
+  widthPt: number;
+  heightPt: number;
+  rotation: number;
+  isOversized: boolean;
+}
+
+export interface PdfOutlineItem {
+  title: string;
+  pageNumber: number | null;
+  children: PdfOutlineItem[];
+}
+
+export interface PdfDocumentInspection {
+  path: string;
+  fileName: string;
+  byteLength: number;
+  pageCount: number;
+  pages: PdfPageGeometry[];
+  hasTextLayer: boolean;
+  sampledTextPages: number;
+  isLikelyScanned: boolean;
+  hasOutlines: boolean;
+  outlines: PdfOutlineItem[];
+  hasAcroform: boolean;
+  hasSignatures: boolean;
+  signatureCount: number;
+  isEncrypted: boolean;
+  title: string | null;
+  author: string | null;
+  subject: string | null;
+  creator: string | null;
+  producer: string | null;
+  warnings: string[];
+}
+
+export interface PdfRenderMeta {
+  pageNumber: number;
+  widthPx: number;
+  heightPx: number;
+  pageWidthPt: number;
+  pageHeightPt: number;
+  rotation: number;
+  capped: boolean;
+}
+
+export interface RenderedPdfPagePayload {
+  meta: PdfRenderMeta;
+  dataUrl: string;
+  fromCache: boolean;
+}
+
+export interface PdfRenderRequest {
+  path: string;
+  pageNumber: number;
+  targetWidthPx?: number;
+  extraRotationCw?: number;
+}
+
+export interface PdfNormalizedRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface PdfTextSpan {
+  text: string;
+  rect: PdfNormalizedRect;
+}
+
+export interface PdfLinkItem {
+  rect: PdfNormalizedRect;
+  kind: "internal" | "external";
+  targetPage: number | null;
+  uri: string | null;
+}
+
+export interface PdfPageTextPayload {
+  pageNumber: number;
+  fullText: string;
+  charCount: number;
+  spans: PdfTextSpan[];
+  links: PdfLinkItem[];
+}
+
+export interface PdfSearchMatch {
+  pageNumber: number;
+  matchIndex: number;
+  snippet: string;
+  rects: PdfNormalizedRect[];
+}
+
+export interface PdfSearchResult {
+  query: string;
+  totalMatches: number;
+  truncated: boolean;
+  matches: PdfSearchMatch[];
+}
+
+export interface PdfTaskProgressPayload {
+  taskId: string;
+  toolId: string;
+  current: number;
+  total: number;
+  percent: number;
+  detail: string;
+}
+
+export interface PdfStructuralSummary {
+  preservedExternalLinks: number;
+  remappedInternalLinks: number;
+  droppedDanglingLinks: number;
+  remappedBookmarks: number;
+  droppedDanglingBookmarks: number;
+  signatureInvalidatedSources: string[];
+  acroformSimplifiedSources: string[];
+}
+
+export type PdfPageSizePreset = "original" | "a4" | "letter";
+export type PdfPageOrientation = "auto" | "portrait" | "landscape";
+
+export interface ImageToPdfPageOptions {
+  pageSize: PdfPageSizePreset;
+  orientation: PdfPageOrientation;
+  marginPt: number;
+  backgroundHex: string;
+  jpegQuality: number;
+  losslessPngImages: boolean;
+  assumedDpi: number;
+}
+
+export interface MergePdfInputItem {
+  path: string;
+  kind?: "pdf" | "image";
+}
+
+export interface MergePdfsRequest {
+  taskId?: string;
+  inputs: MergePdfInputItem[];
+  outputPath: string;
+  addFilenameBookmarks: boolean;
+  overwrite?: boolean;
+  imageOptions?: ImageToPdfPageOptions;
+}
+
+export interface MergePdfsResult {
+  outputPath: string;
+  byteLength: number;
+  totalPages: number;
+  sourceCount: number;
+  pdfSourceCount: number;
+  imageSourceCount: number;
+  summary: PdfStructuralSummary;
+  warnings: string[];
+}
+
+export type PdfSplitMode = "every_page" | "every_n_pages" | "custom_ranges";
+
+export interface SplitPdfPlanRequest {
+  path: string;
+  mode: PdfSplitMode;
+  chunkSize?: number;
+  customRanges?: string;
+  outputDir?: string;
+}
+
+export interface SplitPdfPlanItem {
+  partIndex: number;
+  fileName: string;
+  pages: number[];
+  pageCount: number;
+  rangeLabel: string;
+  collisionAdjusted: boolean;
+}
+
+export interface SplitPdfPlanPreview {
+  valid: boolean;
+  sourcePageCount: number;
+  outputFileCount: number;
+  totalOutputPages: number;
+  items: SplitPdfPlanItem[];
+  errors: string[];
+  warnings: string[];
+}
+
+export interface SplitPdfRequest {
+  taskId?: string;
+  path: string;
+  mode: PdfSplitMode;
+  chunkSize?: number;
+  customRanges?: string;
+  outputDir: string;
+}
+
+export interface SplitPdfOutputFile {
+  partIndex: number;
+  path: string;
+  fileName: string;
+  byteLength: number;
+  pageCount: number;
+  rangeLabel: string;
+  collisionAdjusted: boolean;
+}
+
+export interface SplitPdfResult {
+  outputDir: string;
+  sourcePageCount: number;
+  files: SplitPdfOutputFile[];
+  totalOutputPages: number;
+  totalOutputBytes: number;
+  cancelled: boolean;
+  summary: PdfStructuralSummary;
+  warnings: string[];
+}
+
+export async function inspectPdfDocument(path: string): Promise<PdfDocumentInspection> {
+  assertFrontendNotShuttingDown();
+  return invoke<PdfDocumentInspection>("inspect_pdf_document", { path });
+}
+
+export async function renderPdfPage(request: PdfRenderRequest): Promise<RenderedPdfPagePayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<RenderedPdfPagePayload>("render_pdf_page", { request });
+}
+
+export async function getPdfPageText(
+  path: string,
+  pageNumber: number,
+): Promise<PdfPageTextPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<PdfPageTextPayload>("get_pdf_page_text", { path, pageNumber });
+}
+
+export async function searchPdfText(
+  path: string,
+  query: string,
+  caseSensitive = false,
+): Promise<PdfSearchResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<PdfSearchResult>("search_pdf_text", { path, query, caseSensitive });
+}
+
+export async function clearPdfRenderCache(): Promise<void> {
+  if (!isTauriDesktop()) {
+    return;
+  }
+  await invoke<void>("clear_pdf_render_cache");
+}
+
+export async function mergePdfs(request: MergePdfsRequest): Promise<MergePdfsResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<MergePdfsResult>("merge_pdfs", { request });
+}
+
+export async function previewSplitPdfPlan(
+  request: SplitPdfPlanRequest,
+): Promise<SplitPdfPlanPreview> {
+  assertFrontendNotShuttingDown();
+  return invoke<SplitPdfPlanPreview>("preview_split_pdf_plan", { request });
+}
+
+export async function splitPdf(request: SplitPdfRequest): Promise<SplitPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<SplitPdfResult>("split_pdf", { request });
+}
+
+export async function subscribePdfTaskProgress(
+  handler: (payload: PdfTaskProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<PdfTaskProgressPayload>("winkit://pdf-progress", (event) => {
+    handler(event.payload);
+  });
+}

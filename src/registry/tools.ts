@@ -54,8 +54,10 @@ import { VideoReplaceAudioWorkspace } from "../tools/video-replace-audio/VideoRe
 import { VideoSubtitlesWorkspace } from "../tools/video-subtitles/VideoSubtitlesWorkspace";
 import { ScreenRecorderWorkspace } from "../tools/screen-recorder/ScreenRecorderWorkspace";
 import { VideoDownloadWorkspace } from "../tools/video-download/VideoDownloadWorkspace";
+import { PdfMergeWorkspace } from "../tools/pdf-merge/PdfMergeWorkspace";
+import { PdfSplitWorkspace } from "../tools/pdf-split/PdfSplitWorkspace";
 
-export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
+export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
 export type ToolIconName =
   | "braces"
@@ -110,7 +112,9 @@ export type ToolIconName =
   | "video-replace-audio"
   | "video-subtitles"
   | "screen-record"
-  | "video-download";
+  | "video-download"
+  | "pdf-merge"
+  | "pdf-split";
 
 export interface RegisteredTool {
   id: string;
@@ -1726,6 +1730,62 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "audio-convert",
     implementationStatus: "full",
     component: AudioConvertWorkspace,
+  },
+  {
+    id: "P07",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 合并",
+      "en-US": "Merge PDFs",
+    },
+    summary: {
+      "zh-CN":
+        "按顺序合并多个 PDF 与图片为新 PDF，保留矢量、文字层、链接并可选按文件名生成书签目录",
+      "en-US":
+        "Merge multiple PDFs and images in order while preserving vectors, text layers, links, and optional filename outlines",
+    },
+    keywords: [
+      "pdf",
+      "merge",
+      "combine",
+      "join",
+      "bookmarks",
+      "outlines",
+      "pdf合并",
+      "合并pdf",
+      "文档合并",
+      "书签",
+    ],
+    icon: "pdf-merge",
+    implementationStatus: "full",
+    component: PdfMergeWorkspace,
+  },
+  {
+    id: "P08",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 拆分",
+      "en-US": "Split PDF",
+    },
+    summary: {
+      "zh-CN": "按逐页、每 N 页或自定义页码范围拆分 PDF，执行前预览全部输出文件名并自动防覆盖",
+      "en-US":
+        "Split PDFs by every page, every N pages, or custom page ranges with upfront validation and collision-safe output",
+    },
+    keywords: [
+      "pdf",
+      "split",
+      "divide",
+      "chunk",
+      "range",
+      "pdf拆分",
+      "拆分pdf",
+      "分割pdf",
+      "页码范围",
+    ],
+    icon: "pdf-split",
+    implementationStatus: "full",
+    component: PdfSplitWorkspace,
   },
 ];
 

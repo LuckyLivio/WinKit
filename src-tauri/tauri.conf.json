@@ -36,7 +36,9 @@
       "../licenses/F01.txt": "licenses/F01.txt",
       "../licenses/F04-unrar-rs.txt": "licenses/F04-unrar-rs.txt",
       "../licenses/I02-yunet-mit.txt": "licenses/I02-yunet-mit.txt",
-      "resources/models/face_detection_yunet_2023mar.onnx": "models/face_detection_yunet_2023mar.onnx"
+      "resources/models/face_detection_yunet_2023mar.onnx": "models/face_detection_yunet_2023mar.onnx",
+      "resources/pdfium/pdfium.dll": "pdfium/pdfium.dll",
+      "resources/pdfium/LICENSE-pdfium.txt": "licenses/pdfium-notices.txt"
     },
     "publisher": "Livio",
     "copyright": "Copyright (c) 2026 Livio",
