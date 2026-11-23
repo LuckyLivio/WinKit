@@ -317,6 +317,53 @@ export interface WatermarkImagesBatchRequest {
   style: WatermarkStyleConfig;
 }
 
+export type FaceDetectionStatus = "detected" | "no_faces";
+
+export interface DetectedFaceBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+}
+
+export interface FaceDetectionResult {
+  status: FaceDetectionStatus;
+  faces: DetectedFaceBox[];
+  imageWidth: number;
+  imageHeight: number;
+  elapsedMs: number;
+  modelName: string;
+}
+
+export interface DetectFacesAssetRequest {
+  assetId: string;
+  scoreThreshold?: number | null;
+}
+
+export interface DetectFacesFileRequest {
+  path: string;
+  scoreThreshold?: number | null;
+}
+
+export interface BlurFacesBatchItemInput {
+  sourcePath: string;
+  overrideRegions?: RedactionRegionPayload[] | null;
+}
+
+export interface BlurFacesBatchRequest {
+  items: BlurFacesBatchItemInput[];
+  outputDir: string;
+  defaultKind: RedactionKind;
+  defaultStrength: number;
+  defaultColorHex?: string | null;
+  scoreThreshold?: number | null;
+  format: SaveAssetFormat;
+  jpegQuality?: number | null;
+  stripMetadata: boolean;
+  exportUntouchedCopies: boolean;
+}
+
 export interface CaptureRect {
   x: number;
   y: number;
@@ -1108,6 +1155,26 @@ export async function watermarkImagesBatch(
 ): Promise<BatchImageJobResponse> {
   assertFrontendNotShuttingDown();
   return invoke<BatchImageJobResponse>("watermark_images_batch", { taskId, req });
+}
+
+export async function detectFacesInAsset(
+  req: DetectFacesAssetRequest,
+): Promise<FaceDetectionResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<FaceDetectionResult>("detect_faces_in_asset", { req });
+}
+
+export async function detectFacesInFile(req: DetectFacesFileRequest): Promise<FaceDetectionResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<FaceDetectionResult>("detect_faces_in_file", { req });
+}
+
+export async function blurFacesBatch(
+  taskId: string,
+  req: BlurFacesBatchRequest,
+): Promise<BatchImageJobResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchImageJobResponse>("blur_faces_batch", { taskId, req });
 }
 
 export async function inspectBatchRenameSources(

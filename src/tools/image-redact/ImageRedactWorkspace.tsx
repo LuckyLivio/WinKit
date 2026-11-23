@@ -10,6 +10,7 @@ import {
   MousePointer2,
   Pencil,
   Redo2,
+  ScanFace,
   ShieldCheck,
   Square,
   Stamp,
@@ -30,6 +31,7 @@ import {
   applyImageRedactionsToAsset,
   bindDisposableListener,
   copyImageAssetToClipboard,
+  detectFacesInAsset,
   exportRedactedImageFile,
   formatLocalizedError,
   loadFileAsImageAsset,
@@ -86,6 +88,11 @@ const copy = {
     stripMetaLabel: "清理导出副本隐私元数据 (I09)",
     deleteRegion: "删除选区",
     clearRegions: "清空选区",
+    detectFacesBtn: "查找人脸",
+    detectingFaces: "正在本地查找人脸...",
+    detectedFacesOk: (n: number, ms: number) =>
+      `离线检测到 ${n} 张人脸，已添加为可编辑打码框（${ms} ms）`,
+    detectedNoFaces: "未检测到人脸，可继续手动拖拽框选",
     emptyTitle: "打开图片、粘贴剪贴板，或从 I01 截图直接送入",
     emptyDesc:
       "在画布上拖拽框选需要隐藏的邮箱、手机号或订单号。导出或交接其他工具时将把遮盖像素不可逆烘焙到新图像，不留可移除遮罩层或原图缩略图。",
@@ -122,6 +129,11 @@ const copy = {
     stripMetaLabel: "Strip privacy metadata on export (I09)",
     deleteRegion: "Delete",
     clearRegions: "Clear all",
+    detectFacesBtn: "Detect Faces",
+    detectingFaces: "Detecting faces locally...",
+    detectedFacesOk: (n: number, ms: number) =>
+      `Detected ${n} face(s) offline and added editable redaction boxes (${ms} ms)`,
+    detectedNoFaces: "No faces detected; you can continue drawing boxes manually",
     emptyTitle: "Open an image, paste clipboard, or send a screenshot from I01",
     emptyDesc:
       "Drag on the canvas to redact private details. Exporting or handing off bakes redactions destructively into new flat pixels with zero removable mask layers or thumbnails.",
@@ -215,6 +227,7 @@ export function ImageRedactWorkspace() {
   const [cursorStyle, setCursorStyle] = useState("crosshair");
   const [dropHover, setDropHover] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [detectingFaces, setDetectingFaces] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [pendingOverwrite, setPendingOverwrite] = useState<{
     path: string;
@@ -767,6 +780,42 @@ export function ImageRedactWorkspace() {
       colorHex: r.kind === "solid" ? r.colorHex : null,
     }));
 
+  const handleDetectFaces = async () => {
+    if (!st.assetId) return;
+    setErrorText(null);
+    setDetectingFaces(true);
+    setBusy(true);
+    try {
+      const res = await detectFacesInAsset({ assetId: st.assetId });
+      if (res.status === "no_faces" || res.faces.length === 0) {
+        updateImageRedactSession({ lastSavedMessage: c.detectedNoFaces });
+        return;
+      }
+      const kind: RedactionKind = st.activeTool === "select" ? "blur" : st.activeTool;
+      const baseSeq = Date.now();
+      const added: RedactRegionItem[] = res.faces.map((face) => ({
+        id: `redact-face-${baseSeq}-${seqRef.current++}`,
+        kind,
+        x: face.x,
+        y: face.y,
+        width: face.width,
+        height: face.height,
+        strength: st.defaultStrength,
+        colorHex: st.defaultColorHex,
+      }));
+      commitRegionsWithHistory([...st.regions, ...added], added[0]?.id ?? null);
+      updateImageRedactSession({
+        activeTool: "select",
+        lastSavedMessage: c.detectedFacesOk(added.length, res.elapsedMs),
+      });
+    } catch (err) {
+      setErrorText(formatLocalizedError(err, t));
+    } finally {
+      setDetectingFaces(false);
+      setBusy(false);
+    }
+  };
+
   const handleCopyResult = async () => {
     if (!st.assetId) return;
     setErrorText(null);
@@ -894,6 +943,17 @@ export function ImageRedactWorkspace() {
           >
             <ClipboardPaste size={14} strokeWidth={1.75} aria-hidden="true" />
             <span>{c.paste}</span>
+          </button>
+
+          <button
+            type="button"
+            className="btn"
+            disabled={!hasImage || busy}
+            data-testid="i11-detect-faces-btn"
+            onClick={() => void handleDetectFaces()}
+          >
+            <ScanFace size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span>{detectingFaces ? c.detectingFaces : c.detectFacesBtn}</span>
           </button>
 
           <span className="img-editor-divider" aria-hidden="true" />

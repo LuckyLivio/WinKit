@@ -3,6 +3,7 @@ pub mod batch_rename;
 pub mod beautifier;
 pub mod codec;
 pub mod error;
+pub mod face_detect;
 pub mod find_duplicates;
 pub mod fs_guard;
 pub mod hasher;
@@ -44,6 +45,10 @@ use crate::codec::{
     transform_text_payload, CodecOptions, CodecTransformResponse,
 };
 use crate::error::AppError;
+use crate::face_detect::{
+    blur_faces_batch_impl, detect_faces_in_asset_impl, detect_faces_in_file_impl,
+    BlurFacesBatchRequest, DetectFacesAssetRequest, DetectFacesFileRequest, FaceDetectionResult,
+};
 use crate::find_duplicates::{
     recycle_duplicate_groups_impl, scan_duplicates_impl, DuplicateRecycleResponse,
     DuplicateScanOptions, DuplicateScanResult, RecycleGroupPlan, DUPLICATES_SCAN_PROGRESS_EVENT,
@@ -2140,6 +2145,97 @@ async fn watermark_images_batch<R: Runtime>(
 }
 
 #[tauri::command]
+async fn detect_faces_in_asset<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    store: State<'_, ImageAssetStore>,
+    req: DetectFacesAssetRequest,
+) -> Result<FaceDetectionResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = store.inner().clone();
+    let res_dir = app.path().resource_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        detect_faces_in_asset_impl(&store, res_dir.as_deref(), &req)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Face detection worker failed."))?
+}
+
+#[tauri::command]
+async fn detect_faces_in_file<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: DetectFacesFileRequest,
+) -> Result<FaceDetectionResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let res_dir = app.path().resource_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        detect_faces_in_file_impl(res_dir.as_deref(), &req)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Face detection worker failed."))?
+}
+
+#[tauri::command]
+async fn blur_faces_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: BlurFacesBatchRequest,
+) -> Result<BatchImageJobResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid face blur task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I02", true)?;
+    let res_dir = app.path().resource_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = blur_faces_batch_impl(&tid, res_dir.as_deref(), &req, &cancel_flag, |ev| {
+            let _ = app.emit(IMAGE_BATCH_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = (done.succeeded_count + done.kept_original_count) as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Face blur batch worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -2253,6 +2349,9 @@ pub fn run() {
             export_redacted_image_file,
             render_watermarked_asset,
             watermark_images_batch,
+            detect_faces_in_asset,
+            detect_faces_in_file,
+            blur_faces_batch,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
