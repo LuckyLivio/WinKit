@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { I18nContext } from "../../i18n/I18nContext";
 import { MESSAGES } from "../../i18n/messages";
+import { MediaSessionProvider } from "../../lib/mediaSessionStore";
 import { SessionStoreProvider } from "../../lib/sessionStore";
 import * as tauriBridge from "../../lib/tauriBridge";
 import { ImageWatermarkWorkspace } from "./ImageWatermarkWorkspace";
@@ -169,6 +170,132 @@ describe("I13 ImageWatermarkWorkspace", () => {
       );
       expect(screen.getByText(/成功导出 2 张/)).toBeInTheDocument();
     });
+
+    vi.restoreAllMocks();
+  });
+
+  it("supports Video Watermark mode on a 90°-rotated portrait video while reusing shared watermark style", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(stampMod, "rasterizeTextWatermarkStamp").mockReturnValue({
+      dataUrl: SAMPLE_PNG_URL,
+      width: 400,
+      height: 120,
+    });
+    vi.spyOn(tauriBridge, "getMediaToolsStatus").mockResolvedValue({
+      ready: true,
+      source: "managed",
+      mode: "auto",
+      customDir: null,
+      ffmpegPath: "C:\\Tools\\ffmpeg.exe",
+      ffprobePath: "C:\\Tools\\ffprobe.exe",
+      ffmpegVersion: "ffmpeg version 9.1",
+      ffprobeVersion: "ffprobe version 9.1",
+      installDir: "C:\\Tools",
+      managedInstalledBytes: 42_000_000,
+      licensePath: null,
+      error: null,
+      spec: {
+        version: "9.1",
+        sourceName: "BtbN",
+        releaseUrl: "https://example.com",
+        sourceCommitUrl: "https://example.com",
+        downloadUrl: "https://example.com/ffmpeg.zip",
+        downloadBytes: 42_000_000,
+        sha256: "abc",
+        estimatedInstalledBytes: 90_000_000,
+        licenseName: "GPL-3.0",
+      },
+    });
+    vi.spyOn(tauriBridge, "pickSingleFile").mockResolvedValueOnce("D:\\Samples\\portrait_rot.mp4");
+    vi.spyOn(tauriBridge, "probeMediaInfo").mockResolvedValueOnce({
+      path: "D:\\Samples\\portrait_rot.mp4",
+      fileName: "portrait_rot.mp4",
+      byteSize: 1_500_000,
+      containerFormat: "mov,mp4",
+      containerLongName: "MP4",
+      durationSec: 6.0,
+      overallBitrateBps: 2_000_000,
+      streamCount: 2,
+      hasVideo: true,
+      hasAudio: true,
+      videoStreams: [
+        {
+          index: 0,
+          codecName: "h264",
+          codecLongName: "H.264",
+          profile: "High",
+          pixelFormat: "yuv420p",
+          codedWidth: 1280,
+          codedHeight: 720,
+          displayWidth: 720,
+          displayHeight: 1280,
+          sampleAspectRatio: "1:1",
+          rotationDegrees: 90,
+          orientation: "portrait",
+          avgFrameRate: 30,
+          rFrameRate: 30,
+          avgFrameRateRaw: "30/1",
+          rFrameRateRaw: "30/1",
+          isVariableFrameRate: false,
+          bitrateBps: 1_800_000,
+          colorSpace: null,
+          colorTransfer: null,
+          colorPrimaries: null,
+          durationSec: 6.0,
+        },
+      ],
+      audioStreams: [
+        {
+          index: 1,
+          audioTrackIndex: 0,
+          codecName: "aac",
+          codecLongName: "AAC",
+          profile: "LC",
+          language: null,
+          title: null,
+          channels: 2,
+          channelLayout: "stereo",
+          sampleRateHz: 48000,
+          bitrateBps: 128000,
+          durationSec: 6.0,
+          isDefault: true,
+        },
+      ],
+      subtitleStreams: [],
+      formatTags: {},
+      summaryText: "",
+      rawJson: "{}",
+    });
+    vi.spyOn(tauriBridge, "extractMediaPosterDataUrl").mockResolvedValueOnce(SAMPLE_PNG_URL);
+    const wmVideoSpy = vi.spyOn(tauriBridge, "watermarkVideo").mockResolvedValueOnce({
+      outputPath: "D:\\Samples\\portrait_rot_watermarked.mp4",
+      byteSize: 1_650_000,
+      outputWidth: 720,
+      outputHeight: 1280,
+      outputRotation: 0,
+      durationSec: 6.0,
+      hasAudio: true,
+      audioCopied: true,
+      elapsedMs: 800,
+    });
+
+    render(
+      <I18nContext.Provider value={{ locale: "zh-CN", t: MESSAGES["zh-CN"], setLocale: () => {} }}>
+        <SessionStoreProvider>
+          <MediaSessionProvider>
+            <ImageWatermarkWorkspace />
+          </MediaSessionProvider>
+        </SessionStoreProvider>
+      </I18nContext.Provider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "视频水印" }));
+    await user.click(screen.getAllByRole("button", { name: "选择视频…" })[0]!);
+    await waitFor(() => expect(screen.getByText("720×1280 px")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "导出水印视频" }));
+    await waitFor(() => expect(wmVideoSpy).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/原音频无损保留/)).toBeInTheDocument();
 
     vi.restoreAllMocks();
   });

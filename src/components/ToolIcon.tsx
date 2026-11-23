@@ -5,6 +5,7 @@ import {
   Binary,
   Braces,
   Camera,
+  Captions,
   CaseSensitive,
   Clock,
   Combine,
@@ -148,5 +149,7 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <SlidersHorizontal size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "video-replace-audio":
       return <Volume2 size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-subtitles":
+      return <Captions size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

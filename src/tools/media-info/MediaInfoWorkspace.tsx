@@ -338,6 +338,20 @@ export function MediaInfoWorkspace() {
                   <button
                     type="button"
                     className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("V02", report.path)}
+                  >
+                    <span>{isZh ? "烧录字幕 (V02)" : "Subtitles (V02)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("I13", report.path)}
+                  >
+                    <span>{isZh ? "视频水印 (I13)" : "Watermark (I13)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
                     onClick={() => handoffMediaFileToTool("V03", report.path)}
                   >
                     <span>{isZh ? "变速 (V03)" : "Speed (V03)"}</span>

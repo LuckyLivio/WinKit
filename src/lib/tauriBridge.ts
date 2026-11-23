@@ -651,7 +651,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.14.0",
+      version: "0.15.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -2542,4 +2542,116 @@ export async function previewReplaceAudio(
 export async function replaceVideoAudio(req: ReplaceAudioRequest): Promise<ReplaceAudioResult> {
   assertFrontendNotShuttingDown();
   return invoke<ReplaceAudioResult>("replace_video_audio", { req });
+}
+
+// ---------- Phase 4B2 PR 3: V02 Burn In Subtitles & I13 Video Watermark ----------
+
+export type SubtitleFormat = "srt" | "web_vtt";
+export type SubtitlePosition = "bottom" | "top";
+export type SubtitleBoxStyle = "outline_shadow" | "black_box";
+
+export interface SubtitleCue {
+  index: number;
+  startSec: number;
+  endSec: number;
+  text: string;
+  sourceLine: number;
+}
+
+export interface ParsedSubtitleFile {
+  path: string;
+  fileName: string;
+  format: SubtitleFormat;
+  cueCount: number;
+  totalDurationSec: number;
+  cues: SubtitleCue[];
+  warnings: string[];
+}
+
+export interface SubtitleBurnStyle {
+  fontSize: number;
+  position: SubtitlePosition;
+  boxStyle: SubtitleBoxStyle;
+  fontName?: string | null;
+  marginV?: number | null;
+}
+
+export interface PreviewSubtitleFrameRequest {
+  videoPath: string;
+  subtitlePath: string;
+  timestampSec: number;
+  style: SubtitleBurnStyle;
+}
+
+export interface PreviewSubtitleFrameResult {
+  dataUrl: string;
+  timestampSec: number;
+  activeCueIndices: number[];
+  displayWidth: number;
+  displayHeight: number;
+}
+
+export interface BurnInSubtitlesRequest {
+  taskId: string;
+  videoPath: string;
+  subtitlePath: string;
+  outputPath: string;
+  style: SubtitleBurnStyle;
+  allowOverwrite?: boolean;
+}
+
+export interface BurnInSubtitlesResult {
+  outputPath: string;
+  byteSize: number;
+  outputWidth: number;
+  outputHeight: number;
+  outputRotation: number | null;
+  durationSec: number | null;
+  burnedCueCount: number;
+  hasAudio: boolean;
+  audioCopied: boolean;
+  subtitleStreamsInOutput: number;
+  elapsedMs: number;
+}
+
+export interface WatermarkVideoRequest {
+  taskId: string;
+  sourcePath: string;
+  outputPath: string;
+  style: WatermarkStyleConfig;
+  allowOverwrite?: boolean;
+}
+
+export interface WatermarkVideoResult {
+  outputPath: string;
+  byteSize: number;
+  outputWidth: number;
+  outputHeight: number;
+  outputRotation: number | null;
+  durationSec: number | null;
+  hasAudio: boolean;
+  audioCopied: boolean;
+  elapsedMs: number;
+}
+
+export async function parseSubtitleFile(path: string): Promise<ParsedSubtitleFile> {
+  assertFrontendNotShuttingDown();
+  return invoke<ParsedSubtitleFile>("parse_subtitle_file", { path });
+}
+
+export async function previewBurnedSubtitleFrame(
+  req: PreviewSubtitleFrameRequest,
+): Promise<PreviewSubtitleFrameResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<PreviewSubtitleFrameResult>("preview_burned_subtitle_frame", { req });
+}
+
+export async function burnInSubtitles(req: BurnInSubtitlesRequest): Promise<BurnInSubtitlesResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<BurnInSubtitlesResult>("burn_in_subtitles", { req });
+}
+
+export async function watermarkVideo(req: WatermarkVideoRequest): Promise<WatermarkVideoResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<WatermarkVideoResult>("watermark_video", { req });
 }

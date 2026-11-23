@@ -50,6 +50,7 @@ import { AudioTrimWorkspace } from "../tools/audio-trim/AudioTrimWorkspace";
 import { AudioConvertWorkspace } from "../tools/audio-convert/AudioConvertWorkspace";
 import { AudioCleanupWorkspace } from "../tools/audio-cleanup/AudioCleanupWorkspace";
 import { VideoReplaceAudioWorkspace } from "../tools/video-replace-audio/VideoReplaceAudioWorkspace";
+import { VideoSubtitlesWorkspace } from "../tools/video-subtitles/VideoSubtitlesWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -102,7 +103,8 @@ export type ToolIconName =
   | "audio-trim"
   | "audio-convert"
   | "audio-cleanup"
-  | "video-replace-audio";
+  | "video-replace-audio"
+  | "video-subtitles";
 
 export interface RegisteredTool {
   id: string;
@@ -981,15 +983,16 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
   {
     id: "I13",
     category: "image",
-    name: { "zh-CN": "图片水印", "en-US": "Image Watermark" },
+    name: { "zh-CN": "图片与视频水印", "en-US": "Image & Video Watermark" },
     summary: {
       "zh-CN":
-        "为单张或批量图片添加中英文文字水印与透明 PNG Logo，支持九宫格角落定位、边距、大小、不透明度与斜向平铺并输出新副本",
+        "为单张/批量图片及横竖屏或 90° 旋转视频添加中英文文字水印与透明 PNG Logo，支持九宫格定位、边距、大小、不透明度与斜向平铺，输出新副本并保留原音频",
       "en-US":
-        "Add Chinese/English text or transparent PNG logo watermarks to single or batch images with 9-point placement, margins, scale, opacity, and diagonal tiling",
+        "Add Chinese/English text or transparent PNG logo watermarks to images (single/batch) and videos (landscape/portrait/90°-rotated) with 9-point placement, scale, opacity, and diagonal tiling",
     },
     keywords: [
       "watermark",
+      "video watermark",
       "logo",
       "text watermark",
       "tile",
@@ -999,6 +1002,7 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
       "stamp",
       "水印",
       "图片水印",
+      "视频水印",
       "平铺",
       "版权",
       "徽标",
@@ -1153,6 +1157,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "folder-input",
     implementationStatus: "full",
     component: OrganizeDownloadsWorkspace,
+  },
+  {
+    id: "V02",
+    category: "video",
+    name: { "zh-CN": "视频烧录字幕", "en-US": "Burn In Subtitles" },
+    summary: {
+      "zh-CN":
+        "离线导入 SRT / WebVTT 字幕文件，点击任意时间轴字幕即刻预览烧录帧，调整字号、顶部/底部位置及描边或半透明黑底框后永久烧录至视频像素（支持中文）",
+      "en-US":
+        "Import SRT or WebVTT subtitles offline, click any cue to preview burned-in frames with CJK fonts, customize size/position/outline or black box, and permanently burn into video pixels",
+    },
+    keywords: [
+      "subtitle",
+      "subtitles",
+      "captions",
+      "burn in",
+      "hardsub",
+      "srt",
+      "vtt",
+      "webvtt",
+      "video",
+      "字幕",
+      "烧录字幕",
+      "硬字幕",
+      "加字幕",
+    ],
+    icon: "video-subtitles",
+    implementationStatus: "partial",
+    component: VideoSubtitlesWorkspace,
   },
   {
     id: "V03",

@@ -1,20 +1,27 @@
 import {
+  CheckCircle2,
   ClipboardPaste,
   Copy,
   Download,
+  Film,
   FolderOpen,
   ImagePlus,
   Images,
+  Info,
+  Save,
   Stamp,
   Type,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { MediaToolsSetupPanel } from "../../components/MediaToolsSetupPanel";
 import { useI18n } from "../../i18n/I18nContext";
+import { useOptionalMediaSession } from "../../lib/mediaSessionStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import {
   bindDisposableListener,
   copyImageAssetToClipboard,
+  extractMediaPosterDataUrl,
   formatLocalizedError,
   inspectBatchImages,
   inspectBeautifierSourceImage,
@@ -26,11 +33,13 @@ import {
   pickSaveFilePath,
   pickSingleDirectory,
   pickSingleFile,
+  probeMediaInfo,
   readClipboardImageAsAsset,
   renderWatermarkedAsset,
   saveImageAssetFile,
   subscribeFileDrop,
   suggestSafeSiblingPath,
+  type MediaToolsStatus,
   type SaveAssetFormat,
   type WatermarkPlacement,
   type WatermarkStyleConfig,
@@ -41,6 +50,14 @@ import {
   mergeInspectedItems,
 } from "../image-batch/imageBatchModel";
 import "../image-batch/imageBatchShell.css";
+import {
+  VIDEO_EXTENSIONS,
+  formatDurationLabel,
+  formatMediaBytes,
+  getFileStemAndExt,
+  getParentDir,
+  suggestMediaOutputPath,
+} from "../media-shared/mediaFormat";
 import { drawWatermarkOverlayOnCanvas, rasterizeTextWatermarkStamp } from "./watermarkStamp";
 
 const TEXT_SWATCHES = ["#FFFFFF", "#111827", "#DC2626", "#2563EB", "#D97706", "#059669"];
@@ -59,9 +76,11 @@ const PLACEMENT_GRID: Array<{ id: WatermarkPlacement; zh: string; en: string }> 
 
 const copy = {
   "zh-CN": {
-    batchMode: "批量水印",
+    batchMode: "批量图片",
     singleMode: "单图水印",
+    videoMode: "视频水印",
     openSingle: "选择单图",
+    openVideo: "选择视频…",
     paste: "粘贴图片",
     addFiles: "添加图片",
     addFolders: "添加文件夹",
@@ -73,6 +92,14 @@ const copy = {
     memoryBadge: "内存原图",
     emptySingle: "选择本地图片、粘贴剪贴板，或从 I01 / I11 / I12 / I03 送入原图。",
     emptyBatch: "添加或拖入多张横图、竖图或透明 PNG，点击底部缩略图即可核对每张图的水印位置。",
+    emptyVideo:
+      "选择或拖入横屏、竖屏或含 90° 旋转标记的视频，实时预览 1:1 水印位置并无损保留原音频导出。",
+    videoOutLabel: "输出视频文件（绝不覆盖源文件）",
+    videoOutSaveAs: "另存为…",
+    runVideo: "导出水印视频",
+    runningVideo: "正在合成视频水印…",
+    cancelVideo: "取消导出",
+    videoSampleTime: "预览帧位置",
     kindLabel: "水印类型",
     kindText: "中英文文字",
     kindLogo: "透明 PNG Logo",
@@ -105,16 +132,18 @@ const copy = {
     copiedOk: "已复制带水印的原分辨率图片到 Windows 剪贴板",
     savedOk: (p: string, w: number, h: number) => `已导出 (${w}×${h} px)：${p}`,
     scopeNote:
-      "图片水印始终输出新副本（透明 PNG 保持透明通道）；PDF 与视频水印按后续阶段单独跟踪。",
+      "支持图片（单图/批量，保留透明 PNG 通道）与视频水印（横竖屏及 90° 旋转画面一致并保留原音频）；PDF 水印按阶段 5 单独跟踪。",
     overwriteTitle: "覆盖已有文件？",
     overwriteBody: (p: string) => `目标文件已存在：${p}\n确认覆盖吗？`,
     overwriteConfirm: "确认覆盖",
     cancel: "取消",
   },
   "en-US": {
-    batchMode: "Batch",
-    singleMode: "Single",
+    batchMode: "Batch Images",
+    singleMode: "Single Image",
+    videoMode: "Video",
     openSingle: "Open image",
+    openVideo: "Open video...",
     paste: "Paste",
     addFiles: "Add images",
     addFolders: "Add folders",
@@ -127,6 +156,14 @@ const copy = {
     emptySingle: "Open an image, paste clipboard, or send an image from I01 / I11 / I12 / I03.",
     emptyBatch:
       "Add or drop landscape, portrait, or transparent PNG images. Select any item below to inspect exact placement.",
+    emptyVideo:
+      "Open or drop landscape, portrait, or 90°-rotated videos to preview 1:1 watermark placement and export with original audio preserved.",
+    videoOutLabel: "Output Video File (Never Overwrites Source)",
+    videoOutSaveAs: "Save As...",
+    runVideo: "Export Watermarked Video",
+    runningVideo: "Rendering Video Watermark...",
+    cancelVideo: "Cancel",
+    videoSampleTime: "Preview frame",
     kindLabel: "Watermark type",
     kindText: "Text (CJK/Latin)",
     kindLogo: "Transparent PNG Logo",
@@ -159,7 +196,7 @@ const copy = {
     copiedOk: "Copied watermarked full-resolution image to Windows clipboard",
     savedOk: (p: string, w: number, h: number) => `Exported (${w}×${h} px): ${p}`,
     scopeNote:
-      "Image watermarking always writes new copies and preserves PNG transparency; PDF and video watermarking are tracked in later phases.",
+      "Supports image (single/batch, preserving PNG alpha) and video watermarking (consistent across landscape, portrait & 90° rotation with audio preserved); PDF watermarking is tracked in Phase 5.",
     overwriteTitle: "Overwrite existing file?",
     overwriteBody: (p: string) => `Target file already exists: ${p}\nOverwrite it?`,
     overwriteConfirm: "Overwrite",
@@ -176,7 +213,10 @@ export function ImageWatermarkWorkspace() {
     startImageWatermarkBatch,
     cancelImageWatermarkBatch,
   } = useSessionStore();
+  const mediaCtx = useOptionalMediaSession();
   const st = session.imageWatermark;
+  const videoSt = mediaCtx?.mediaSession.videoWatermark ?? null;
+  const videoRunning = videoSt?.taskStatus === "running";
 
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const baseImgRef = useRef<HTMLImageElement | null>(null);
@@ -186,6 +226,7 @@ export function ImageWatermarkWorkspace() {
   const [stampImgVersion, setStampImgVersion] = useState(0);
   const [dropHover, setDropHover] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [mediaToolsStatus, setMediaToolsStatus] = useState<MediaToolsStatus | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [pendingOverwrite, setPendingOverwrite] = useState<{
     path: string;
@@ -199,14 +240,32 @@ export function ImageWatermarkWorkspace() {
     return st.batchItems.find((i) => i.path === st.batchSelectedPath) ?? st.batchItems[0] ?? null;
   }, [st.batchItems, st.batchSelectedPath]);
 
+  const videoStream = videoSt?.videoProbe?.videoStreams[0] ?? null;
+
   const activePreviewUrl =
-    st.mode === "batch" ? (selectedBatchItem?.thumbnailDataUrl ?? null) : st.previewDataUrl;
+    st.mode === "video"
+      ? (videoSt?.posterUrl ?? null)
+      : st.mode === "batch"
+        ? (selectedBatchItem?.thumbnailDataUrl ?? null)
+        : st.previewDataUrl;
   const activeWidth =
-    st.mode === "batch" ? (selectedBatchItem?.displayWidth ?? null) : st.sourceWidth;
+    st.mode === "video"
+      ? (videoStream?.displayWidth ?? videoStream?.codedWidth ?? null)
+      : st.mode === "batch"
+        ? (selectedBatchItem?.displayWidth ?? null)
+        : st.sourceWidth;
   const activeHeight =
-    st.mode === "batch" ? (selectedBatchItem?.displayHeight ?? null) : st.sourceHeight;
+    st.mode === "video"
+      ? (videoStream?.displayHeight ?? videoStream?.codedHeight ?? null)
+      : st.mode === "batch"
+        ? (selectedBatchItem?.displayHeight ?? null)
+        : st.sourceHeight;
   const activeFileName =
-    st.mode === "batch" ? (selectedBatchItem?.fileName ?? null) : st.sourceFileName;
+    st.mode === "video"
+      ? (videoSt?.videoProbe?.fileName ?? null)
+      : st.mode === "batch"
+        ? (selectedBatchItem?.fileName ?? null)
+        : st.sourceFileName;
 
   // Rasterize crisp text stamp whenever text options change
   const textStamp = useMemo(() => {
@@ -394,6 +453,65 @@ export function ImageWatermarkWorkspace() {
     [t, updateImageWatermarkSession],
   );
 
+  const loadVideoPath = useCallback(
+    async (filePath: string) => {
+      if (!mediaCtx || videoRunning) return;
+      setErrorText(null);
+      setBusy(true);
+      updateImageWatermarkSession({ mode: "video" });
+      mediaCtx.updateVideoWatermarkSession((prev) => ({
+        ...prev,
+        videoPath: filePath,
+        videoProbe: null,
+        posterUrl: null,
+        lastResult: null,
+        errorMessage: null,
+      }));
+      try {
+        const probe = await probeMediaInfo(filePath);
+        if (!probe.hasVideo) {
+          throw new Error(
+            locale === "zh-CN"
+              ? "所选文件不含视频画面流。"
+              : "Selected file does not contain a video stream.",
+          );
+        }
+        const sampleSec = Math.min(0.5, Math.max(0, (probe.durationSec ?? 1) * 0.25));
+        const poster = await extractMediaPosterDataUrl(filePath, sampleSec).catch(() => null);
+        const { ext } = getFileStemAndExt(filePath);
+        const outExt = ["mp4", "mov", "mkv", "webm", "m4v"].includes(ext.toLowerCase())
+          ? ext.toLowerCase()
+          : "mp4";
+        const outPath = suggestMediaOutputPath(filePath, "_watermarked", outExt);
+        mediaCtx.updateVideoWatermarkSession((prev) => ({
+          ...prev,
+          videoPath: filePath,
+          videoProbe: probe,
+          posterUrl: poster,
+          posterTimestampSec: sampleSec,
+          outputPath: outPath,
+          lastResult: null,
+          errorMessage: null,
+        }));
+      } catch (err) {
+        const msg = formatLocalizedError(err, t);
+        setErrorText(msg);
+        mediaCtx.updateVideoWatermarkSession((prev) => ({ ...prev, errorMessage: msg }));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [locale, mediaCtx, t, updateImageWatermarkSession, videoRunning],
+  );
+
+  useEffect(() => {
+    if (!mediaCtx) return;
+    const handed = mediaCtx.consumePendingHandoff("I13");
+    if (handed) {
+      void loadVideoPath(handed);
+    }
+  }, [mediaCtx, loadVideoPath]);
+
   useEffect(() => {
     return bindDisposableListener(
       () =>
@@ -402,7 +520,10 @@ export function ImageWatermarkWorkspace() {
           onDropPaths: (paths) => {
             setDropHover(false);
             if (paths.length === 0) return;
-            if (st.mode === "single" && paths.length === 1) {
+            const firstExt = getFileStemAndExt(paths[0]!).ext.toLowerCase();
+            if (VIDEO_EXTENSIONS.includes(firstExt) || st.mode === "video") {
+              void loadVideoPath(paths[0]!);
+            } else if (st.mode === "single" && paths.length === 1) {
               void loadSinglePath(paths[0]!);
             } else {
               void addBatchPaths(paths);
@@ -411,7 +532,49 @@ export function ImageWatermarkWorkspace() {
         }),
       "i13-watermark-file-drop",
     );
-  }, [addBatchPaths, loadSinglePath, st.mode]);
+  }, [addBatchPaths, loadSinglePath, loadVideoPath, st.mode]);
+
+  const handlePickVideo = async () => {
+    const picked = await pickSingleFile({
+      title: c.openVideo,
+      filters: [{ name: "Videos", extensions: VIDEO_EXTENSIONS }],
+    });
+    if (picked) await loadVideoPath(picked);
+  };
+
+  const handlePickVideoOutput = async () => {
+    if (!videoSt?.videoPath || !mediaCtx) return;
+    const { ext } = getFileStemAndExt(videoSt.outputPath || videoSt.videoPath);
+    const chosen = await pickSaveFilePath({
+      title: c.videoOutLabel,
+      defaultPath:
+        videoSt.outputPath || suggestMediaOutputPath(videoSt.videoPath, "_watermarked", "mp4"),
+      filters: [{ name: (ext || "mp4").toUpperCase(), extensions: [(ext || "mp4").toLowerCase()] }],
+    });
+    if (chosen) {
+      mediaCtx.updateVideoWatermarkSession((prev) => ({
+        ...prev,
+        outputPath: chosen,
+        lastResult: null,
+      }));
+    }
+  };
+
+  const handleRunVideoWatermark = async () => {
+    if (!mediaCtx || !videoSt?.videoPath || !videoSt.outputPath.trim()) return;
+    const style = buildStyleConfig();
+    if (!style) return;
+    setErrorText(null);
+    await mediaCtx.startVideoWatermarkTask(
+      {
+        sourcePath: videoSt.videoPath,
+        outputPath: videoSt.outputPath.trim(),
+        style,
+        allowOverwrite: true,
+      },
+      (err) => formatLocalizedError(err, t),
+    );
+  };
 
   const handlePickSingle = async () => {
     const picked = await pickSingleFile({
@@ -554,6 +717,8 @@ export function ImageWatermarkWorkspace() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
+      {st.mode === "video" && <MediaToolsSetupPanel onStatusChange={setMediaToolsStatus} />}
+
       {/* Top Toolbar */}
       <div className="tool-toolbar">
         <div className="tool-toolbar-group">
@@ -574,9 +739,27 @@ export function ImageWatermarkWorkspace() {
               <Stamp size={13} strokeWidth={1.75} aria-hidden="true" />
               <span>{c.singleMode}</span>
             </button>
+            <button
+              type="button"
+              className={`segmented-btn ${st.mode === "video" ? "is-selected" : ""}`}
+              onClick={() => updateImageWatermarkSession({ mode: "video" })}
+            >
+              <Film size={13} strokeWidth={1.75} aria-hidden="true" />
+              <span>{c.videoMode}</span>
+            </button>
           </div>
 
-          {st.mode === "single" ? (
+          {st.mode === "video" ? (
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || videoRunning}
+              onClick={() => void handlePickVideo()}
+            >
+              <Film size={14} strokeWidth={1.75} aria-hidden="true" />
+              <span>{c.openVideo}</span>
+            </button>
+          ) : st.mode === "single" ? (
             <>
               <button
                 type="button"
@@ -685,9 +868,11 @@ export function ImageWatermarkWorkspace() {
           <span>{st.kind === "text" ? c.textMissing : c.logoMissing}</span>
         </div>
       )}
-      {(errorText || st.batchErrorMessage) && (
+      {(errorText || st.batchErrorMessage || (st.mode === "video" && videoSt?.errorMessage)) && (
         <div className="status-banner is-err" role="alert">
-          <span>{errorText ?? st.batchErrorMessage}</span>
+          <span>
+            {errorText ?? (st.mode === "video" ? videoSt?.errorMessage : st.batchErrorMessage)}
+          </span>
         </div>
       )}
       {st.lastSavedMessage && !errorText && st.mode === "single" && (
@@ -751,9 +936,23 @@ export function ImageWatermarkWorkspace() {
             ) : (
               <div className="empty-state" style={{ maxWidth: 420 }}>
                 <p style={{ margin: "0 0 12px", fontSize: 12.5 }}>
-                  {st.mode === "batch" ? c.emptyBatch : c.emptySingle}
+                  {st.mode === "video"
+                    ? c.emptyVideo
+                    : st.mode === "batch"
+                      ? c.emptyBatch
+                      : c.emptySingle}
                 </p>
-                {st.mode === "batch" ? (
+                {st.mode === "video" ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!(mediaToolsStatus?.ready ?? true)}
+                    onClick={() => void handlePickVideo()}
+                  >
+                    <Film size={14} strokeWidth={1.75} aria-hidden="true" />
+                    <span>{c.openVideo}</span>
+                  </button>
+                ) : st.mode === "batch" ? (
                   <button
                     type="button"
                     className="btn btn-primary"
@@ -1030,6 +1229,79 @@ export function ImageWatermarkWorkspace() {
             </>
           )}
 
+          {st.mode === "video" && mediaCtx && videoSt && (
+            <div
+              className="field-stack"
+              style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: 10 }}
+            >
+              {videoSt.videoProbe && (
+                <div className="field-hint" style={{ fontSize: 12 }}>
+                  {`${formatDurationLabel(videoSt.videoProbe.durationSec, locale)} · ${activeWidth ?? "?"}×${activeHeight ?? "?"}${videoStream?.rotationDegrees ? ` (${videoStream.rotationDegrees}°→正立)` : ""}`}
+                </div>
+              )}
+              <span className="field-label">{c.videoOutLabel}</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  id="i13-video-output-path"
+                  type="text"
+                  className="text-input"
+                  style={{ flex: 1, minWidth: 0 }}
+                  value={videoSt.outputPath}
+                  disabled={videoRunning}
+                  onChange={(e) =>
+                    mediaCtx.updateVideoWatermarkSession((prev) => ({
+                      ...prev,
+                      outputPath: e.target.value,
+                    }))
+                  }
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={videoRunning || !videoSt.videoPath}
+                  onClick={() => void handlePickVideoOutput()}
+                >
+                  <Save size={13} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{c.videoOutSaveAs}</span>
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ flex: 1, justifyContent: "center" }}
+                  disabled={
+                    videoRunning ||
+                    !(mediaToolsStatus?.ready ?? true) ||
+                    !watermarkReady ||
+                    !videoSt.videoPath ||
+                    !videoSt.outputPath.trim()
+                  }
+                  onClick={() => void handleRunVideoWatermark()}
+                >
+                  <Download size={14} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{videoRunning ? c.runningVideo : c.runVideo}</span>
+                </button>
+                {videoRunning && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void mediaCtx.cancelVideoWatermarkTask()}
+                  >
+                    {c.cancelVideo}
+                  </button>
+                )}
+              </div>
+              {videoRunning && videoSt.liveProgress && (
+                <progress
+                  max={100}
+                  value={videoSt.liveProgress.percent ?? undefined}
+                  style={{ width: "100%" }}
+                />
+              )}
+            </div>
+          )}
+
           {st.mode === "batch" && (
             <div
               className="field-stack"
@@ -1088,6 +1360,58 @@ export function ImageWatermarkWorkspace() {
           )}
         </div>
       </div>
+
+      {/* Bottom Video Watermark Result */}
+      {st.mode === "video" && videoSt?.lastResult && mediaCtx && (
+        <section className="img-batch-queue-card">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <CheckCircle2 size={17} aria-hidden="true" />
+              <strong style={{ fontSize: 13 }}>
+                {locale === "zh-CN"
+                  ? `视频水印导出完成：${videoSt.lastResult.outputWidth}×${videoSt.lastResult.outputHeight} · ${formatDurationLabel(videoSt.lastResult.durationSec, locale)} · ${formatMediaBytes(videoSt.lastResult.byteSize, locale)}${videoSt.lastResult.audioCopied ? " · 原音频无损保留" : ""}`
+                  : `Video watermark exported: ${videoSt.lastResult.outputWidth}×${videoSt.lastResult.outputHeight} · ${formatDurationLabel(videoSt.lastResult.durationSec, locale)} · ${formatMediaBytes(videoSt.lastResult.byteSize, locale)}${videoSt.lastResult.audioCopied ? " · Audio copied" : ""}`}
+              </strong>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() =>
+                  void openLocalDirectory(getParentDir(videoSt.lastResult!.outputPath))
+                }
+              >
+                <FolderOpen size={13} aria-hidden="true" />
+                <span>{c.openOutDir}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() =>
+                  mediaCtx.handoffMediaFileToTool("V10", videoSt.lastResult!.outputPath)
+                }
+              >
+                <Info size={13} aria-hidden="true" />
+                <span>V10</span>
+              </button>
+            </div>
+          </div>
+          <div
+            className="field-hint"
+            style={{ fontSize: 12, marginTop: 4, wordBreak: "break-all" }}
+          >
+            {videoSt.lastResult.outputPath}
+          </div>
+        </section>
+      )}
 
       {/* Bottom Batch Strip & Results */}
       {st.mode === "batch" && (st.batchItems.length > 0 || st.batchLastReport) && (

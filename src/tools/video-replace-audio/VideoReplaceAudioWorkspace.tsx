@@ -377,7 +377,10 @@ export function VideoReplaceAudioWorkspace() {
       <section className="media-section-card">
         <div className="media-section-header">
           <div>
-            <h2 className="media-section-title">
+            <h2
+              className="media-section-title"
+              style={{ justifyContent: "flex-start", gap: "8px", margin: 0 }}
+            >
               <Volume2 size={16} aria-hidden="true" />
               <span>{isZh ? "替换视频音频与配音混音" : "Replace & Mix Video Audio"}</span>
             </h2>
@@ -603,7 +606,8 @@ export function VideoReplaceAudioWorkspace() {
               {isZh ? "替换 / 混音与音量控制" : "Mode & Volume Balance"}
             </strong>
             <div
-              className="segmented-control"
+              className="segmented"
+              style={{ display: "flex", width: "100%" }}
               role="radiogroup"
               aria-label={isZh ? "替换或混音模式" : "Replace or Mix Mode"}
             >
@@ -622,7 +626,8 @@ export function VideoReplaceAudioWorkspace() {
                   type="button"
                   role="radio"
                   aria-checked={state.mode === opt.value}
-                  className={`segmented-option ${state.mode === opt.value ? "is-active" : ""}`}
+                  style={{ flex: 1 }}
+                  className={`segmented-btn ${state.mode === opt.value ? "is-selected" : ""}`}
                   disabled={
                     running || (opt.value === "mix" && !!state.videoProbe && !targetHasAudio)
                   }
@@ -706,7 +711,8 @@ export function VideoReplaceAudioWorkspace() {
               {isZh ? "短音频处理策略" : "When New Audio Is Shorter"}
             </strong>
             <div
-              className="segmented-control"
+              className="segmented"
+              style={{ display: "flex", width: "100%" }}
               role="radiogroup"
               aria-label={isZh ? "短音频策略" : "Short audio behavior"}
             >
@@ -725,7 +731,8 @@ export function VideoReplaceAudioWorkspace() {
                   type="button"
                   role="radio"
                   aria-checked={state.shortAudioBehavior === opt.value}
-                  className={`segmented-option ${state.shortAudioBehavior === opt.value ? "is-active" : ""}`}
+                  style={{ flex: 1 }}
+                  className={`segmented-btn ${state.shortAudioBehavior === opt.value ? "is-selected" : ""}`}
                   disabled={running}
                   onClick={() => {
                     invalidatePreview();
@@ -954,6 +961,13 @@ export function VideoReplaceAudioWorkspace() {
                 >
                   <FolderOpen size={14} aria-hidden="true" />
                   <span>{isZh ? "打开目录" : "Open Folder"}</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => handoffMediaFileToTool("V02", state.lastResult!.outputPath)}
+                >
+                  <span>{isZh ? "烧录字幕 (V02)" : "Subtitles (V02)"}</span>
                 </button>
                 <button
                   type="button"

@@ -357,6 +357,24 @@ pub fn composite_watermark_rgba(
     Ok(out)
 }
 
+/// Renders a standalone transparent RGBA watermark overlay sized `(width, height)` matching
+/// `composite_watermark_rgba` and frontend `watermarkStamp.ts` placement/tiling math 1:1.
+/// Shared by `video_watermark` (I13 video mode) so image and video watermarks stay pixel-consistent.
+pub fn render_watermark_overlay_rgba(
+    width: u32,
+    height: u32,
+    style: &WatermarkStyleConfig,
+) -> Result<RgbaImage, AppError> {
+    if width == 0 || height == 0 {
+        return Err(AppError::invalid_param(
+            "Video overlay dimensions must be positive.",
+        ));
+    }
+    let stamp = load_stamp_rgba(style)?;
+    let blank = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+    composite_watermark_rgba(&blank, &stamp, style)
+}
+
 pub fn render_watermarked_asset_impl(
     store: &ImageAssetStore,
     req: &RenderWatermarkedAssetRequest,
