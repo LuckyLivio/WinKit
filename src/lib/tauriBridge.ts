@@ -364,6 +364,52 @@ export interface BlurFacesBatchRequest {
   exportUntouchedCopies: boolean;
 }
 
+export interface PickScreenColorRequest {
+  hideMainWindow?: boolean | null;
+}
+
+export interface SampleScreenPixelRequest {
+  physicalX: number;
+  physicalY: number;
+  hideMainWindow?: boolean | null;
+}
+
+export interface ScreenColorSample {
+  r: number;
+  g: number;
+  b: number;
+  hex: string;
+  physicalX: number;
+  physicalY: number;
+  monitorId: string | null;
+  scalePercent: number;
+  compositedRgbOnly: boolean;
+}
+
+export interface ExtractImagePaletteRequest {
+  assetId?: string | null;
+  path?: string | null;
+  maxColors?: number | null;
+}
+
+export interface PaletteSwatch {
+  r: number;
+  g: number;
+  b: number;
+  hex: string;
+  sharePercent: number;
+}
+
+export interface ImagePaletteResult {
+  swatches: PaletteSwatch[];
+  totalPixels: number;
+  opaquePixels: number;
+  excludedTransparentPixels: number;
+  distinctColorCount: number;
+  width: number;
+  height: number;
+}
+
 export interface CaptureRect {
   x: number;
   y: number;
@@ -605,7 +651,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.11.0",
+      version: "0.12.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -1175,6 +1221,25 @@ export async function blurFacesBatch(
 ): Promise<BatchImageJobResponse> {
   assertFrontendNotShuttingDown();
   return invoke<BatchImageJobResponse>("blur_faces_batch", { taskId, req });
+}
+
+export async function pickScreenColor(req?: PickScreenColorRequest): Promise<ScreenColorSample> {
+  assertFrontendNotShuttingDown();
+  return invoke<ScreenColorSample>("pick_screen_color", { req: req ?? null });
+}
+
+export async function sampleScreenPixelAt(
+  req: SampleScreenPixelRequest,
+): Promise<ScreenColorSample> {
+  assertFrontendNotShuttingDown();
+  return invoke<ScreenColorSample>("sample_screen_pixel_at", { req });
+}
+
+export async function extractImagePalette(
+  req: ExtractImagePaletteRequest,
+): Promise<ImagePaletteResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImagePaletteResult>("extract_image_palette", { req });
 }
 
 export async function inspectBatchRenameSources(

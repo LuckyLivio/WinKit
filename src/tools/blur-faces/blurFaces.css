@@ -135,18 +135,18 @@
 }
 
 .blur-faces-pill.is-detected {
-  background: var(--ok-soft);
-  color: var(--ok);
+  background: var(--status-ok-bg);
+  color: var(--status-ok);
 }
 
 .blur-faces-pill.is-none {
-  background: var(--warn-soft);
-  color: var(--warn);
+  background: var(--status-warn-bg);
+  color: var(--status-warn);
 }
 
 .blur-faces-pill.is-failed {
-  background: var(--err-soft);
-  color: var(--err);
+  background: var(--status-err-bg);
+  color: var(--status-err);
 }
 
 .blur-faces-pill.is-pending {

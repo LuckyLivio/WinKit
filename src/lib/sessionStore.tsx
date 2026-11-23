@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { Hex8Interpretation, RgbaColor } from "../tools/color-picker/colorEngine";
 import type { AnnotateToolKind, AnnotationItem } from "../tools/image-annotate/annotationRenderer";
 import {
   DEFAULT_VIEWPORT,
@@ -120,8 +121,10 @@ import {
   type CaptureResultPayload,
   type CaptureWindowInfo,
   type ImageAssetPayload,
+  type ImagePaletteResult,
   type RedactionKind,
   type SaveAssetFormat,
+  type ScreenColorSample,
   type WatermarkImagesBatchRequest,
   type WatermarkPlacement,
 } from "./tauriBridge";
@@ -649,6 +652,30 @@ export interface BlurFacesSessionState {
   batchErrorMessage: string | null;
 }
 
+export interface ColorHistoryItem {
+  id: string;
+  color: RgbaColor;
+  hexLabel: string;
+}
+
+export interface ColorPickerSessionState {
+  activeColor: RgbaColor;
+  manualInput: string;
+  hex8Order: Hex8Interpretation;
+  lastSample: ScreenColorSample | null;
+  history: ColorHistoryItem[];
+  paletteImageName: string | null;
+  paletteImagePath: string | null;
+  paletteImageAssetId: string | null;
+  paletteImagePreviewUrl: string | null;
+  paletteMaxColors: number;
+  paletteResult: ImagePaletteResult | null;
+  contrastFg: RgbaColor;
+  contrastFgInput: string;
+  contrastBg: RgbaColor;
+  contrastBgInput: string;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -668,6 +695,7 @@ export interface SessionWorkspaces {
   caseConverter: CaseConverterSessionState;
   screenCapture: ScreenCaptureSessionState;
   blurFaces: BlurFacesSessionState;
+  colorPicker: ColorPickerSessionState;
   beautifier: BeautifierSessionState;
   imageRedact: ImageRedactSessionState;
   imageAnnotate: ImageAnnotateSessionState;
@@ -1102,6 +1130,23 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     batchLastReport: null,
     batchErrorMessage: null,
   },
+  colorPicker: {
+    activeColor: { r: 37, g: 99, b: 235, a: 1 },
+    manualInput: "#2563EB",
+    hex8Order: "css_rgba",
+    lastSample: null,
+    history: [],
+    paletteImageName: null,
+    paletteImagePath: null,
+    paletteImageAssetId: null,
+    paletteImagePreviewUrl: null,
+    paletteMaxColors: 6,
+    paletteResult: null,
+    contrastFg: { r: 15, g: 23, b: 42, a: 1 },
+    contrastFgInput: "#0F172A",
+    contrastBg: { r: 255, g: 255, b: 255, a: 1 },
+    contrastBgInput: "#FFFFFF",
+  },
 };
 
 interface SessionStoreContextValue {
@@ -1138,6 +1183,11 @@ interface SessionStoreContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<BatchImageJobResponse | null>;
   cancelBlurFacesBatch: () => Promise<void>;
+  updateColorPickerSession: (
+    patchOrUpdater:
+      | Partial<ColorPickerSessionState>
+      | ((prev: ColorPickerSessionState) => ColorPickerSessionState),
+  ) => void;
   updateBeautifierSession: (
     patchOrUpdater:
       Partial<BeautifierSessionState> | ((prev: BeautifierSessionState) => BeautifierSessionState),
@@ -1373,6 +1423,23 @@ export function SessionStoreProvider({
           typeof patchOrUpdater === "function"
             ? patchOrUpdater(prev.blurFaces)
             : { ...prev.blurFaces, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  const updateColorPickerSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ColorPickerSessionState>
+        | ((prev: ColorPickerSessionState) => ColorPickerSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        colorPicker:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.colorPicker)
+            : { ...prev.colorPicker, ...patchOrUpdater },
       }));
     },
     [],
@@ -2585,6 +2652,7 @@ export function SessionStoreProvider({
         updateBlurFacesSession,
         startBlurFacesBatch,
         cancelBlurFacesBatch,
+        updateColorPickerSession,
         updateBeautifierSession,
         startBeautifyBatch,
         cancelBeautifyBatch,
