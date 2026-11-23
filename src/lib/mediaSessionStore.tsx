@@ -10,17 +10,21 @@ import {
 import {
   bindDisposableListener,
   cancelBackendTask,
+  changeVideoSpeedBatch,
   compressVideosBatch,
   convertVideosBatch,
   convertVideoToGif,
   cropRotateVideo,
   extractAudioBatch,
   extractVideoFrames,
+  mergeVideos,
   muteVideosBatch,
   resizeVideosBatch,
   subscribeMediaTaskProgress,
   trimVideoFile,
   type AudioExtractFormat,
+  type ChangeVideoSpeedBatchRequest,
+  type ChangeVideoSpeedBatchResponse,
   type CompressQualityPreset,
   type CompressResolutionCap,
   type CompressVideoCodec,
@@ -43,6 +47,10 @@ import {
   type InspectVideoConvertPlanItem,
   type MediaProbeReport,
   type MediaTaskProgressPayload,
+  type MergeFitMode,
+  type MergeResolutionPreset,
+  type MergeVideosRequest,
+  type MergeVideosResult,
   type MuteVideosBatchRequest,
   type MuteVideosBatchResponse,
   type ResizeVideosBatchRequest,
@@ -239,6 +247,42 @@ export interface VideoCropSessionState {
   errorMessage: string | null;
 }
 
+export interface VideoSpeedSessionState {
+  items: MediaQueuedProbeItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  speedFactor: number;
+  preservePitch: boolean;
+  muteAudio: boolean;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastReport: ChangeVideoSpeedBatchResponse | null;
+  errorMessage: string | null;
+}
+
+export interface VideoMergeClipItem {
+  id: string;
+  path: string;
+  fileName: string;
+  status: "loading" | "ready" | "error";
+  probe: MediaProbeReport | null;
+  thumbnailUrl: string | null;
+  errorMessage: string | null;
+}
+
+export interface VideoMergeSessionState {
+  clips: VideoMergeClipItem[];
+  resolutionPreset: MergeResolutionPreset;
+  fitMode: MergeFitMode;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastResult: MergeVideosResult | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
@@ -250,6 +294,8 @@ export interface MediaSessionRoot {
   videoCompress: VideoCompressSessionState;
   videoResize: VideoResizeSessionState;
   videoCrop: VideoCropSessionState;
+  videoSpeed: VideoSpeedSessionState;
+  videoMerge: VideoMergeSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -407,6 +453,30 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  videoSpeed: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    speedFactor: 2.0,
+    preservePitch: true,
+    muteAudio: false,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
+  videoMerge: {
+    clips: [],
+    resolutionPreset: "match_first",
+    fitMode: "pad",
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -476,6 +546,22 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<CropRotateVideoResult | null>;
   cancelVideoCropTask: () => Promise<void>;
+  updateVideoSpeedSession: (
+    updater: (prev: VideoSpeedSessionState) => VideoSpeedSessionState,
+  ) => void;
+  startVideoSpeedBatch: (
+    req: Omit<ChangeVideoSpeedBatchRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<ChangeVideoSpeedBatchResponse | null>;
+  cancelVideoSpeedBatch: () => Promise<void>;
+  updateVideoMergeSession: (
+    updater: (prev: VideoMergeSessionState) => VideoMergeSessionState,
+  ) => void;
+  startVideoMergeTask: (
+    req: Omit<MergeVideosRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<MergeVideosResult | null>;
+  cancelVideoMergeTask: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -507,6 +593,8 @@ export function MediaSessionProvider({
   const activeCompressTaskRef = useRef<string | null>(null);
   const activeResizeTaskRef = useRef<string | null>(null);
   const activeCropTaskRef = useRef<string | null>(null);
+  const activeSpeedTaskRef = useRef<string | null>(null);
+  const activeMergeTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
 
@@ -561,6 +649,16 @@ export function MediaSessionProvider({
             setMediaSession((prev) => ({
               ...prev,
               videoCrop: { ...prev.videoCrop, liveProgress: payload },
+            }));
+          } else if (payload.toolId === "V03" && payload.taskId === activeSpeedTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoSpeed: { ...prev.videoSpeed, liveProgress: payload },
+            }));
+          } else if (payload.toolId === "V12" && payload.taskId === activeMergeTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoMerge: { ...prev.videoMerge, liveProgress: payload },
             }));
           }
         }),
@@ -1250,6 +1348,156 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateVideoSpeedSession = useCallback(
+    (updater: (prev: VideoSpeedSessionState) => VideoSpeedSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoSpeed: updater(prev.videoSpeed) }));
+    },
+    [],
+  );
+
+  const startVideoSpeedBatch = useCallback(
+    async (
+      req: Omit<ChangeVideoSpeedBatchRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<ChangeVideoSpeedBatchResponse | null> => {
+      if (activeSpeedTaskRef.current) return null;
+      const taskId = `v03-speed-${Date.now()}-${taskSeqRef.current++}`;
+      activeSpeedTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoSpeed: {
+          ...prev.videoSpeed,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V03",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.sourcePaths.length,
+            itemName: req.sourcePaths[0] ?? null,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await changeVideoSpeedBatch({ ...req, taskId });
+        if (activeSpeedTaskRef.current !== taskId) return null;
+        activeSpeedTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSpeed: {
+            ...prev.videoSpeed,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeSpeedTaskRef.current !== taskId) return null;
+        activeSpeedTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSpeed: {
+            ...prev.videoSpeed,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoSpeedBatch = useCallback(async () => {
+    const tid = activeSpeedTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateVideoMergeSession = useCallback(
+    (updater: (prev: VideoMergeSessionState) => VideoMergeSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoMerge: updater(prev.videoMerge) }));
+    },
+    [],
+  );
+
+  const startVideoMergeTask = useCallback(
+    async (
+      req: Omit<MergeVideosRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<MergeVideosResult | null> => {
+      if (activeMergeTaskRef.current) return null;
+      const taskId = `v12-merge-${Date.now()}-${taskSeqRef.current++}`;
+      activeMergeTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoMerge: {
+          ...prev.videoMerge,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V12",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.sourcePaths.length,
+            itemName: `${req.sourcePaths.length} clips`,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await mergeVideos({ ...req, taskId });
+        if (activeMergeTaskRef.current !== taskId) return null;
+        activeMergeTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoMerge: {
+            ...prev.videoMerge,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeMergeTaskRef.current !== taskId) return null;
+        activeMergeTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoMerge: {
+            ...prev.videoMerge,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoMergeTask = useCallback(async () => {
+    const tid = activeMergeTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -1302,6 +1550,12 @@ export function MediaSessionProvider({
         updateVideoCropSession,
         startVideoCropTask,
         cancelVideoCropTask,
+        updateVideoSpeedSession,
+        startVideoSpeedBatch,
+        cancelVideoSpeedBatch,
+        updateVideoMergeSession,
+        startVideoMergeTask,
+        cancelVideoMergeTask,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,
