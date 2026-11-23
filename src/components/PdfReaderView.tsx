@@ -271,47 +271,76 @@ export function PdfReaderView() {
     [state.zoomMode, state.zoomScale, viewportWidth, viewportHeight],
   );
 
-  // Observe visible main pages lazily
+  // Observe visible main pages lazily (with 360px pre-render margin) and track actual viewport page
   useEffect(() => {
     const root = viewportRef.current;
-    if (!root || !state.inspection || typeof IntersectionObserver !== "function") return;
+    if (!root || !state.inspection) return;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        setVisiblePages((prev) => {
-          const next = new Set(prev);
-          let bestVisiblePage: number | null = null;
-          let bestRatio = 0;
-          for (const entry of entries) {
-            const p = Number((entry.target as HTMLElement).dataset.page);
-            if (!Number.isFinite(p)) continue;
-            if (entry.isIntersecting) {
-              next.add(p);
-              if (entry.intersectionRatio >= bestRatio) {
-                bestRatio = entry.intersectionRatio;
-                bestVisiblePage = p;
+    let rafId = 0;
+    const syncCurrentPageFromViewport = () => {
+      rafId = 0;
+      const rootRect = root.getBoundingClientRect();
+      if (rootRect.height <= 0) return;
+      let bestPage: number | null = null;
+      let bestOverlapPx = 0;
+      for (const [p, el] of pageRefs.current.entries()) {
+        const rect = el.getBoundingClientRect();
+        const overlap = Math.min(rect.bottom, rootRect.bottom) - Math.max(rect.top, rootRect.top);
+        if (overlap > bestOverlapPx + 0.5) {
+          bestOverlapPx = overlap;
+          bestPage = p;
+        }
+      }
+      if (bestPage !== null) {
+        updateReaderSession((curr) =>
+          curr.currentPage === bestPage ? curr : { ...curr, currentPage: bestPage },
+        );
+      }
+    };
+
+    const scheduleSync = () => {
+      if (rafId === 0) {
+        rafId = window.requestAnimationFrame(syncCurrentPageFromViewport);
+      }
+    };
+
+    root.addEventListener("scroll", scheduleSync, { passive: true });
+    scheduleSync();
+
+    let observer: IntersectionObserver | null = null;
+    if (typeof IntersectionObserver === "function") {
+      observer = new IntersectionObserver(
+        (entries) => {
+          setVisiblePages((prev) => {
+            const next = new Set(prev);
+            for (const entry of entries) {
+              const p = Number((entry.target as HTMLElement).dataset.page);
+              if (!Number.isFinite(p)) continue;
+              if (entry.isIntersecting) {
+                next.add(p);
+              } else {
+                next.delete(p);
               }
-            } else {
-              next.delete(p);
             }
-          }
-          if (bestVisiblePage !== null) {
-            updateReaderSession((curr) =>
-              curr.currentPage === bestVisiblePage
-                ? curr
-                : { ...curr, currentPage: bestVisiblePage },
-            );
-          }
-          return next;
-        });
-      },
-      { root, rootMargin: "360px 0px", threshold: [0.05, 0.35, 0.65] },
-    );
+            return next;
+          });
+          scheduleSync();
+        },
+        { root, rootMargin: "360px 0px", threshold: [0.05, 0.35, 0.65] },
+      );
 
-    for (const el of pageRefs.current.values()) {
-      observer.observe(el);
+      for (const el of pageRefs.current.values()) {
+        observer.observe(el);
+      }
     }
-    return () => observer.disconnect();
+
+    return () => {
+      root.removeEventListener("scroll", scheduleSync);
+      if (rafId !== 0) {
+        window.cancelAnimationFrame(rafId);
+      }
+      observer?.disconnect();
+    };
   }, [state.inspection, updateReaderSession]);
 
   // Observe visible thumbnails lazily
@@ -719,6 +748,14 @@ export function PdfReaderView() {
               title={pm.organize.title}
             >
               <span>P09</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => sendPdfToTool(info.path, "P17")}
+              title={pm.pdfToImages.title}
+            >
+              <span>P17</span>
             </button>
             <button
               type="button"

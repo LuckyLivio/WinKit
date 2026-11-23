@@ -15,6 +15,7 @@ import {
   EyeOff,
   FileArchive,
   FileAudio,
+  FileImage,
   FileMinus2,
   FileOutput,
   FilePenLine,
@@ -173,5 +174,9 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <FileMinus2 size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "pdf-extract":
       return <FileOutput size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-images-to-pdf":
+      return <FileImage size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-to-images":
+      return <Images size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

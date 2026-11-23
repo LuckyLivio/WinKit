@@ -59,6 +59,8 @@ import { PdfSplitWorkspace } from "../tools/pdf-split/PdfSplitWorkspace";
 import { PdfOrganizeWorkspace } from "../tools/pdf-organize/PdfOrganizeWorkspace";
 import { PdfDeleteWorkspace } from "../tools/pdf-delete/PdfDeleteWorkspace";
 import { PdfExtractWorkspace } from "../tools/pdf-extract/PdfExtractWorkspace";
+import { ImagesToPdfWorkspace } from "../tools/pdf-images-to-pdf/ImagesToPdfWorkspace";
+import { PdfToImagesWorkspace } from "../tools/pdf-to-images/PdfToImagesWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -120,7 +122,9 @@ export type ToolIconName =
   | "pdf-split"
   | "pdf-organize"
   | "pdf-delete"
-  | "pdf-extract";
+  | "pdf-extract"
+  | "pdf-images-to-pdf"
+  | "pdf-to-images";
 
 export interface RegisteredTool {
   id: string;
@@ -1853,6 +1857,59 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "pdf-extract",
     implementationStatus: "full",
     component: PdfExtractWorkspace,
+  },
+  {
+    id: "P12",
+    category: "pdf",
+    name: {
+      "zh-CN": "图片合成 PDF",
+      "en-US": "Images to PDF",
+    },
+    summary: {
+      "zh-CN": "将多张图片按顺序合成为 PDF，自动应用 EXIF 方向并支持纸张尺寸、边距与透明背景色",
+      "en-US":
+        "Combine images into a PDF with EXIF upright orientation, Original/A4/Letter paper presets, margins, and transparency fill",
+    },
+    keywords: [
+      "pdf",
+      "images to pdf",
+      "jpg to pdf",
+      "png to pdf",
+      "photo pdf",
+      "图片合成pdf",
+      "图片转pdf",
+      "照片转pdf",
+    ],
+    icon: "pdf-images-to-pdf",
+    implementationStatus: "full",
+    component: ImagesToPdfWorkspace,
+  },
+  {
+    id: "P17",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 导出为图片",
+      "en-US": "PDF to Images",
+    },
+    summary: {
+      "zh-CN":
+        "离线按自定义 DPI 批量将 PDF 页面渲染为 PNG / JPEG / WebP（及系统支持的 HEIC），带尺寸预估",
+      "en-US":
+        "Render PDF pages offline at custom DPI into PNG, JPEG, WebP (or HEIC when supported) with upfront size estimates",
+    },
+    keywords: [
+      "pdf",
+      "pdf to images",
+      "pdf to png",
+      "pdf to jpg",
+      "render pdf",
+      "dpi",
+      "pdf转图片",
+      "pdf导出图片",
+    ],
+    icon: "pdf-to-images",
+    implementationStatus: "full",
+    component: PdfToImagesWorkspace,
   },
 ];
 

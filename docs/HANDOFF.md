@@ -1,5 +1,23 @@
 # WinKit 阶段交接说明
 
+## v0.17.0 · 阶段 5A（基础 PDF 工作台与内置 PDF 快速预览）
+
+`src/registry/tools.ts` 收录 **60 个**真实可用工具入口（新增「文档与 PDF」分类含 `7` 项独立工具 `P07–P12`/`P17`，并交付侧栏共用能力 `C08`「PDF 快速预览」，不计入 102 项工具条目数）。本轮按三个连续独立 PR（PR #29、PR #30、PR #31）顺序落地离线 `PDFium` 独立渲染子进程、纯 Rust `lopdf` 矢量结构引擎、`C08` 快速预览与全部 7 项基础 PDF 工具，完成真实 Windows 11 `150%` 缩放安装版全链路与 300 页长文档压测，并单版本正式发布 `v0.17.0`。
+
+- **PR #29（`11bce24`）｜离线 PDF 基础设施 + `C08` 内置快速预览 + `P07` PDF 合并 + `P08` PDF 拆分**：
+  - **`scripts/ensure-pdfium.mjs` + `src-tauri/src/pdf_pdfium.rs` + `pdf_worker.rs` + `pdf_core.rs`**：固定选用 [`bblanchon/pdfium-binaries` `chromium/8179`](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium/8179)（`PDFium 160.0.8179.0`，Windows x64，`pdfium.dll` `7,849,984` B，SHA-256 `b9324fe77556753e24443b8ff1d03b39a3aa01ccd6e56e7debb82922438e8965`，附 `licenses/pdfium-notices.txt` `134,943` B 与 `THIRD_PARTY_NOTICES.md`，构建期拉取校验不入源码库，CI 强制核验安装后文件存在与摘要一致）。全部页面光栅化与文字层提取隔离运行在 `winkit.exe --pdf-worker` 子进程（受 Windows Job Object `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 托管，退出自动回收），主进程维护 64 项 / 64 MiB 有界 LRU 缓存与 `AtomicPdfOutput` 防覆盖原子写入。
+  - **`src/components/PdfReaderView.tsx`（`C08`）**：支持拖放与对话框打开本地 PDF、懒加载缩略图/目录书签/文档信息侧栏、缩放/适应页宽/适应整页/全屏、可选文字层复制、`Ctrl+F` 全文搜索与命中高亮跳转、页内与外部 HTTP(S) 链接点击（外链交默认浏览器）、扫描件/加密/数字签名诚实提示，以及一键送入 `P07`/`P08`/`P09`/`P10`/`P11`/`P17`（并在真机截图目视复查中修复了 `rootMargin` 预渲染区导致的首页页码误跳 `2/6` 问题，改为按实际可视重叠像素同步当前页）。
+  - **`src-tauri/src/pdf_ops.rs` + `src/tools/pdf-merge/`（`P07`）+ `src/tools/pdf-split/`（`P08`）**：基于 `lopdf 0.47` 纯矢量页面组装（不光栅化页面，保留文字/矢量/页面尺寸/外链与重映射内链及书签）；`P07` 支持多 PDF 与图片混排、首页缩略图、拖拽调序与可选文件名书签；`P08` 支持逐页、每 N 页与自定义多段区间（中英文标点兼容、预览输出文件清单与越界/重叠校验）及取消清理 `.tmp`。
+- **PR #30（`074f3b5`）｜`P09` 页面整理 + `P10` 删除页面 + `P11` 提取页面**：
+  - **`src/tools/pdf-shared/PdfPageGrid.tsx` + `pageRangeUtils.ts` + `pdf-organize/` + `pdf-delete/` + `pdf-extract/`**：抽离复用懒加载缩略图网格（72 项有界缓存、Shift 多选、拖拽/按钮调序、旋转预览、待删标红与现/原页码对照）。`P09` 支持重排/90°·180°·270° 旋转/标记删除/撤销重做；`P10` 支持勾选+页码表达式双联动删页并强制拦截删空全部页面；`P11` 支持合并单一新 PDF（去重保序）或每页独立导出；后端统一保留矢量文字、自动重映射保留页的内部跳转与书签并剔除悬空链接。
+- **PR #31｜`P12` 图片转 PDF + `P17` PDF 转图片 + `v0.17.0` 发布与全链路实测**：
+  - **`src-tauri/src/pdf_ops.rs`（`images_to_pdf_impl`）+ `src/tools/pdf-images-to-pdf/`（`P12`）**：支持 PNG/JPEG/WebP/BMP/TIFF（及系统 WIC HEIC）拖拽排序，按 EXIF 自动矫正正立像素、透明图按底色合成避免黑底、提供原图尺寸 / A4 / Letter、自动/竖向/横向方向与无/小/中/大边距排版，输出单 PDF 并可直达 `C08`/`P07`/`P09`。
+  - **`src-tauri/src/pdf_export_images.rs` + `src/tools/pdf-to-images/`（`P17`）**：经 `--pdf-worker` 渲染输出全部页面或指定页码为 `72`/`150`/`300 DPI` 的 PNG/JPEG/WebP（及系统 WIC 编码可用时的 HEIC），导出前实时预估首页与最大页像素并对超大图纸按 `8,192 px` / `48 MP` 安全上限等比缩放并明示提示，默认建立防重名子目录、逐页错误隔离与随时取消清理 `.tmp`。
+
+## 下一阶段
+
+下一阶段为 **阶段 5B：进阶 PDF 处理与文档水印**（交付 `P06` PDF 签名、`P13` PDF 页面裁剪、`P14` PDF 压缩、`P15` PDF 加密保护、`P16` PDF 解除密码、`P23` Markdown 转 PDF，并为既有 `I13` 补齐 PDF 水印模式）；随后推进阶段 6（本地 OCR、`I04` 抠图及 `A02`/`V02` 离线语音转写）。
+
 ## v0.16.0 · 阶段 4B2 第二批（录音机、屏幕录制与视频下载，阶段 4 收官）
 
 `src/registry/tools.ts` 收录 **53 个**真实可用工具入口（视频分类达 `15/15` 全量上线、音频分类达 `5/5` 全量上线、图片/文件/开发者/文本非媒体分类 `33` 项）。本轮按三个连续独立功能 PR（PR #25、PR #26、PR #27）顺序交付 `A02`、`V05` 与 `V01`，完成真实 Windows 11 `150%` 缩放安装版全链路实测与单版本正式发布 `v0.16.0`。

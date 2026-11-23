@@ -2,13 +2,20 @@ import { createContext, useCallback, useContext, useState, type ReactNode } from
 import type {
   DeletePdfPagesResult,
   ExtractPdfPagesResult,
+  ImagesToPdfResult,
   MergePdfsResult,
   OrganizePdfResult,
   PdfDocumentInspection,
+  PdfExportImageFormat,
+  PdfExportPageScope,
   PdfExtractMode,
+  PdfPageOrientation,
+  PdfPageSizePreset,
   PdfSearchResult,
   PdfSplitMode,
   PdfTaskProgressPayload,
+  PdfToImagesPlanPreview,
+  PdfToImagesResult,
   SplitPdfPlanPreview,
   SplitPdfResult,
 } from "./tauriBridge";
@@ -124,6 +131,55 @@ export interface PdfExtractSessionState {
   errorMessage: string | null;
 }
 
+export interface PdfImageQueueEntry {
+  id: string;
+  path: string;
+  fileName: string;
+  width: number;
+  height: number;
+  byteLength: number;
+  hasAlpha: boolean;
+  thumbnailDataUrl: string | null;
+  errorMessage: string | null;
+}
+
+export interface PdfImagesToPdfSessionState {
+  items: PdfImageQueueEntry[];
+  pageSize: PdfPageSizePreset;
+  orientation: PdfPageOrientation;
+  marginPt: number;
+  backgroundHex: string;
+  assumedDpi: number;
+  losslessPngImages: boolean;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: ImagesToPdfResult | null;
+  errorMessage: string | null;
+}
+
+export interface PdfToImagesSessionState {
+  sourcePath: string | null;
+  inspection: PdfDocumentInspection | null;
+  inspectLoading: boolean;
+  scope: PdfExportPageScope;
+  singlePage: number;
+  customRange: string;
+  dpi: number;
+  format: PdfExportImageFormat;
+  quality: number;
+  webpLossless: boolean;
+  createSubfolder: boolean;
+  outputDir: string;
+  planPreview: PdfToImagesPlanPreview | null;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: PdfToImagesResult | null;
+  errorMessage: string | null;
+}
+
 export interface PdfSessionRoot {
   reader: PdfReaderSessionState;
   merge: PdfMergeSessionState;
@@ -131,6 +187,8 @@ export interface PdfSessionRoot {
   organize: PdfOrganizeSessionState;
   deletePages: PdfDeleteSessionState;
   extract: PdfExtractSessionState;
+  imagesToPdf: PdfImagesToPdfSessionState;
+  pdfToImages: PdfToImagesSessionState;
 }
 
 const INITIAL_PDF_SESSION: PdfSessionRoot = {
@@ -220,9 +278,44 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  imagesToPdf: {
+    items: [],
+    pageSize: "a4",
+    orientation: "auto",
+    marginPt: 24,
+    backgroundHex: "#FFFFFF",
+    assumedDpi: 150,
+    losslessPngImages: false,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  pdfToImages: {
+    sourcePath: null,
+    inspection: null,
+    inspectLoading: false,
+    scope: "all",
+    singlePage: 1,
+    customRange: "",
+    dpi: 150,
+    format: "png",
+    quality: 90,
+    webpLossless: false,
+    createSubfolder: true,
+    outputDir: "",
+    planPreview: null,
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
 
-export type PdfTargetToolId = "P07" | "P08" | "P09" | "P10" | "P11";
+export type PdfTargetToolId = "P07" | "P08" | "P09" | "P10" | "P11" | "P17";
 
 export interface PdfSessionContextValue {
   pdfSession: PdfSessionRoot;
@@ -234,6 +327,12 @@ export interface PdfSessionContextValue {
   ) => void;
   updateDeleteSession: (updater: (prev: PdfDeleteSessionState) => PdfDeleteSessionState) => void;
   updateExtractSession: (updater: (prev: PdfExtractSessionState) => PdfExtractSessionState) => void;
+  updateImagesToPdfSession: (
+    updater: (prev: PdfImagesToPdfSessionState) => PdfImagesToPdfSessionState,
+  ) => void;
+  updatePdfToImagesSession: (
+    updater: (prev: PdfToImagesSessionState) => PdfToImagesSessionState,
+  ) => void;
   openInPdfReader: (path: string) => void;
   sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
   pendingReaderPath: string | null;
@@ -302,6 +401,20 @@ export function PdfSessionProvider({
     [],
   );
 
+  const updateImagesToPdfSession = useCallback(
+    (updater: (prev: PdfImagesToPdfSessionState) => PdfImagesToPdfSessionState) => {
+      setPdfSession((prev) => ({ ...prev, imagesToPdf: updater(prev.imagesToPdf) }));
+    },
+    [],
+  );
+
+  const updatePdfToImagesSession = useCallback(
+    (updater: (prev: PdfToImagesSessionState) => PdfToImagesSessionState) => {
+      setPdfSession((prev) => ({ ...prev, pdfToImages: updater(prev.pdfToImages) }));
+    },
+    [],
+  );
+
   const openInPdfReader = useCallback(
     (path: string) => {
       setPendingReaderPath(path);
@@ -336,6 +449,8 @@ export function PdfSessionProvider({
         updateOrganizeSession,
         updateDeleteSession,
         updateExtractSession,
+        updateImagesToPdfSession,
+        updatePdfToImagesSession,
         openInPdfReader,
         sendPdfToTool,
         pendingReaderPath,

@@ -2478,6 +2478,201 @@ pub fn extract_pdf_pages_impl(
     }
 }
 
+/* ==================== P12 Images to PDF ==================== */
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagesToPdfRequest {
+    pub task_id: Option<String>,
+    pub image_paths: Vec<String>,
+    pub output_path: String,
+    pub overwrite: Option<bool>,
+    pub page_size: PdfPageSizePreset,
+    pub orientation: PdfPageOrientation,
+    pub margin_pt: f32,
+    pub background_hex: String,
+    pub jpeg_quality: Option<u8>,
+    pub lossless_png_images: Option<bool>,
+    pub assumed_dpi: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePdfPageSummary {
+    pub page_number: usize,
+    pub source_file_name: String,
+    pub width_pt: f32,
+    pub height_pt: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagesToPdfResult {
+    pub output_path: String,
+    pub byte_length: u64,
+    pub page_count: usize,
+    pub pages: Vec<ImagePdfPageSummary>,
+    pub warnings: Vec<String>,
+}
+
+/// P12: Convert one or more images (JPEG/PNG/WebP/BMP/TIFF/WIC HEIC) in order into a new PDF.
+/// Automatically bakes EXIF upright orientation, composites transparency onto `background_hex`,
+/// and applies Original / A4 / Letter + Portrait / Landscape / Auto + margin layout.
+pub fn images_to_pdf_impl(
+    req: &ImagesToPdfRequest,
+    cancel_flag: &AtomicBool,
+    mut on_progress: impl FnMut(PdfTaskProgressPayload),
+) -> Result<ImagesToPdfResult, AppError> {
+    if req.image_paths.is_empty() {
+        return Err(AppError::invalid_param(
+            "Select at least 1 image file to convert to PDF.",
+        ));
+    }
+    if req.image_paths.len() > MAX_PDF_PAGES {
+        return Err(AppError::size_limit(format!(
+            "Cannot combine more than {MAX_PDF_PAGES} images into a single PDF."
+        )));
+    }
+
+    let options = ImageToPdfPageOptions {
+        page_size: req.page_size,
+        orientation: req.orientation,
+        margin_pt: req.margin_pt.clamp(0.0, 144.0),
+        background_hex: req.background_hex.clone(),
+        jpeg_quality: req.jpeg_quality.unwrap_or(92).clamp(40, 100),
+        lossless_png_images: req.lossless_png_images.unwrap_or(false),
+        assumed_dpi: req.assumed_dpi.unwrap_or(150.0).clamp(72.0, 600.0),
+    };
+
+    let task_id = req
+        .task_id
+        .clone()
+        .unwrap_or_else(|| "pdf-images-to-pdf".to_string());
+    let total = req.image_paths.len();
+    let mut sources: Vec<LoadedSourceDoc> = Vec::with_capacity(total);
+    let mut forbidden_sources: Vec<PathBuf> = Vec::with_capacity(total);
+    let mut plan: Vec<PlannedPageRef> = Vec::with_capacity(total);
+    let mut page_summaries: Vec<ImagePdfPageSummary> = Vec::with_capacity(total);
+
+    for (idx, raw_path) in req.image_paths.iter().enumerate() {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err(AppError::cancelled());
+        }
+        let (canonical, _) = validate_existing_input_file(raw_path)?;
+        forbidden_sources.push(canonical.clone());
+
+        let doc = build_image_pdf_document(&canonical, &options)?;
+        let (w_pt, h_pt) = read_first_page_mediabox(&doc).unwrap_or((595.28, 841.89));
+        let file_name = canonical
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("image_{}", idx + 1));
+        let display_name = canonical
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("Image {}", idx + 1));
+
+        let src_idx = sources.len();
+        sources.push(LoadedSourceDoc {
+            display_name,
+            path: Some(canonical),
+            doc,
+            has_signatures: false,
+            has_acroform: false,
+        });
+        plan.push(PlannedPageRef {
+            source_idx: src_idx,
+            source_page_1based: 1,
+            extra_rotation_cw: 0,
+        });
+        page_summaries.push(ImagePdfPageSummary {
+            page_number: idx + 1,
+            source_file_name: file_name,
+            width_pt: w_pt,
+            height_pt: h_pt,
+        });
+
+        on_progress(PdfTaskProgressPayload {
+            task_id: task_id.clone(),
+            tool_id: "P12".to_string(),
+            current: idx + 1,
+            total,
+            percent: ((idx + 1) as f64 / total.max(1) as f64) * 75.0,
+            detail: format!("Processed image {}/{total}", idx + 1),
+        });
+    }
+
+    let staged = AtomicPdfOutput::prepare(
+        &req.output_path,
+        &forbidden_sources,
+        req.overwrite.unwrap_or(false),
+    )?;
+
+    let (mut out_doc, _summary) = assemble_pdf_from_plan(
+        &sources,
+        &plan,
+        &AssembleOptions {
+            add_filename_bookmarks: false,
+            preserve_source_outlines: false,
+        },
+        cancel_flag,
+        |done, tot| {
+            on_progress(PdfTaskProgressPayload {
+                task_id: task_id.clone(),
+                tool_id: "P12".to_string(),
+                current: done,
+                total: tot,
+                percent: 75.0 + (done as f64 / tot.max(1) as f64) * 20.0,
+                detail: format!("Assembling page {done}/{tot}"),
+            });
+        },
+    )?;
+
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
+
+    let bytes = serialize_pdf_document(&mut out_doc)?;
+    let (final_path, byte_length) = staged.write_and_commit(&bytes)?;
+
+    on_progress(PdfTaskProgressPayload {
+        task_id,
+        tool_id: "P12".to_string(),
+        current: total,
+        total,
+        percent: 100.0,
+        detail: "Completed".to_string(),
+    });
+
+    Ok(ImagesToPdfResult {
+        output_path: final_path.to_string_lossy().into_owned(),
+        byte_length,
+        page_count: page_summaries.len(),
+        pages: page_summaries,
+        warnings: Vec::new(),
+    })
+}
+
+fn read_first_page_mediabox(doc: &Document) -> Option<(f32, f32)> {
+    let first_id = *doc.get_pages().values().next()?;
+    let dict = doc.get_dictionary(first_id).ok()?;
+    let arr = dict.get(b"MediaBox").ok()?.as_array().ok()?;
+    if arr.len() < 4 {
+        return None;
+    }
+    let to_f32 = |o: &Object| match o {
+        Object::Real(v) => Some(*v),
+        Object::Integer(v) => Some(*v as f32),
+        _ => None,
+    };
+    let x0 = to_f32(&arr[0])?;
+    let y0 = to_f32(&arr[1])?;
+    let x1 = to_f32(&arr[2])?;
+    let y1 = to_f32(&arr[3])?;
+    Some(((x1 - x0).abs(), (y1 - y0).abs()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3056,5 +3251,72 @@ mod tests {
         assert!(per_page.files[0].collision_adjusted);
         assert_eq!(per_page.files[0].file_name, "book_p01_2.pdf");
         assert_eq!(std::fs::read(&existing).unwrap(), b"EXISTING_CONTENT");
+    }
+
+    #[test]
+    fn p12_images_to_pdf_composites_transparency_and_respects_page_size_presets() {
+        let dir = tempdir().expect("tempdir");
+        let transparent_png = dir.path().join("alpha_logo.png");
+        let landscape_jpg = dir.path().join("wide.jpg");
+        let out_pdf = dir.path().join("album.pdf");
+
+        // Transparent PNG (100x100 fully transparent border + solid center)
+        let mut rgba = image::RgbaImage::from_pixel(100, 100, image::Rgba([0, 0, 0, 0]));
+        for y in 25..75 {
+            for x in 25..75 {
+                rgba.put_pixel(x, y, image::Rgba([220, 40, 40, 255]));
+            }
+        }
+        rgba.save(&transparent_png).expect("save png");
+
+        let wide = image::RgbImage::from_pixel(300, 150, image::Rgb([30, 90, 200]));
+        wide.save(&landscape_jpg).expect("save jpg");
+
+        let cancel = AtomicBool::new(false);
+        let res = images_to_pdf_impl(
+            &ImagesToPdfRequest {
+                task_id: Some("t-p12".into()),
+                image_paths: vec![
+                    transparent_png.to_string_lossy().into_owned(),
+                    landscape_jpg.to_string_lossy().into_owned(),
+                ],
+                output_path: out_pdf.to_string_lossy().into_owned(),
+                overwrite: Some(false),
+                page_size: PdfPageSizePreset::A4,
+                orientation: PdfPageOrientation::Auto,
+                margin_pt: 24.0,
+                background_hex: "#204060".to_string(),
+                jpeg_quality: Some(92),
+                lossless_png_images: Some(true),
+                assumed_dpi: Some(150.0),
+            },
+            &cancel,
+            |_| {},
+        )
+        .expect("images_to_pdf succeeds");
+
+        assert_eq!(res.page_count, 2);
+        // Page 1 (square PNG -> A4 Portrait: 595 x 842), Page 2 (wide JPG -> A4 Landscape: 842 x 595)
+        assert!(res.pages[0].height_pt > res.pages[0].width_pt);
+        assert!(res.pages[1].width_pt > res.pages[1].height_pt);
+
+        // Render page 1 back via PDFium and verify transparent image area composited over #204060
+        let mgr = PdfSessionManager::default();
+        let (meta, rendered_rgba) = mgr
+            .render_page_rgba_for_export(&out_pdf, 1, 72.0, 0, 1024)
+            .expect("render page 1");
+        // Sample inside the image's transparent top-left corner (margin ~24pt -> sample at 15% x, 30% y)
+        let sx = (meta.width_px as f32 * 0.16) as u32;
+        let sy = (meta.height_px as f32 * 0.25) as u32;
+        let idx = ((sy * meta.width_px + sx) * 4) as usize;
+        let r = rendered_rgba[idx];
+        let g = rendered_rgba[idx + 1];
+        let b = rendered_rgba[idx + 2];
+        assert!(
+            (r as i32 - 0x20).abs() <= 10
+                && (g as i32 - 0x40).abs() <= 10
+                && (b as i32 - 0x60).abs() <= 10,
+            "Expected transparent PNG background to composite near #204060, got ({r}, {g}, {b})"
+        );
     }
 }

@@ -202,6 +202,64 @@ export interface PdfMessages {
     resultSummary: (files: number, pages: number, bytes: string) => string;
     duplicatesRemovedNote: (count: number) => string;
   };
+  imagesToPdf: {
+    title: string;
+    subtitle: string;
+    addImagesBtn: string;
+    emptyQueue: string;
+    queueHeader: (count: number) => string;
+    layoutTitle: string;
+    pageSizeLabel: string;
+    sizeOriginal: string;
+    sizeA4: string;
+    sizeLetter: string;
+    orientationLabel: string;
+    orientAuto: string;
+    orientPortrait: string;
+    orientLandscape: string;
+    marginLabel: string;
+    marginNone: string;
+    marginSmall: string;
+    marginNormal: string;
+    marginCustom: string;
+    backgroundLabel: string;
+    backgroundHint: string;
+    dpiLabel: string;
+    losslessPngLabel: string;
+    outputPathLabel: string;
+    exportBtn: string;
+    resultSummary: (pages: number, bytes: string) => string;
+  };
+  pdfToImages: {
+    title: string;
+    subtitle: string;
+    selectSourceBtn: string;
+    emptySource: string;
+    scopeLabel: string;
+    scopeAll: string;
+    scopeSingle: string;
+    scopeRange: string;
+    singlePageLabel: string;
+    customRangeLabel: string;
+    customRangePlaceholder: string;
+    dpiLabel: string;
+    dpiCustomLabel: string;
+    formatLabel: string;
+    qualityLabel: string;
+    webpLosslessLabel: string;
+    heicUnavailableNote: string;
+    createSubfolderLabel: string;
+    outputDirLabel: string;
+    estimateLine: (pages: number, maxW: number, maxH: number, capped: number) => string;
+    exportBtn: string;
+    resultSummary: (ok: number, failed: number, bytes: string) => string;
+    colPage: string;
+    colStatus: string;
+    colDimensions: string;
+    colFile: string;
+    statusOk: string;
+    statusError: string;
+  };
 }
 
 export function formatByteSize(bytes: number): string {
@@ -429,6 +487,69 @@ export const PDF_MESSAGES: Record<Locale, PdfMessages> = {
       resultSummary: (files, pages, bytes) =>
         `提取完成：生成 ${files} 个 PDF，共 ${pages} 页（${bytes}）`,
       duplicatesRemovedNote: (count) => `已自动去除 ${count} 个重复页码。`,
+    },
+    imagesToPdf: {
+      title: "图片合成 PDF",
+      subtitle:
+        "按顺序将多张本地图片（PNG/JPG/WebP/BMP/TIFF/HEIC）合并为 PDF，自动纠正 EXIF 方向并支持纸张与边距",
+      addImagesBtn: "添加图片…",
+      emptyQueue: "添加或拖入 1 张及以上图片。可拖拽排序或上下移动调整页面顺序。",
+      queueHeader: (count) => `已添加 ${count} 张图片（每张图片生成 1 页）`,
+      layoutTitle: "纸张排版与输出",
+      pageSizeLabel: "纸张尺寸",
+      sizeOriginal: "原图尺寸",
+      sizeA4: "A4",
+      sizeLetter: "Letter",
+      orientationLabel: "页面方向",
+      orientAuto: "自动适配",
+      orientPortrait: "纵向",
+      orientLandscape: "横向",
+      marginLabel: "页边距 (pt)",
+      marginNone: "无边距 (0)",
+      marginSmall: "窄边距 (18)",
+      marginNormal: "标准 (36)",
+      marginCustom: "自定义",
+      backgroundLabel: "透明背景填充色",
+      backgroundHint: "透明 PNG/WebP 将合成到此不透明背景色上，默认纯白。",
+      dpiLabel: "原图尺寸基准 DPI",
+      losslessPngLabel: "对 PNG/BMP/TIFF 使用无损压缩嵌入（文件更大，文字与线条更锐利）",
+      outputPathLabel: "输出 PDF 路径",
+      exportBtn: "合成新 PDF",
+      resultSummary: (pages, bytes) => `已合成 ${pages} 页新 PDF（${bytes}）`,
+    },
+    pdfToImages: {
+      title: "PDF 导出为图片",
+      subtitle:
+        "离线将 PDF 全部页、单页或指定页码范围渲染为 PNG / JPEG / WebP（及系统支持的 HEIC）",
+      selectSourceBtn: "选择要导出的 PDF…",
+      emptySource: "选择或拖入 1 个本地 PDF，预览导出分辨率与页数后离线批量渲染为图片。",
+      scopeLabel: "导出页范围",
+      scopeAll: "全部页面",
+      scopeSingle: "单页",
+      scopeRange: "自定义页码",
+      singlePageLabel: "目标页码",
+      customRangeLabel: "页码范围（如 1-3, 5, 8）",
+      customRangePlaceholder: "例如：1-3, 5",
+      dpiLabel: "渲染清晰度 (DPI)",
+      dpiCustomLabel: "自定义 DPI (36–600)",
+      formatLabel: "输出格式",
+      qualityLabel: "压缩质量",
+      webpLosslessLabel: "WebP 无损模式",
+      heicUnavailableNote: "当前系统未检测到 WIC HEIC 编码扩展，已隐藏 HEIC 导出选项。",
+      createSubfolderLabel: "在输出目录下自动建立同名子文件夹",
+      outputDirLabel: "输出文件夹（自动防重名覆盖）",
+      estimateLine: (pages, maxW, maxH, capped) =>
+        `导出预览：共 ${pages} 张图片 · 最大输出像素 ${maxW}×${maxH} px` +
+        (capped > 0 ? ` · ${capped} 页触发安全尺寸上限` : ""),
+      exportBtn: "开始导出图片",
+      resultSummary: (ok, failed, bytes) =>
+        `导出完成：成功 ${ok} 张${failed > 0 ? ` · 失败 ${failed} 张` : ""}（总计 ${bytes}）`,
+      colPage: "页码",
+      colStatus: "状态",
+      colDimensions: "像素尺寸",
+      colFile: "输出文件",
+      statusOk: "成功",
+      statusError: "失败",
     },
   },
   "en-US": {
@@ -663,6 +784,71 @@ export const PDF_MESSAGES: Record<Locale, PdfMessages> = {
       resultSummary: (files, pages, bytes) =>
         `Extracted ${pages} page(s) into ${files} PDF file(s) (${bytes})`,
       duplicatesRemovedNote: (count) => `${count} duplicate page entry/entries removed.`,
+    },
+    imagesToPdf: {
+      title: "Images to PDF",
+      subtitle:
+        "Combine local images (PNG/JPEG/WebP/BMP/TIFF/HEIC) into a PDF with EXIF upright orientation, paper size, and margins",
+      addImagesBtn: "Add Images…",
+      emptyQueue: "Add or drop 1 or more images. Drag or move rows to set page order.",
+      queueHeader: (count) => `${count} image(s) queued (1 page per image)`,
+      layoutTitle: "Page Layout & Output",
+      pageSizeLabel: "Paper Size",
+      sizeOriginal: "Original",
+      sizeA4: "A4",
+      sizeLetter: "Letter",
+      orientationLabel: "Orientation",
+      orientAuto: "Auto",
+      orientPortrait: "Portrait",
+      orientLandscape: "Landscape",
+      marginLabel: "Margin (pt)",
+      marginNone: "None (0)",
+      marginSmall: "Narrow (18)",
+      marginNormal: "Standard (36)",
+      marginCustom: "Custom",
+      backgroundLabel: "Transparency Background",
+      backgroundHint: "Transparent PNG/WebP areas composite cleanly over this opaque color.",
+      dpiLabel: "Assumed DPI (Original size)",
+      losslessPngLabel: "Lossless embedding for PNG/BMP/TIFF (larger file, crisper line art)",
+      outputPathLabel: "Output PDF Path",
+      exportBtn: "Create PDF",
+      resultSummary: (pages, bytes) => `Created ${pages}-page PDF (${bytes})`,
+    },
+    pdfToImages: {
+      title: "PDF to Images",
+      subtitle:
+        "Render all pages, a single page, or custom page ranges to PNG / JPEG / WebP (and HEIC when supported) offline",
+      selectSourceBtn: "Select PDF to Export…",
+      emptySource:
+        "Select or drop a local PDF to estimate output pixel sizes and export pages as images.",
+      scopeLabel: "Pages",
+      scopeAll: "All Pages",
+      scopeSingle: "Single Page",
+      scopeRange: "Custom Range",
+      singlePageLabel: "Page Number",
+      customRangeLabel: "Page Range (e.g. 1-3, 5, 8)",
+      customRangePlaceholder: "Example: 1-3, 5",
+      dpiLabel: "Resolution (DPI)",
+      dpiCustomLabel: "Custom DPI (36–600)",
+      formatLabel: "Format",
+      qualityLabel: "Quality",
+      webpLosslessLabel: "Lossless WebP",
+      heicUnavailableNote:
+        "Windows WIC HEIC encoding is unavailable on this machine; HEIC export is hidden.",
+      createSubfolderLabel: "Create named subfolder inside output directory",
+      outputDirLabel: "Output Folder (collision-safe, never overwrites)",
+      estimateLine: (pages, maxW, maxH, capped) =>
+        `Estimate: ${pages} image(s) · Max ${maxW}×${maxH} px` +
+        (capped > 0 ? ` · ${capped} page(s) safely capped` : ""),
+      exportBtn: "Export Images",
+      resultSummary: (ok, failed, bytes) =>
+        `Exported ${ok} image(s)${failed > 0 ? ` · ${failed} failed` : ""} (${bytes} total)`,
+      colPage: "Page",
+      colStatus: "Status",
+      colDimensions: "Pixels",
+      colFile: "Output File",
+      statusOk: "OK",
+      statusError: "Error",
     },
   },
 };

@@ -4,15 +4,15 @@ WinKit 是一款面向 Windows 11 x64 的本地优先桌面效率工具箱，基
 
 ## Windows 11 x64 下载与安装
 
-[下载 v0.16.0 安装程序（.exe）](https://github.com/LuckyLivio/WinKit/releases/download/v0.16.0/WinKit_0.16.0_x64-setup.exe) · [SHA256SUMS.txt](https://github.com/LuckyLivio/WinKit/releases/download/v0.16.0/SHA256SUMS.txt) · [v0.16.0 发行说明](https://github.com/LuckyLivio/WinKit/releases/tag/v0.16.0) · [播放/下载 v0.16.0 全链路有声演示 MP4](https://github.com/LuckyLivio/WinKit/releases/download/v0.16.0/WinKit_v0.16.0_showcase.mp4)
+[下载 v0.17.0 安装程序（.exe）](https://github.com/LuckyLivio/WinKit/releases/download/v0.17.0/WinKit_0.17.0_x64-setup.exe) · [SHA256SUMS.txt](https://github.com/LuckyLivio/WinKit/releases/download/v0.17.0/SHA256SUMS.txt) · [v0.17.0 发行说明](https://github.com/LuckyLivio/WinKit/releases/tag/v0.17.0) · [下载 v0.17.0 演示 PDF 样张](https://github.com/LuckyLivio/WinKit/releases/download/v0.17.0/WinKit_v0.17.0_pdf_sample.pdf)
 
-1. 下载安装程序和校验文件。在下载目录打开 PowerShell，运行 `Get-FileHash .\WinKit_0.16.0_x64-setup.exe -Algorithm SHA256`，与校验文件中该文件名对应的摘要核对。
+1. 下载安装程序和校验文件。在下载目录打开 PowerShell，运行 `Get-FileHash .\WinKit_0.17.0_x64-setup.exe -Algorithm SHA256`，与校验文件中该文件名对应的摘要核对。
 2. 关闭正在运行的 WinKit，双击安装程序并选择语言，按提示安装到当前 Windows 用户账户。升级已有版本时使用同一账户（保留主题、语言、收藏夹与已配置的本地媒体组件）。
-3. 从开始菜单打开 WinKit。在「视频」「音频」「图片」「文件」「开发者」「文本与语音」中打开 53 项本地工具，亦可按 `Ctrl+K` 即时搜索。
+3. 从开始菜单打开 WinKit。在「视频」「音频」「图片」「文档与 PDF」「文件」「开发者」「文本与语音」中打开 60 项本地工具（侧栏另提供 `C08`「PDF 快速预览」工作台），亦可按 `Ctrl+K` 即时搜索。
 
 项目当前未配置 Authenticode 代码签名证书，Windows 可能显示“未知发布者”。发行说明记录对应安装程序的签名检查结果。WinKit 需要 Microsoft Edge WebView2 Runtime；如系统缺少此运行时，安装程序会联网获取。离线安装前请先准备好 WebView2。
 
-- **非媒体工具（33 项）**：安装后立即可 100% 离线运行（`I02` / `I11` 随包内置 MIT 许可的 YuNet 人脸框检测 ONNX 模型与纯 Rust `tract-onnx` CPU 推理运行库，不联网下载也不提取身份特征；`I13` 图片水印模式纯 Rust 离线运行，切换至「视频水印」模式时复用本地 FFmpeg；HEIC 读写通过 Windows 原生 WIC 接口调用系统已安装的 HEIF/HEVC 扩展，缺失时给出明确引导而不报错崩溃）；点击二维码工具中已识别网址上的“在浏览器打开”会将该地址交给系统默认浏览器。
+- **非媒体工具（40 项，含 7 项独立 PDF 工具及 `C08` 内置 PDF 快速预览）**：安装后立即可 100% 离线运行（基础 PDF 工作台随包内置固定版本离线 `PDFium` `chromium/8179` 独立子进程渲染器与纯 Rust 矢量结构引擎，无需安装 Acrobat、Ghostscript、Python 或任何外部运行库；`I02` / `I11` 随包内置 MIT 许可的 YuNet 人脸框检测 ONNX 模型与纯 Rust `tract-onnx` CPU 推理运行库，不联网下载也不提取身份特征；`I13` 图片水印模式纯 Rust 离线运行，切换至「视频水印」模式时复用本地 FFmpeg；HEIC 读写通过 Windows 原生 WIC 接口调用系统已安装的 HEIF/HEVC 扩展，缺失时给出明确引导而不报错崩溃）；点击二维码工具或 PDF 预览中已识别 HTTP(S) 外部链接时会将该地址交给系统默认浏览器。
 - **音视频工具（20 项：`V01–V15` 全部 15 项与 `A01–A05` 全部 5 项，另含 `I13` 视频水印模式）**：
   - **`A02` 录音机无损 WAV 录制**：直接使用 Windows 原生 WASAPI 离线运行，无需 FFmpeg；仅导出 M4A/AAC 时复用本地 FFmpeg。
   - **其余音视频处理与 `V05` 屏幕录制**：使用本机 `FFmpeg` / `ffprobe` 本地处理，**首次配置媒体组件只需 2–3 步**，配置完成后即可长期完全离线运行：
@@ -22,6 +22,16 @@ WinKit 是一款面向 Windows 11 x64 的本地优先桌面效率工具箱，基
        - **第 2 步**：查看卡片上明示的固定版本信息（[`GyanD/codexffmpeg` 9.1 Essentials Windows x64](https://github.com/GyanD/codexffmpeg/releases/tag/9.1)，下载包 `34.97 MiB` / `36,671,021` 字节，安装占用 `210.80 MiB` / `221,044,037` 字节，GNU GPL v3，仅写入 `%LOCALAPPDATA%\com.luckylivio.winkit\media-tools\ffmpeg-9.1-essentials`，**不修改系统 `PATH`**）并主动点击「下载并配置媒体组件」；
        - **第 3 步**：等待自动下载、逐字节校验 SHA-256、解压与 `ffmpeg`/`ffprobe` 自检完成后即可使用（下载中途可随时取消重试；配置完成后彻底断网也可正常重启使用全部离线音视频工具）。
   - **`V01` 视频下载与可选 `yt-dlp` 组件**：普通 HTTP(S) 媒体直链（如 `.mp4` / `.m4a`）无需 `yt-dlp` 即可直接下载；网页视频与多清晰度 HLS/DASH 自适应清单支持指定本机已有 `yt-dlp.exe`，或主动点击下载校验固定官方 Windows 版本（[`yt-dlp/yt-dlp` `2026.10.26`](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.26)，`22.48 MiB` / `23,575,744` 字节，SHA-256 校验，The Unlicense，更新或校验失败时自动保留原有可用版本，不修改系统 `PATH`）。按上游说明自动检测本机 JavaScript 运行时（如 Deno / Node.js）并明确提示。
+
+## v0.17.0 基础 PDF 工作台实景与离线自产演示样张
+
+真实安装版 `C08 PDF 快速预览` 工作区实景（Windows 11 `150%` 缩放，展示离线随包 `PDFium` 渲染、缩略图/目录/信息侧栏、可选中文字层、`Ctrl+F` 全文搜索命中高亮、外部/页内链接与一键送入 `P08`/`P09`/`P17`/`P07`，侧栏 `60` 项入口零截断；所载入 6 页中英文图文演示样张由安装版 `WinKit v0.17.0` 经 `P12 图片转 PDF` 与 `P07 PDF 合并` 离线自产，可直接下载验证：[WinKit_v0.17.0_pdf_sample.pdf](https://github.com/LuckyLivio/WinKit/releases/download/v0.17.0/WinKit_v0.17.0_pdf_sample.pdf)；固定版本截图直链：[v0.17.0-c08-pdf-reader.png](https://raw.githubusercontent.com/LuckyLivio/WinKit/v0.17.0/docs/screenshots/v0.17.0-c08-pdf-reader.png)）：
+
+![WinKit v0.17.0 C08 PDF 快速预览工作区](https://raw.githubusercontent.com/LuckyLivio/WinKit/v0.17.0/docs/screenshots/v0.17.0-c08-pdf-reader.png)
+
+真实安装版 `P09 PDF 页面重排与旋转` 工作区实景（由 `C08` 一键送入同份 6 页 PDF，懒加载缩略图网格展示页面互换后的 `现 1 ← 原 2` / `现 2 ← 原 1` 对照标签、`90°` 旋转标记与实时撤销/重做工具栏；固定版本截图直链：[v0.17.0-p09-organize.png](https://raw.githubusercontent.com/LuckyLivio/WinKit/v0.17.0/docs/screenshots/v0.17.0-p09-organize.png)）：
+
+![WinKit v0.17.0 P09 PDF 页面重排与旋转工作区](https://raw.githubusercontent.com/LuckyLivio/WinKit/v0.17.0/docs/screenshots/v0.17.0-p09-organize.png)
 
 ## v0.16.0 视频下载工作区实景与全链路有声 MP4 成片演示
 
@@ -87,19 +97,24 @@ Windows 11 `150%` 高分屏缩放下真实安装版 `I12 截图批注` 工作区
 
 ![WinKit v0.11.0 150% 缩放安装版工作区](https://raw.githubusercontent.com/LuckyLivio/WinKit/main/docs/screenshots/v0.11.0-editor-workspace.png)
 
-## v0.16.0 功能
+## v0.17.0 功能
 
 ### 桌面工作台与基础设施
 
-- **工具检索与导航**：左侧分类导航、分类筛选（视频 / 音频 / 图片 / 文件 / 开发者 / 文本与语音）、即时关键词搜索（`Ctrl+K`）、收藏夹、最近使用记录（注册表位于 `src/registry/tools.ts`）。
+- **工具检索与导航**：左侧分类导航、分类筛选（视频 / 音频 / 图片 / 文档与 PDF / 文件 / 开发者 / 文本与语音）、即时关键词搜索（`Ctrl+K`）、收藏夹、最近使用记录（注册表位于 `src/registry/tools.ts`），以及位于侧栏共用区域的 **`C08` PDF 快速预览** 工作台（不计入 102 项工具条目数）。
+- **离线 PDF 渲染与矢量结构基础设施**：随安装包内置固定版本 `PDFium`（[`bblanchon/pdfium-binaries` `chromium/8179`](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium/8179)，含 `licenses/pdfium-notices.txt`），全部页面光栅化与文本层提取隔离运行在独立的 `winkit.exe --pdf-worker` 子进程中（受 Windows Job Object `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 托管，随主进程关闭即时回收，配合 64 项 / 64 MiB 有界 LRU 缓存避免大文档内存失控）；合并、拆分、重排、旋转、删页与提取均由纯 Rust 矢量结构引擎处理，不光栅化页面，保持可选文字、矢量线条与原有页面尺寸/方向，默认防覆盖原子写入绝不修改源文件。
 - **外观与双语**：浅色主题（默认）、深色主题与跟随系统切换；简体中文（`zh-CN`）与英文（`en-US`）实时切换与偏好持久化，用户态覆盖升级保留设置。
 - **隐私、文件安全与窗口退出闭环**：
-  - 工具切换在当前进程内存中保留工作状态（`D13` 生成密码在切换返回时保持掩码显示），默认绝不将用户输入文本、链接、坐标、生成密码、JWT 令牌、共享密钥、差异文本或路径写入磁盘；`V01` 在界面、日志与错误提示中自动隐去 URL 中的认证信息、令牌与签名查询参数。
+  - 工具切换在当前进程内存中保留工作状态（`D13` 生成密码在切换返回时保持掩码显示），默认绝不将用户输入文本、PDF 文件内容、链接、坐标、生成密码、JWT 令牌、共享密钥、差异文本或路径写入磁盘；`V01` 在界面、日志与错误提示中自动隐去 URL 中的认证信息、令牌与签名查询参数。
   - 原生文件打开/保存对话框与桌面拖放接入，后端强制阻止覆盖源文件、拦截同名静默覆盖，并通过临时文件原子提交避免写出半成品。
-  - 统一接入前后端同步关闭准入与 `TaskRegistry`：录制中（`A02` / `V05`）关窗提供「继续使用 / 停止并保留已录内容 / 放弃录制并退出」三项明确选择；运行中下载任务（`V01`）通过 Windows Job Object 托管子进程树，取消或关窗时同步终止 `yt-dlp` 与子级 `ffmpeg` 并彻底清理暂存 `.part`/`.tmp` 文件；空闲关闭在互斥锁内原子置位 `shutting_down` 后立即销毁窗口。
+  - 统一接入前后端同步关闭准入与 `TaskRegistry`：录制中（`A02` / `V05`）关窗提供「继续使用 / 停止并保留已录内容 / 放弃录制并退出」三项明确选择；运行中下载任务（`V01`）与 PDF 渲染子进程（`--pdf-worker`）均通过 Windows Job Object 托管，取消或关窗时同步终止并彻底清理暂存 `.part`/`.tmp` 文件；空闲关闭在互斥锁内原子置位 `shutting_down` 后立即销毁窗口。
 - **共用本地媒体组件与按需 `yt-dlp` 管理**：统一支持自动探测系统 `FFmpeg`/`ffprobe`、手动指定目录及一键校验安装 `GyanD/codexffmpeg 9.1` Essentials（SHA-256 + 自检，不改系统 `PATH`）；`V01` 支持直链媒体免依赖下载，并可在工具内或「设置 → 视频下载组件（yt-dlp）」配置本机已有 `yt-dlp.exe` 或一键下载校验官方固定版本 `2026.10.26`（更新失败保留原可用版本，同步检测 Deno / Node.js 等 JS 运行时）；内置白名单 `winkitmedia` 协议支持 HTTP Range（`206 Partial Content`）本地流式预览与音轨试听。
 
-### 可用本地工具（53 项）
+### 共用能力：`C08` 内置 PDF 快速预览（阶段 5A 上线，不计入 102 项工具数）
+
+- 在应用内直接拖放或打开任意本地 PDF 离线浏览，提供懒加载缩略图与目录书签/文档信息侧栏、缩放/适应页宽/适应整页/全屏、高分屏透明可选文字层复制、`Ctrl+F` 全文搜索高亮与上下跳转、页内与外部 HTTP(S) 链接点击（外链交系统默认浏览器），对扫描件（无文字层）、加密 PDF 与含数字签名文档给出如实提示，并可一键将当前 PDF 送入 `P07`、`P08`、`P09`、`P10`、`P11` 或 `P17` 继续处理。
+
+### 可用本地工具（60 项）
 
 1. **`V01` 视频下载**（阶段 4B2 第二批完整实现，待用户验收）
    - 支持粘贴一条或多条 HTTP(S) 链接，解析并展示标题、来源、可用清晰度与音轨语言；提供最佳、最高 1080p、最高 720p、仅音频 M4A 与优先 H.264 选项，队列逐项展示实时进度、取消（自动清理 `.part`/`.tmp` 且无残留进程）、准确失败原因（登录/年龄/地区/DRM/JS 运行时/断网等）与重试，完成后由本地 `ffprobe` 展示实际分辨率、视频/音频编码与音轨语言并支持一键送往 `V10`/`V11`/`V04`/`A03`。
@@ -255,6 +270,20 @@ Windows 11 `150%` 高分屏缩放下真实安装版 `I12 截图批注` 工作区
 53. **`F05` 下载图片按来源归档**（已按 Windows 文件夹归档方案实现，待用户验收）
     - 仅在用户手动选择本地图片文件夹后运行（绝不自动扫描日常「下载」目录）。本地读取已有 NTFS `Zone.Identifier` 备用数据流中的 `HostUrl` / `ReferrerUrl` 并仅提取域名（即时丢弃完整 URL 与查询参数，绝不写入日志或配置），不读取浏览器历史。
     - 执行前全量预览文件名、识别来源/站点、目标相对路径与冲突原因；支持按域名或可编辑的常用图床 / CDN 到站点映射表命名（严格域边界匹配，如 `pbs.twimg.com → X (Twitter)`）；无来源、元数据不可读或非 NTFS 卷默认保持原位（可显式勾选归入「未知来源」）；确认后逐项复核文件哈希与元数据（跳过预览后被修改的图片），通过不带覆盖标志的 `MoveFileExW(..., 0)` 同卷原子移动并原样保留 `ZoneId` 与安全流，二次运行自动识别已归档图片不再重复套娃，完成后支持打开目标文件夹。
+54. **`P07` PDF 合并**（阶段 5A 完整实现，待用户验收）
+    - 支持多个 PDF 与 PNG/JPEG/WebP/BMP/TIFF（及系统已装 WIC 扩展时的 HEIC）图片混排合并，拖拽或按钮调整顺序并展示首页缩略图与总页数；可选按原文件名自动生成顶层书签大纲，纯矢量无损保留各页尺寸、文字层、外链 URI 与内部跳转重映射，始终写入新 PDF 保护原件，并可一键送入 `C08` 预览。
+55. **`P08` PDF 拆分**（阶段 5A 完整实现，待用户验收）
+    - 支持「按单页拆分」「每 N 页一组」与「自定义多段页码区间」（兼容中英文逗号/分号/破折号），导出前实时预览目标文件清单、页数与越界/重叠校验；纯矢量无损拆分，自动防重名写入目标目录并支持中途取消清理 `.tmp`。
+56. **`P09` PDF 页面整理**（阶段 5A 完整实现，待用户验收）
+    - 懒加载缩略图网格支持拖拽或按钮微调页序、单选/多选/Shift 范围选中左/右旋转 90° 与标记删除，实时标注「现页码 ← 原页码」与旋转角并支持撤销/重做与重置；矢量重组保留文字与尺寸，自动重映射保留页之间的内部链接与书签，强制禁止删空全部页面并写入新文件。
+57. **`P10` PDF 删除页面**（阶段 5A 完整实现，待用户验收）
+    - 缩略图点击勾选与页码范围输入双联动标红待删页，支持反选、奇数页/偶数页与清空并实时提示“原页数 → 保留页数”；强制阻止删空整份文档，导出精简副本时自动移除悬空链接并重映射保留页跳转，原件零修改。
+58. **`P11` PDF 提取页面**（阶段 5A 完整实现，待用户验收）
+    - 缩略图勾选与页码范围双联动，支持「合并为一个新 PDF」（按所选顺序自动去重）或「每页导出为独立 PDF」；纯矢量保留文字与页面尺寸，防覆盖原子写入并支持在 `C08` 中直接预览结果。
+59. **`P12` 图片转 PDF**（阶段 5A 完整实现，待用户验收）
+    - 支持 PNG、JPEG、WebP、BMP、TIFF（及系统已装 WIC 扩展时的 HEIC）多图拖拽排序与方向预览；自动按 EXIF 方向矫正为正立像素，透明图片按所选底色（默认白色）合成避免透明黑底，支持原图尺寸 / A4 / Letter、自动随图方向 / 强制竖向 / 强制横向及无/小/中/大边距排版，输出单文件 PDF 并支持直接送入 `C08` 预览或 `P07`/`P09`。
+60. **`P17` PDF 转图片**（阶段 5A 完整实现，待用户验收）
+    - 经离线 `PDFium` 独立子进程按 `72` / `150` / `300 DPI` 导出全部页面或指定页码范围为 PNG、JPEG、WebP（以及系统已装 WIC 编码扩展时的 HEIC）；导出前实时预估首页与最大页输出像素并对超大图纸按安全上限（单边 `8,192 px` / `48 MP`）等比缩放与明确提示，默认建立防重名输出子目录、逐页错误隔离、随时取消并清理 `.tmp`。
 
 ## 项目文档索引
 
@@ -274,8 +303,9 @@ Windows 11 `150%` 高分屏缩放下真实安装版 `I12 截图批注` 工作区
 # 严格按锁文件安装前端依赖
 npm ci
 
-# 下载并校验本地 I02/I11 YuNet 人脸检测 ONNX 模型（构建期一次拉取并核对 SHA-256，不入源码库）
+# 下载并校验本地 I02/I11 YuNet 人脸检测 ONNX 模型与阶段 5A 离线 PDFium 运行库（按固定 SHA-256 拉取，不入源码库）
 npm run ensure-face-model
+npm run ensure-pdfium
 
 # 启动真实 Windows Tauri 桌面开发窗口
 npm run tauri dev
