@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 22 active tools with unique IDs, complete bilingual metadata, and Coordinate Picker search aliases", () => {
+  it("registers all 24 active tools with unique IDs, complete bilingual metadata, and Coordinate Picker search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -112,6 +112,8 @@ describe("WinKit desktop workbench shell", () => {
       "T08",
       "T09",
       "I03",
+      "I05",
+      "I06",
       "F01",
       "F02",
       "F03",

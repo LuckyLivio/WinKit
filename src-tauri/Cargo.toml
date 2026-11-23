@@ -17,11 +17,17 @@ tauri-build = { version = "2", features = [] }
 arboard = "3"
 base64 = "0.22"
 bzip2-rs = "0.1"
+exoquant = "0.2"
 flate2 = "1"
+gif = "0.14"
 hmac = "0.12"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "tiff", "gif"] }
+jpeg-encoder = "0.7"
+kamadak-exif = "0.6"
 lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
 md-5 = "0.10"
+oxipng = { version = "10", default-features = false, features = ["parallel"] }
+png = "0.18"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -32,6 +38,7 @@ tar = { version = "0.4", default-features = false }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 thiserror = "2"
+tiff = "0.11"
 unicode-general-category = "1"
 unicode-script = "0.5"
 unicode-security = "0.1"
@@ -39,15 +46,20 @@ unicode-segmentation = "1"
 unicode_names2 = "1"
 unrar-rs = { version = "0.16", default-features = false, features = ["crypto-rust"] }
 uuid = { version = "1", features = ["v4", "v7"] }
+webp = { version = "0.3", default-features = false }
 zip = { version = "9", default-features = false, features = ["aes-crypto", "deflate-flate2", "lzma", "xz", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "5"
 windows = { version = "0.62", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Imaging",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Memory",
   "Win32_System_Registry",
+  "Win32_System_Variant",
   "Win32_UI_Shell",
 ] }
 windows-core = "0.62"

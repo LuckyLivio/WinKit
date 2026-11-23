@@ -71,15 +71,29 @@ import {
   type OrganizeNamingMode,
   type OrganizePreviewResponse,
 } from "../tools/organize-downloads/organizeEngine";
+import type {
+  BatchImageJobResponse,
+  CompressImagesBatchRequest,
+  CompressQualityPreset,
+  ConvertImagesBatchRequest,
+  HeicCapabilities,
+  ImageBatchProgressPayload,
+  ImageConvertTargetFormat,
+  InspectedImageItem,
+  PngCompressMode,
+} from "../tools/image-batch/imageBatchModel";
 import {
   bindDisposableListener,
   cancelBackendTask,
+  compressImagesBatch,
+  convertImagesBatch,
   createArchive,
   extractArchivesBatch,
   parseBackendError,
   scanDuplicateFolders,
   subscribeArchiveProgress,
   subscribeDuplicateScanProgress,
+  subscribeImageBatchProgress,
   type BatchRenameSkippedItem,
 } from "./tauriBridge";
 
@@ -351,6 +365,35 @@ export interface OrganizeDownloadsSessionState {
   errorMessage: string | null;
 }
 
+export interface ImageConvertSessionState {
+  items: InspectedImageItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  targetFormat: ImageConvertTargetFormat;
+  quality: number;
+  webpLossless: boolean;
+  backgroundHex: string;
+  heicCapabilities: HeicCapabilities | null;
+  status: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: ImageBatchProgressPayload | null;
+  lastReport: BatchImageJobResponse | null;
+  errorMessage: string | null;
+}
+
+export interface ImageCompressSessionState {
+  items: InspectedImageItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  qualityPreset: CompressQualityPreset;
+  pngMode: PngCompressMode;
+  status: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: ImageBatchProgressPayload | null;
+  lastReport: BatchImageJobResponse | null;
+  errorMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -373,6 +416,8 @@ export interface SessionWorkspaces {
   findDuplicates: FindDuplicatesSessionState;
   archive: ArchiveSessionState;
   organizeDownloads: OrganizeDownloadsSessionState;
+  imageConvert: ImageConvertSessionState;
+  imageCompress: ImageCompressSessionState;
 }
 
 const INITIAL_SESSION_STATE: SessionWorkspaces = {
@@ -600,6 +645,33 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     lastExecution: null,
     errorMessage: null,
   },
+  imageConvert: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    targetFormat: "jpeg",
+    quality: 88,
+    webpLossless: false,
+    backgroundHex: "#FFFFFF",
+    heicCapabilities: null,
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
+  imageCompress: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    qualityPreset: "medium",
+    pngMode: "lossless",
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -656,6 +728,26 @@ interface SessionStoreContextValue {
       | Partial<OrganizeDownloadsSessionState>
       | ((prev: OrganizeDownloadsSessionState) => OrganizeDownloadsSessionState),
   ) => void;
+  updateImageConvertSession: (
+    patchOrUpdater:
+      | Partial<ImageConvertSessionState>
+      | ((prev: ImageConvertSessionState) => ImageConvertSessionState),
+  ) => void;
+  startImageConvertBatch: (
+    req: ConvertImagesBatchRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<BatchImageJobResponse | null>;
+  cancelImageConvertBatch: () => Promise<void>;
+  updateImageCompressSession: (
+    patchOrUpdater:
+      | Partial<ImageCompressSessionState>
+      | ((prev: ImageCompressSessionState) => ImageCompressSessionState),
+  ) => void;
+  startImageCompressBatch: (
+    req: CompressImagesBatchRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<BatchImageJobResponse | null>;
+  cancelImageCompressBatch: () => Promise<void>;
 }
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
@@ -1080,6 +1172,196 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const imgBatchSeqRef = useRef(1);
+  const activeConvertTaskRef = useRef<string | null>(null);
+  const activeCompressTaskRef = useRef<string | null>(null);
+
+  const updateImageConvertSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ImageConvertSessionState>
+        | ((prev: ImageConvertSessionState) => ImageConvertSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        imageConvert:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.imageConvert)
+            : { ...prev.imageConvert, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  const updateImageCompressSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ImageCompressSessionState>
+        | ((prev: ImageCompressSessionState) => ImageCompressSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        imageCompress:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.imageCompress)
+            : { ...prev.imageCompress, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return bindDisposableListener(
+      () =>
+        subscribeImageBatchProgress((payload) => {
+          setSession((prev) => {
+            if (prev.imageConvert.activeTaskId === payload.taskId) {
+              return {
+                ...prev,
+                imageConvert: { ...prev.imageConvert, liveProgress: payload },
+              };
+            }
+            if (prev.imageCompress.activeTaskId === payload.taskId) {
+              return {
+                ...prev,
+                imageCompress: { ...prev.imageCompress, liveProgress: payload },
+              };
+            }
+            return prev;
+          });
+        }),
+      "img-batch-progress",
+    );
+  }, []);
+
+  const startImageConvertBatch = useCallback(
+    async (
+      req: ConvertImagesBatchRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<BatchImageJobResponse | null> => {
+      if (activeConvertTaskRef.current) return null;
+      const taskId = `i05-convert-${Date.now()}-${imgBatchSeqRef.current++}`;
+      activeConvertTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        imageConvert: {
+          ...prev.imageConvert,
+          status: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "I05",
+            currentIndex: 1,
+            totalItems: req.sourcePaths.length,
+            currentFileName: req.sourcePaths[0] ?? "",
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await convertImagesBatch(taskId, req);
+        if (activeConvertTaskRef.current !== taskId) return null;
+        activeConvertTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageConvert: {
+            ...prev.imageConvert,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeConvertTaskRef.current !== taskId) return null;
+        activeConvertTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageConvert: {
+            ...prev.imageConvert,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelImageConvertBatch = useCallback(async () => {
+    const tid = activeConvertTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const startImageCompressBatch = useCallback(
+    async (
+      req: CompressImagesBatchRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<BatchImageJobResponse | null> => {
+      if (activeCompressTaskRef.current) return null;
+      const taskId = `i06-compress-${Date.now()}-${imgBatchSeqRef.current++}`;
+      activeCompressTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        imageCompress: {
+          ...prev.imageCompress,
+          status: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "I06",
+            currentIndex: 1,
+            totalItems: req.sourcePaths.length,
+            currentFileName: req.sourcePaths[0] ?? "",
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await compressImagesBatch(taskId, req);
+        if (activeCompressTaskRef.current !== taskId) return null;
+        activeCompressTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageCompress: {
+            ...prev.imageCompress,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeCompressTaskRef.current !== taskId) return null;
+        activeCompressTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageCompress: {
+            ...prev.imageCompress,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelImageCompressBatch = useCallback(async () => {
+    const tid = activeCompressTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -1110,6 +1392,12 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         startArchiveCreate,
         cancelArchiveTask,
         updateOrganizeDownloadsSession,
+        updateImageConvertSession,
+        startImageConvertBatch,
+        cancelImageConvertBatch,
+        updateImageCompressSession,
+        startImageCompressBatch,
+        cancelImageCompressBatch,
       }}
     >
       {children}

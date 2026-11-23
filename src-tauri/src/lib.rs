@@ -6,6 +6,7 @@ pub mod error;
 pub mod find_duplicates;
 pub mod fs_guard;
 pub mod hasher;
+pub mod image_core;
 pub mod iso_reader;
 pub mod jwt;
 pub mod organize_downloads;
@@ -14,6 +15,7 @@ mod qr;
 pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
+pub mod wic_heic;
 
 use crate::archive::{
     create_archive_impl, extract_archives_batch_with_limit, inspect_archive_impl,
@@ -50,6 +52,13 @@ use crate::hasher::{
     prepare_batch_hash_task, prepare_file_hash_task, BatchHashInputItem, HashAlgorithm,
     MultiFileBatchHashResult, MultiFileHashResult, MultiTextHashResult, HASH_BATCH_ITEM_EVENT,
 };
+use crate::image_core::{
+    compress_images_batch_impl, convert_images_batch_impl, inspect_batch_images_impl,
+    preview_compress_image_impl, preview_convert_image_impl, BatchImageJobResponse,
+    CompressImagesBatchRequest, ConvertImagesBatchRequest, InspectBatchImagesResponse,
+    PreviewCompressImageRequest, PreviewCompressImageResponse, PreviewConvertImageRequest,
+    PreviewConvertImageResponse, IMAGE_BATCH_PROGRESS_EVENT,
+};
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
 use crate::organize_downloads::{
     execute_organize_downloads_impl, preview_organize_downloads_impl, OrganizeExecuteRequest,
@@ -66,6 +75,7 @@ use crate::unicode_inspector::{
 use crate::uuid_tool::{
     generate_uuid_batch, inspect_uuid_string, UuidGenVersion, UuidInspectResult,
 };
+use crate::wic_heic::{get_heic_capabilities, HeicCapabilities};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -1073,6 +1083,165 @@ fn open_local_directory(registry: State<'_, TaskRegistry>, path: String) -> Resu
 }
 
 #[tauri::command]
+async fn get_image_heic_capabilities(
+    registry: State<'_, TaskRegistry>,
+) -> Result<HeicCapabilities, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(get_heic_capabilities)
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "HEIC capability probe failed."))
+}
+
+#[tauri::command]
+async fn inspect_batch_images(
+    registry: State<'_, TaskRegistry>,
+    paths: Vec<String>,
+) -> Result<InspectBatchImagesResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || inspect_batch_images_impl(&paths))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image inspection worker failed."))
+}
+
+#[tauri::command]
+async fn preview_convert_image(
+    registry: State<'_, TaskRegistry>,
+    req: PreviewConvertImageRequest,
+) -> Result<PreviewConvertImageResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || preview_convert_image_impl(&req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Convert preview worker failed."))?
+}
+
+#[tauri::command]
+async fn convert_images_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: ConvertImagesBatchRequest,
+) -> Result<BatchImageJobResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid image convert task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I05", true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = convert_images_batch_impl(&tid, &req, &cancel_flag, |ev| {
+            let _ = app.emit(IMAGE_BATCH_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = done.succeeded_count as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image convert worker failed."))?
+}
+
+#[tauri::command]
+async fn preview_compress_image(
+    registry: State<'_, TaskRegistry>,
+    req: PreviewCompressImageRequest,
+) -> Result<PreviewCompressImageResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || preview_compress_image_impl(&req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Compress preview worker failed."))?
+}
+
+#[tauri::command]
+async fn compress_images_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: CompressImagesBatchRequest,
+) -> Result<BatchImageJobResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid image compress task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I06", true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = compress_images_batch_impl(&tid, &req, &cancel_flag, |ev| {
+            let _ = app.emit(IMAGE_BATCH_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = (done.succeeded_count + done.kept_original_count) as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image compress worker failed."))?
+}
+
+#[tauri::command]
 async fn preview_organize_downloads(
     registry: State<'_, TaskRegistry>,
     req: OrganizePreviewRequest,
@@ -1217,6 +1386,12 @@ pub fn run() {
             open_local_directory,
             preview_organize_downloads,
             execute_organize_downloads,
+            get_image_heic_capabilities,
+            inspect_batch_images,
+            preview_convert_image,
+            convert_images_batch,
+            preview_compress_image,
+            compress_images_batch,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,
