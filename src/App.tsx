@@ -15,6 +15,7 @@ import {
   toggleFavoriteId,
   type UserPreferences,
 } from "./lib/preferences";
+import { MediaSessionProvider } from "./lib/mediaSessionStore";
 import { SessionStoreProvider } from "./lib/sessionStore";
 import {
   enterFrontendShutdownGate,
@@ -325,70 +326,72 @@ export function App({ toolsOverride }: AppProps = {}) {
   return (
     <I18nContext.Provider value={i18nValue}>
       <SessionStoreProvider onNavigateToTool={openTool}>
-        <div className="app-shell">
-          <Sidebar
-            route={route}
-            tools={tools}
-            favoritesCount={validFavoritesCount}
-            recentCount={validRecentCount}
-            onNavigate={handleNavigate}
-          />
-
-          <div className="main-column">
-            <TopBar
-              title={topbarTitle}
-              toolCode={activeTool?.id}
-              searchQuery={searchQuery}
-              searchInputRef={searchInputRef}
-              effectiveTheme={effectiveTheme}
-              runningTaskCount={activeTaskIds.length}
-              onSearchChange={handleSearchChange}
-              onToggleQuickTheme={() => setTheme(effectiveTheme === "dark" ? "light" : "dark")}
-              onToggleLanguage={() => setLocale(prefs.locale === "zh-CN" ? "en-US" : "zh-CN")}
+        <MediaSessionProvider onNavigateToTool={openTool}>
+          <div className="app-shell">
+            <Sidebar
+              route={route}
+              tools={tools}
+              favoritesCount={validFavoritesCount}
+              recentCount={validRecentCount}
+              onNavigate={handleNavigate}
             />
 
-            <main className="workspace-scroll">
-              {route.kind === "settings" ? (
-                <SettingsView
-                  theme={prefs.theme}
-                  locale={prefs.locale}
-                  recentCount={validRecentCount}
-                  runtime={runtime}
-                  onChangeTheme={setTheme}
-                  onChangeLocale={setLocale}
-                  onClearRecent={() => setPrefs((prev) => ({ ...prev, recentTools: [] }))}
-                  onResetPreferences={() =>
-                    setPrefs((prev) => ({
-                      ...DEFAULT_PREFERENCES,
-                      favorites: prev.favorites,
-                      recentTools: prev.recentTools,
-                    }))
-                  }
-                />
-              ) : activeTool ? (
-                <activeTool.component />
-              ) : (
-                <HomeView
-                  mode={route.kind === "home" ? route.filter : "all"}
-                  tools={tools}
-                  favorites={prefs.favorites}
-                  recentTools={prefs.recentTools}
-                  searchQuery={searchQuery}
-                  onOpenTool={openTool}
-                  onToggleFavorite={handleToggleFavorite}
-                  onClearSearch={() => setSearchQuery("")}
-                />
-              )}
-            </main>
-          </div>
-        </div>
+            <div className="main-column">
+              <TopBar
+                title={topbarTitle}
+                toolCode={activeTool?.id}
+                searchQuery={searchQuery}
+                searchInputRef={searchInputRef}
+                effectiveTheme={effectiveTheme}
+                runningTaskCount={activeTaskIds.length}
+                onSearchChange={handleSearchChange}
+                onToggleQuickTheme={() => setTheme(effectiveTheme === "dark" ? "light" : "dark")}
+                onToggleLanguage={() => setLocale(prefs.locale === "zh-CN" ? "en-US" : "zh-CN")}
+              />
 
-        <ShutdownDialog
-          state={shutdownState}
-          liveActiveCount={activeTaskIds.length}
-          onStay={handleStayInApp}
-          onConfirmQuit={() => void handleConfirmQuit()}
-        />
+              <main className="workspace-scroll">
+                {route.kind === "settings" ? (
+                  <SettingsView
+                    theme={prefs.theme}
+                    locale={prefs.locale}
+                    recentCount={validRecentCount}
+                    runtime={runtime}
+                    onChangeTheme={setTheme}
+                    onChangeLocale={setLocale}
+                    onClearRecent={() => setPrefs((prev) => ({ ...prev, recentTools: [] }))}
+                    onResetPreferences={() =>
+                      setPrefs((prev) => ({
+                        ...DEFAULT_PREFERENCES,
+                        favorites: prev.favorites,
+                        recentTools: prev.recentTools,
+                      }))
+                    }
+                  />
+                ) : activeTool ? (
+                  <activeTool.component />
+                ) : (
+                  <HomeView
+                    mode={route.kind === "home" ? route.filter : "all"}
+                    tools={tools}
+                    favorites={prefs.favorites}
+                    recentTools={prefs.recentTools}
+                    searchQuery={searchQuery}
+                    onOpenTool={openTool}
+                    onToggleFavorite={handleToggleFavorite}
+                    onClearSearch={() => setSearchQuery("")}
+                  />
+                )}
+              </main>
+            </div>
+          </div>
+
+          <ShutdownDialog
+            state={shutdownState}
+            liveActiveCount={activeTaskIds.length}
+            onStay={handleStayInApp}
+            onConfirmQuit={() => void handleConfirmQuit()}
+          />
+        </MediaSessionProvider>
       </SessionStoreProvider>
     </I18nContext.Provider>
   );

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useI18n } from "../i18n/I18nContext";
 import type { Locale, ThemePreference } from "../i18n/messages";
 import type { AppRuntimeInfo } from "../lib/tauriBridge";
+import { MediaToolsSetupPanel } from "./MediaToolsSetupPanel";
 
 interface SettingsViewProps {
   theme: ThemePreference;
@@ -129,6 +130,15 @@ export function SettingsView({
             {t.settings.resetPrefsButton}
           </button>
         </div>
+      </section>
+
+      <section className="settings-section" aria-labelledby="settings-media-heading">
+        <h2 id="settings-media-heading" className="settings-section-title">
+          {locale === "zh-CN"
+            ? "媒体组件（FFmpeg / ffprobe）"
+            : "Media Components (FFmpeg / ffprobe)"}
+        </h2>
+        <MediaToolsSetupPanel mode="settings" />
       </section>
 
       {runtime && (
