@@ -10,7 +10,7 @@
 - **PR #22（`0724b10`）｜`A01` 音频降噪与增强 + `V14` 替换视频音频**：
   - **`A01` 音频降噪与增强（`src-tauri/src/audio_cleanup.rs` + `src/tools/audio-cleanup/`）**：支持音频与含音轨视频，提供轻/中/强 `afftdn` 离线降噪、可选 85 Hz 高通 + 50/60 Hz 交流哼声陷波、两遍 EBU R128 `loudnorm` 标准化（默认 `-16 LUFS`、真峰值 `-1.5 dBTP`，全静音 `-inf` 安全保护不放大底噪）、同片段处理前/后切换试听与实测响度展示、纯音频专属静默裁剪（视频严格禁用保音画同步），视频直拷贝视频流并原样保留其余音轨。
   - **`V14` 替换视频音频（`src-tauri/src/video_replace_audio.rs` + `src/tools/video-replace-audio/`）**：支持音频文件或另一段视频的指定音轨，提供替换/混音双模式、独立原声/新音频音量（0%–200%）、短音频「循环铺满 / 仅播放一次」、静音目标视频配音、`amix(normalize=0)+alimiter` 防单次播放结束后原声音量跳变、兼容容器视频流直拷贝及导出前音画同步试听。
-- **PR #23｜`V02` 视频烧录字幕 + `I13` 视频水印 + `v0.15.0` 发布与全链路实测**：
+- **PR #23（`b8dce91`）｜`V02` 视频烧录字幕 + `I13` 视频水印 + `v0.15.0` 发布与全链路实测**：
   - **`V02` 视频烧录字幕（`src-tauri/src/media_subtitles.rs` + `src/tools/video-subtitles/`）**：支持 UTF-8（含 BOM/CRLF/LF）SRT 与 WebVTT 严格解析（畸形文件精准报行号/条目错误）、字号/顶部底部位置/描边阴影或半透明黑底框样式、点击任意字幕即刻渲染真实烧录预览帧、FFmpeg `ass` 滤镜以临时工作目录相对路径 + `fontsdir='C\:/Windows/Fonts'` 离线渲染系统微软雅黑中文字幕（规避中文空格路径转义陷阱，自动正立烘焙 90° 竖拍、无软字幕轨、保留原音频）。自动语音转字幕保留至阶段 6（`V02` 矩阵状态为 `部分实现`）。
   - **`I13` 视频水印（`src-tauri/src/video_watermark.rs` + `image_watermark.rs` + `src/tools/image-watermark/`）**：在同一 `I13` 工作区新增「视频水印」标签并复用同一 `WatermarkStyleConfig`、`watermarkStamp.ts` 与 `render_watermark_overlay_rgba` 透明图层生成算法，保证横屏、竖屏及 90° 旋转视频预览与导出 1:1 一致、清零旋转标记、保留原音频与时长，同时完整保留 `I13` 单图/批量图片水印与透明 PNG 透明通道。PDF 水印留阶段 5（`I13` 保持 `部分实现`）。
 
