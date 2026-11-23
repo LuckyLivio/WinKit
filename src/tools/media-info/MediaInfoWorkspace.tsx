@@ -338,6 +338,20 @@ export function MediaInfoWorkspace() {
                   <button
                     type="button"
                     className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("V07", report.path)}
+                  >
+                    <span>{isZh ? "格式转换 (V07)" : "Convert (V07)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("V06", report.path)}
+                  >
+                    <span>{isZh ? "压缩 (V06)" : "Compress (V06)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
                     onClick={() => handoffMediaFileToTool("V11", report.path)}
                   >
                     <Scissors size={14} aria-hidden="true" />

@@ -10,6 +10,8 @@ import {
 import {
   bindDisposableListener,
   cancelBackendTask,
+  compressVideosBatch,
+  convertVideosBatch,
   convertVideoToGif,
   extractAudioBatch,
   extractVideoFrames,
@@ -17,6 +19,13 @@ import {
   subscribeMediaTaskProgress,
   trimVideoFile,
   type AudioExtractFormat,
+  type CompressQualityPreset,
+  type CompressResolutionCap,
+  type CompressVideoCodec,
+  type CompressVideosBatchRequest,
+  type CompressVideosBatchResponse,
+  type ConvertVideosBatchRequest,
+  type ConvertVideosBatchResponse,
   type ConvertVideoToGifRequest,
   type ConvertVideoToGifResult,
   type ExtractAudioBatchRequest,
@@ -27,6 +36,7 @@ import {
   type FrameImageFormat,
   type FrameResolutionPreset,
   type GifWidthPreset,
+  type InspectVideoConvertPlanItem,
   type MediaProbeReport,
   type MediaTaskProgressPayload,
   type MuteVideosBatchRequest,
@@ -34,6 +44,8 @@ import {
   type TrimKeyframeAnalysis,
   type TrimVideoRequest,
   type TrimVideoResult,
+  type VideoConvertFormat,
+  type VideoEncoderCapabilities,
   type VideoTrimMode,
 } from "./tauriBridge";
 
@@ -146,6 +158,39 @@ export interface VideoGifSessionState {
   errorMessage: string | null;
 }
 
+export interface VideoConvertSessionState {
+  sourcePaths: string[];
+  selectedPath: string | null;
+  targetFormat: VideoConvertFormat;
+  allowDropIncompatible: boolean;
+  outputDir: string;
+  plans: InspectVideoConvertPlanItem[];
+  inspecting: boolean;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastReport: ConvertVideosBatchResponse | null;
+  errorMessage: string | null;
+}
+
+export interface VideoCompressSessionState {
+  items: MediaQueuedProbeItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  preset: CompressQualityPreset;
+  codec: CompressVideoCodec;
+  resolutionCap: CompressResolutionCap;
+  encoderPreference: string;
+  encoderCaps: VideoEncoderCapabilities | null;
+  keepAudio: boolean;
+  keepOriginalIfLarger: boolean;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastReport: CompressVideosBatchResponse | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
@@ -153,6 +198,8 @@ export interface MediaSessionRoot {
   audioExtract: AudioExtractSessionState;
   videoFrames: VideoFramesSessionState;
   videoGif: VideoGifSessionState;
+  videoConvert: VideoConvertSessionState;
+  videoCompress: VideoCompressSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -242,6 +289,37 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  videoConvert: {
+    sourcePaths: [],
+    selectedPath: null,
+    targetFormat: "mp4",
+    allowDropIncompatible: false,
+    outputDir: "",
+    plans: [],
+    inspecting: false,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
+  videoCompress: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    preset: "balanced",
+    codec: "h264",
+    resolutionCap: "original",
+    encoderPreference: "software",
+    encoderCaps: null,
+    keepAudio: true,
+    keepOriginalIfLarger: true,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -281,6 +359,22 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<ConvertVideoToGifResult | null>;
   cancelVideoGifTask: () => Promise<void>;
+  updateVideoConvertSession: (
+    updater: (prev: VideoConvertSessionState) => VideoConvertSessionState,
+  ) => void;
+  startVideoConvertBatch: (
+    req: Omit<ConvertVideosBatchRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<ConvertVideosBatchResponse | null>;
+  cancelVideoConvertBatch: () => Promise<void>;
+  updateVideoCompressSession: (
+    updater: (prev: VideoCompressSessionState) => VideoCompressSessionState,
+  ) => void;
+  startVideoCompressBatch: (
+    req: Omit<CompressVideosBatchRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<CompressVideosBatchResponse | null>;
+  cancelVideoCompressBatch: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -308,6 +402,8 @@ export function MediaSessionProvider({
   const activeAudioExtractTaskRef = useRef<string | null>(null);
   const activeFramesTaskRef = useRef<string | null>(null);
   const activeGifTaskRef = useRef<string | null>(null);
+  const activeConvertTaskRef = useRef<string | null>(null);
+  const activeCompressTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
 
@@ -342,6 +438,16 @@ export function MediaSessionProvider({
             setMediaSession((prev) => ({
               ...prev,
               videoGif: { ...prev.videoGif, liveProgress: payload },
+            }));
+          } else if (payload.toolId === "V07" && payload.taskId === activeConvertTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoConvert: { ...prev.videoConvert, liveProgress: payload },
+            }));
+          } else if (payload.toolId === "V06" && payload.taskId === activeCompressTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoCompress: { ...prev.videoCompress, liveProgress: payload },
             }));
           }
         }),
@@ -731,6 +837,156 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateVideoConvertSession = useCallback(
+    (updater: (prev: VideoConvertSessionState) => VideoConvertSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoConvert: updater(prev.videoConvert) }));
+    },
+    [],
+  );
+
+  const startVideoConvertBatch = useCallback(
+    async (
+      req: Omit<ConvertVideosBatchRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<ConvertVideosBatchResponse | null> => {
+      if (activeConvertTaskRef.current) return null;
+      const taskId = `v07-convert-${Date.now()}-${taskSeqRef.current++}`;
+      activeConvertTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoConvert: {
+          ...prev.videoConvert,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V07",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.sourcePaths.length,
+            itemName: req.sourcePaths[0] ?? null,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await convertVideosBatch({ ...req, taskId });
+        if (activeConvertTaskRef.current !== taskId) return null;
+        activeConvertTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoConvert: {
+            ...prev.videoConvert,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeConvertTaskRef.current !== taskId) return null;
+        activeConvertTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoConvert: {
+            ...prev.videoConvert,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoConvertBatch = useCallback(async () => {
+    const tid = activeConvertTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateVideoCompressSession = useCallback(
+    (updater: (prev: VideoCompressSessionState) => VideoCompressSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoCompress: updater(prev.videoCompress) }));
+    },
+    [],
+  );
+
+  const startVideoCompressBatch = useCallback(
+    async (
+      req: Omit<CompressVideosBatchRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<CompressVideosBatchResponse | null> => {
+      if (activeCompressTaskRef.current) return null;
+      const taskId = `v06-compress-${Date.now()}-${taskSeqRef.current++}`;
+      activeCompressTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoCompress: {
+          ...prev.videoCompress,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V06",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.sourcePaths.length,
+            itemName: req.sourcePaths[0] ?? null,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await compressVideosBatch({ ...req, taskId });
+        if (activeCompressTaskRef.current !== taskId) return null;
+        activeCompressTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoCompress: {
+            ...prev.videoCompress,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeCompressTaskRef.current !== taskId) return null;
+        activeCompressTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoCompress: {
+            ...prev.videoCompress,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoCompressBatch = useCallback(async () => {
+    const tid = activeCompressTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -771,6 +1027,12 @@ export function MediaSessionProvider({
         updateVideoGifSession,
         startVideoGifTask,
         cancelVideoGifTask,
+        updateVideoConvertSession,
+        startVideoConvertBatch,
+        cancelVideoConvertBatch,
+        updateVideoCompressSession,
+        startVideoCompressBatch,
+        cancelVideoCompressBatch,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,

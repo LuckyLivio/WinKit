@@ -16,6 +16,8 @@ pub mod image_transform;
 pub mod image_watermark;
 pub mod iso_reader;
 pub mod jwt;
+pub mod media_compress;
+pub mod media_convert;
 pub mod media_core;
 pub mod media_extract_audio;
 pub mod media_frames;
@@ -104,6 +106,14 @@ use crate::image_watermark::{
     WatermarkImagesBatchRequest,
 };
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
+use crate::media_compress::{
+    compress_videos_batch_impl, probe_video_encoders_impl, CompressVideosBatchRequest,
+    CompressVideosBatchResponse, VideoEncoderCapabilities,
+};
+use crate::media_convert::{
+    convert_videos_batch_impl, inspect_video_convert_plan_impl, ConvertVideosBatchRequest,
+    ConvertVideosBatchResponse, InspectVideoConvertPlanRequest, InspectVideoConvertPlanResponse,
+};
 use crate::media_core::{
     extract_media_poster_data_url_impl, get_media_tools_status_impl, handle_winkit_media_protocol,
     install_managed_media_tools_impl, resolve_media_data_root, set_media_tools_custom_dir_impl,
@@ -2770,6 +2780,143 @@ async fn convert_video_to_gif<R: Runtime>(
 }
 
 #[tauri::command]
+async fn inspect_video_convert_plan<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: InspectVideoConvertPlanRequest,
+) -> Result<InspectVideoConvertPlanResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || inspect_video_convert_plan_impl(&root, &req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Convert plan worker failed."))?
+}
+
+#[tauri::command]
+async fn convert_videos_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: ConvertVideosBatchRequest,
+) -> Result<ConvertVideosBatchResponse, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid video convert task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V07", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V07", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = convert_videos_batch_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V07".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V07", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V07", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video convert worker failed."))?
+}
+
+#[tauri::command]
+async fn probe_video_encoders<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+) -> Result<VideoEncoderCapabilities, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || probe_video_encoders_impl(&root))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Encoder probe worker failed."))?
+}
+
+#[tauri::command]
+async fn compress_videos_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: CompressVideosBatchRequest,
+) -> Result<CompressVideosBatchResponse, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid video compress task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V06", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V06", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = compress_videos_batch_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V06".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V06", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V06", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video compress worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -2909,6 +3056,10 @@ pub fn run() {
             extract_audio_batch,
             extract_video_frames,
             convert_video_to_gif,
+            inspect_video_convert_plan,
+            convert_videos_batch,
+            probe_video_encoders,
+            compress_videos_batch,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

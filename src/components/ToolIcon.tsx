@@ -121,5 +121,9 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Images size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "video-gif":
       return <Film size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-convert":
+      return <ArrowLeftRight size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-compress":
+      return <Minimize2 size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }
