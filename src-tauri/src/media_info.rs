@@ -296,14 +296,24 @@ pub fn compute_display_dimensions(
 }
 
 /// Evaluates whether sampled frame PTS timestamps indicate Variable Frame Rate (VFR).
+///
+/// When `pts_samples` comes from a bounded packet prefix (e.g. first 120 packets in DTS order),
+/// B-frame reordering can leave small holes near the very end of the sorted PTS array because
+/// packets referencing later decode indices were truncated. Excluding the trailing 8 sorted PTS
+/// entries whenever enough samples exist eliminates false VFR positives on normal H.264/HEVC CFR streams.
 pub fn detect_vfr_from_pts(pts_samples: &[f64]) -> Option<bool> {
     if pts_samples.len() < 4 {
         return None;
     }
     let mut sorted = pts_samples.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let slice = if sorted.len() >= 20 {
+        &sorted[..sorted.len() - 8]
+    } else {
+        &sorted[..]
+    };
     let mut deltas: Vec<f64> = Vec::new();
-    for pair in sorted.windows(2) {
+    for pair in slice.windows(2) {
         let d = pair[1] - pair[0];
         if d.is_finite() && d > 1e-4 {
             deltas.push(d);
@@ -788,6 +798,11 @@ mod tests {
     fn vfr_pts_detector_distinguishes_cfr_and_vfr_timestamps() {
         let cfr: Vec<f64> = (0..30).map(|i| i as f64 / 30.0).collect();
         assert_eq!(detect_vfr_from_pts(&cfr), Some(false));
+
+        // Simulate bounded DTS prefix truncation where the last B-frame (frame 119) is missing
+        let mut cfr_bframe_tail: Vec<f64> = (0..119).map(|i| i as f64 * 0.04).collect();
+        cfr_bframe_tail.push(120.0 * 0.04);
+        assert_eq!(detect_vfr_from_pts(&cfr_bframe_tail), Some(false));
 
         let vfr = vec![0.0, 0.04, 0.08, 0.48, 0.52, 1.32, 1.36, 2.50];
         assert_eq!(detect_vfr_from_pts(&vfr), Some(true));

@@ -1,5 +1,21 @@
 # WinKit 阶段交接说明
 
+## v0.13.0 · 阶段 4A（本地媒体组件基础设施与六项核心音视频工具）
+
+`src/registry/tools.ts` 收录 **39 个**真实可用工具入口（新增「视频」「音频」两个分类）。本轮按三个连续批次独立 PR（PR #14、PR #15、PR #16）落地共用本地 FFmpeg/ffprobe 发现与用户主动一键安装体系、`winkitmedia` 分段流式本地预览协议以及 `V10`、`V11`、`V13`、`A04`、`V04`、`V15` 六项音视频核心工具，完成全流程真机安装版端到端验证并单版本发布 `v0.13.0`。
+
+- **共用本地媒体组件配置与安全执行（PR #14，`src-tauri/src/media_core.rs` + `src/components/MediaToolsSetupPanel.tsx`）**：
+  - 自动探测系统 `PATH` 中可用的 `ffmpeg` / `ffprobe`，也允许用户手动选择本地目录；缺少依赖时在所有媒体工具及「设置 → 媒体组件」展示清晰的「配置媒体组件」入口，由用户主动点击触发一次性下载配置。
+  - 固定选型：[`GyanD/codexffmpeg` Release `9.1`](https://github.com/GyanD/codexffmpeg/releases/tag/9.1)（上游 `FFmpeg/FFmpeg@74e4393595`，Asset `ffmpeg-9.1-essentials_build.7z`，下载体积 `36,671,021` 字节 / `34.97 MiB`，SHA-256 `835b9a733445ba7a56a37a26cf7bde84e2f3ce7da2a8ec984276bb2abb1b922c`，GNU GPL v3）。下载通过原生 Windows WinHTTP 流式接收并逐字节计算 SHA-256，校验通过后仅解压 `bin/ffmpeg.exe`、`bin/ffprobe.exe` 与完整 `LICENSE` / `README.txt`（安装占用 `221,044,037` 字节 / `210.80 MiB`）至 `%LOCALAPPDATA%\com.luckylivio.winkit\media-tools\ffmpeg-9.1-essentials`（绝不修改系统 `PATH`），通过 `ffmpeg -version` 与 `ffprobe -version` 双自检后原子切换生效；中途取消或断网自动清理暂存并支持重试，安装后完全离线运行。
+  - 新增白名单 `MediaPreviewRegistry` 与自定义协议 `winkitmedia`（支持 RFC 7233 `Range` `206 Partial Content` 分段流式播放）及 `extract_media_poster_data_url` 首帧提取回退，WebView2 无法直接播放的封装/编码明确提示「素材完好，并非损坏」而不误报损坏；全部 FFmpeg 外部子进程接入 `TaskRegistry` 与取消轮询，取消或退出时主动终止子进程并经 `AtomicMediaOutput` 清理 `.tmp` 临时文件。
+- **V10 媒体信息检测 & V11 视频剪切（PR #14，`media_info.rs` / `media_trim.rs`）**：`V10` 解析容器、时长、体积、码率、编码尺寸 vs 旋转后显示尺寸（标注横竖屏）、实际帧率与 CFR/VFR 判定（排除 B 帧重排尾部截断误判）、每条音轨语言/标题/声道/采样率/码率与标签，支持文本/JSON 复制导出及一键交接至 `V11`/`V13`/`A04`/`V04`/`V15`；`V11` 提供视频播放、可拖时间轴、播放头设起止点与选段预览，明确区分「快速流复制（含关键帧偏移探测与如实提示）」与「精确剪切（重编码）」，保留竖拍方向与音画同步并强制禁止覆盖源文件或已有目标。
+- **V13 视频静音 & A04 提取视频音频（PR #15，`media_mute.rs` / `media_extract_audio.rs`）**：`V13` 支持单视频与批量视频以 `-map 0:v -an -c:v copy` 无重编码移除全部音轨（含多音轨视频），导出后自动 `ffprobe` 复检音轨数为 `0`，原本无音轨视频如实标注且不重复写出；`A04` 支持单/批导出为 `M4A`/`MP3`/`WAV`/`FLAC`，多音轨视频提供 30 秒片段直接试听选轨，自动区分并明示「无损直拷 / 重编码」，无音轨视频清晰提示跳过且不产生空文件。
+- **V04 视频抽帧 & V15 视频转 GIF（PR #16，`media_frames.rs` / `media_gif.rs`）**：`V04` 支持单时间点、固定间隔（秒）与均匀 N 张抽取，采用 `fps=50:round=down:eof_action=pass,trim=start=rem` 精准命中 VFR 保持帧，支持原尺寸/1080p/720p（不放大小视频）、PNG/JPEG/WebP 及系统 WIC HEIC、自动竖拍正立导出与图集预览；`V15` 支持整段/区间、10/15/24 fps、320/480/640/原宽（默认不放大）、无限循环/单次播放，经 `palettegen=stats_mode=diff` + `paletteuse=dither=sierra2_4a` 双遍高质量调色板编码并立即展示真实帧数、尺寸、体积与动图预览。
+
+## 下一阶段
+
+阶段 4B 将继续复用本轮已落地的本地 FFmpeg/ffprobe 基础设施与 `winkitmedia` 协议，按需接入 `yt-dlp`，交付剩余视频与音频工具（`V01–V03`、`V05–V09`、`V12`、`V14`、`A01–A03`、`A05`）及 `I13` 视频水印；随后推进阶段 5（基础 PDF 工作台）。
+
 ## v0.12.0 · 阶段 3B2（人脸自动打码与屏幕取色对比度）
 
 `src/registry/tools.ts` 收录 **33 个**真实可用工具入口。本轮通过两个独立 PR（PR #12、PR #13）交付 `I02` 离线 CPU 人脸自动打码（并在 `I11` 复用「查找人脸」）以及 `I10` Windows 屏幕取色、图片主色提取与 WCAG 2.x 对比度工具，完成真机安装版端到端验证与单版本正式发布。

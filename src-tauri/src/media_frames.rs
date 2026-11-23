@@ -339,30 +339,70 @@ pub fn extract_video_frames_impl(
             .map(|a| a.temp_path().to_path_buf())
             .unwrap_or_else(|| extract_target.clone());
 
-        // Attempt timestamp-accurate seek; if near EOF and ffmpeg emits empty output, retry slightly earlier
+        // Attempt 1: Active-frame VFR-accurate seek using a 3s pre-roll + `fps=50:round=down:eof_action=pass,trim=start=rem`
+        // so VFR streams (which hold a frame across non-uniform intervals) yield the exact frame displayed at `ts`
+        // instead of skipping forward to the next packet whose PTS >= ts.
+        // Fallback attempts: direct `-ss` seek for very sparse streams or timestamps right at EOF.
+        #[derive(Clone, Copy)]
+        enum FrameSeekStrategy {
+            VfrHoldAccurate(f64),
+            DirectSeek(f64),
+        }
+
         let mut actual_ts = ts;
-        let mut attempts = vec![ts];
+        let mut attempts = vec![
+            FrameSeekStrategy::VfrHoldAccurate(ts),
+            FrameSeekStrategy::DirectSeek(ts),
+        ];
         if ts > 0.08 {
-            attempts.push((ts - 0.08).max(0.0));
+            attempts.push(FrameSeekStrategy::DirectSeek((ts - 0.08).max(0.0)));
         }
 
         let mut extracted_ok = false;
         let mut last_err: Option<AppError> = None;
 
-        for attempt_ts in attempts {
+        for strategy in attempts {
             let _ = fs::remove_file(&ffmpeg_out_path);
-            let mut args: Vec<String> = vec![
-                "-ss".into(),
-                format!("{attempt_ts:.3}"),
-                "-i".into(),
-                source_path.to_string_lossy().to_string(),
-                "-frames:v".into(),
-                "1".into(),
-            ];
-            if let Some(vf) = scale_vf {
-                args.push("-vf".into());
-                args.push(vf.to_string());
-            }
+            let (attempt_ts, mut args) = match strategy {
+                FrameSeekStrategy::VfrHoldAccurate(target_ts) => {
+                    let fast_seek = (target_ts - 3.0).max(0.0);
+                    let rem = (target_ts - fast_seek).max(0.0);
+                    let trim_start = (rem - 0.001).max(0.0);
+                    let mut vf = format!(
+                        "fps=fps=50:round=down:eof_action=pass,trim=start={trim_start:.4},setpts=PTS-STARTPTS"
+                    );
+                    if let Some(scale) = scale_vf {
+                        vf.push(',');
+                        vf.push_str(scale);
+                    }
+                    let cmd_args: Vec<String> = vec![
+                        "-ss".into(),
+                        format!("{fast_seek:.3}"),
+                        "-i".into(),
+                        source_path.to_string_lossy().to_string(),
+                        "-vf".into(),
+                        vf,
+                        "-frames:v".into(),
+                        "1".into(),
+                    ];
+                    (target_ts, cmd_args)
+                }
+                FrameSeekStrategy::DirectSeek(target_ts) => {
+                    let mut cmd_args: Vec<String> = vec![
+                        "-ss".into(),
+                        format!("{target_ts:.3}"),
+                        "-i".into(),
+                        source_path.to_string_lossy().to_string(),
+                        "-frames:v".into(),
+                        "1".into(),
+                    ];
+                    if let Some(vf) = scale_vf {
+                        cmd_args.push("-vf".into());
+                        cmd_args.push(vf.to_string());
+                    }
+                    (target_ts, cmd_args)
+                }
+            };
             if !is_heic {
                 match req.format {
                     FrameImageFormat::Png => {
@@ -592,6 +632,113 @@ mod tests {
             assert_eq!(f.height, 320);
             assert!(Path::new(&f.output_path).is_file());
             assert!(f.thumbnail_data_url.starts_with("data:image/jpeg;base64,"));
+        }
+    }
+
+    #[test]
+    fn v04_extract_frames_vfr_timestamp_accuracy() {
+        let dir = tempdir().unwrap();
+        let Ok(tools) = require_media_tools(dir.path()) else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        let mkv = dir.path().join("vfr_hold.mkv");
+        let list_path = dir.path().join("vfr_list.txt");
+
+        let colors = [
+            ("red.png", [220u8, 38, 38], 0.50),
+            ("blue.png", [37u8, 99, 235], 1.50),
+            ("yellow.png", [202u8, 138, 4], 1.00),
+        ];
+        let mut concat_txt = String::new();
+        for (name, rgb, dur) in colors {
+            let p = dir.path().join(name);
+            let mut img = image::RgbImage::new(160, 120);
+            for px in img.pixels_mut() {
+                *px = image::Rgb(rgb);
+            }
+            img.save(&p).unwrap();
+            let norm = p.to_string_lossy().replace('\\', "/");
+            concat_txt.push_str(&format!("file '{norm}'\nduration {dur}\n"));
+        }
+        let last_norm = dir
+            .path()
+            .join("yellow.png")
+            .to_string_lossy()
+            .replace('\\', "/");
+        concat_txt.push_str(&format!("file '{last_norm}'\n"));
+        fs::write(&list_path, concat_txt).unwrap();
+
+        run_ffmpeg_cancellable(
+            &tools.ffmpeg,
+            &[
+                "-f".into(),
+                "concat".into(),
+                "-safe".into(),
+                "0".into(),
+                "-i".into(),
+                list_path.to_string_lossy().to_string(),
+                "-fps_mode".into(),
+                "vfr".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+                mkv.to_string_lossy().to_string(),
+            ],
+            Some(3.0),
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+
+        let out_dir = dir.path().join("vfr_out");
+        // At t=0.10s -> Red; at t=1.10s -> Blue; at t=2.40s -> Yellow
+        for (idx, (ts, expected)) in [(0.10, 'R'), (1.10, 'B'), (2.40, 'Y')]
+            .into_iter()
+            .enumerate()
+        {
+            let resp = extract_video_frames_impl(
+                dir.path(),
+                &ExtractFramesRequest {
+                    task_id: format!("v04-vfr-{idx}"),
+                    source_path: mkv.to_string_lossy().to_string(),
+                    output_dir: out_dir.to_string_lossy().to_string(),
+                    mode: FrameExtractMode::SingleTime,
+                    timestamp_sec: Some(ts),
+                    interval_sec: None,
+                    frame_count: None,
+                    start_sec: None,
+                    end_sec: None,
+                    resolution: FrameResolutionPreset::Original,
+                    format: FrameImageFormat::Png,
+                    quality: Some(90),
+                },
+                &cancel,
+                |_| {},
+            )
+            .unwrap();
+            assert_eq!(resp.extracted_count, 1);
+            let rgb = image::open(&resp.frames[0].output_path)
+                .unwrap()
+                .to_rgb8()
+                .get_pixel(80, 60)
+                .0;
+            match expected {
+                'R' => assert!(
+                    rgb[0] > 170 && rgb[2] < 90,
+                    "t={ts} expected Red, got {rgb:?}"
+                ),
+                'B' => assert!(
+                    rgb[2] > 170 && rgb[0] < 90,
+                    "t={ts} expected Blue, got {rgb:?}"
+                ),
+                'Y' => assert!(
+                    rgb[0] > 150 && rgb[1] > 100 && rgb[2] < 70,
+                    "t={ts} expected Yellow, got {rgb:?}"
+                ),
+                _ => unreachable!(),
+            }
         }
     }
 }
