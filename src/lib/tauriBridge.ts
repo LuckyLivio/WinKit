@@ -2771,3 +2771,108 @@ export async function subscribeAudioRecorderState(
     handler(event.payload);
   });
 }
+
+// ---------- Phase 4B2 Batch 2 PR 2: V05 Screen Recorder ----------
+
+export type ScreenRecordTargetKind = "monitor" | "window" | "region";
+export type ScreenRecordResolution = "original" | "p1440" | "p1080" | "p720";
+export type ScreenRecordFormat = "mp4" | "mov";
+export type ScreenRecordPhase = "idle" | "recording" | "finalizing" | "completed" | "error";
+
+export interface ScreenRecorderCapabilities {
+  wgcSupported: boolean;
+  cursorToggleSupported: boolean;
+  clickHighlightSupported: boolean;
+  formats: ScreenRecordFormat[];
+  fpsOptions: number[];
+  resolutionOptions: ScreenRecordResolution[];
+}
+
+export interface StartScreenRecordingRequest {
+  targetKind: ScreenRecordTargetKind;
+  monitorId?: string | null;
+  windowHwnd?: number | null;
+  regionRect?: CaptureRect | null;
+  resolution: ScreenRecordResolution;
+  fps: number;
+  format: ScreenRecordFormat;
+  includeCursor: boolean;
+  highlightClicks: boolean;
+  recordSystemAudio: boolean;
+  systemAudioDeviceId?: string | null;
+  recordMicrophone: boolean;
+  microphoneDeviceId?: string | null;
+  outputPath: string;
+  allowOverwrite: boolean;
+  showFloatingHud?: boolean | null;
+}
+
+export interface ScreenRecorderSnapshot {
+  phase: ScreenRecordPhase;
+  targetKind: ScreenRecordTargetKind | null;
+  targetSummary: string | null;
+  captureEngine?: string | null;
+  audioScopeSummary: string | null;
+  elapsedSec: number;
+  framesWritten: number;
+  outputWidth: number | null;
+  outputHeight: number | null;
+  fps: number | null;
+  format: ScreenRecordFormat | null;
+  recordSystemAudio: boolean;
+  recordMicrophone: boolean;
+  systemLevelDb: number;
+  micLevelDb: number;
+  outputPath: string | null;
+  previewUrl: string | null;
+  byteSize: number | null;
+  durationSec: number | null;
+  interruptedReason: string | null;
+  warnings: string[];
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export async function listAudioPlaybackDevices(): Promise<AudioDeviceInfo[]> {
+  assertFrontendNotShuttingDown();
+  return invoke<AudioDeviceInfo[]>("list_audio_playback_devices");
+}
+
+export async function getScreenRecorderCapabilities(): Promise<ScreenRecorderCapabilities> {
+  return invoke<ScreenRecorderCapabilities>("get_screen_recorder_capabilities");
+}
+
+export async function getScreenRecorderStatus(): Promise<ScreenRecorderSnapshot> {
+  return invoke<ScreenRecorderSnapshot>("get_screen_recorder_status");
+}
+
+export async function pickScreenRecordingRegion(hideMainWindow = true): Promise<CaptureRect> {
+  assertFrontendNotShuttingDown();
+  return invoke<CaptureRect>("pick_screen_recording_region", { hideMainWindow });
+}
+
+export async function startScreenRecording(
+  req: StartScreenRecordingRequest,
+): Promise<ScreenRecorderSnapshot> {
+  assertFrontendNotShuttingDown();
+  return invoke<ScreenRecorderSnapshot>("start_screen_recording", { req });
+}
+
+export async function stopScreenRecording(): Promise<ScreenRecorderSnapshot> {
+  return invoke<ScreenRecorderSnapshot>("stop_screen_recording");
+}
+
+export async function discardScreenRecording(): Promise<ScreenRecorderSnapshot> {
+  return invoke<ScreenRecorderSnapshot>("discard_screen_recording");
+}
+
+export async function subscribeScreenRecorderState(
+  handler: (payload: ScreenRecorderSnapshot) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<ScreenRecorderSnapshot>("winkit://screen-recorder-state", (event) => {
+    handler(event.payload);
+  });
+}

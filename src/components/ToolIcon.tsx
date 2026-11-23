@@ -45,6 +45,7 @@ import {
   Stamp,
   Table2,
   TextQuote,
+  Video,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -154,5 +155,7 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Volume2 size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "video-subtitles":
       return <Captions size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "screen-record":
+      return <Video size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

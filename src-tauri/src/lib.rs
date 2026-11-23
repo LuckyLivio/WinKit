@@ -39,6 +39,7 @@ pub mod organize_downloads;
 pub mod password_gen;
 mod qr;
 pub mod screen_capture;
+pub mod screen_recorder;
 pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
@@ -185,9 +186,15 @@ use crate::organize_downloads::{
 use crate::password_gen::{generate_secrets_with_os_rng, SecretGenRequest, SecretGenResponse};
 use crate::screen_capture::{
     capture_monitor_impl, capture_region_impl, capture_scroll_impl, capture_window_impl,
-    list_capture_monitors_impl, list_capture_windows_impl, CaptureMonitorInfo,
-    CaptureMonitorRequest, CaptureRegionRequest, CaptureResultPayload, CaptureScrollRequest,
-    CaptureWindowInfo, CaptureWindowRequest, CAPTURE_PROGRESS_EVENT,
+    list_capture_monitors_impl, list_capture_windows_impl, pick_screen_region_rect_impl,
+    CaptureMonitorInfo, CaptureMonitorRequest, CaptureRect, CaptureRegionRequest,
+    CaptureResultPayload, CaptureScrollRequest, CaptureWindowInfo, CaptureWindowRequest,
+    CAPTURE_PROGRESS_EVENT,
+};
+use crate::screen_recorder::{
+    get_screen_recorder_capabilities_impl, list_audio_playback_devices_impl,
+    ScreenRecorderCapabilities, ScreenRecorderManager, ScreenRecorderSnapshot,
+    StartScreenRecordingRequest,
 };
 use crate::tasks::{
     CloseRequestDecision, ShutdownDrainResult, TaskProgressPayload, TaskRegistry,
@@ -206,7 +213,8 @@ use crate::video_replace_audio::{
 use crate::video_watermark::{watermark_video_impl, WatermarkVideoRequest, WatermarkVideoResult};
 use crate::wic_heic::{get_heic_capabilities, HeicCapabilities};
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
@@ -3739,6 +3747,91 @@ async fn save_audio_recording(
 }
 
 #[tauri::command]
+async fn list_audio_playback_devices() -> Result<Vec<AudioDeviceInfo>, AppError> {
+    tauri::async_runtime::spawn_blocking(list_audio_playback_devices_impl)
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Playback device enumeration failed."))?
+}
+
+#[tauri::command]
+fn get_screen_recorder_capabilities() -> ScreenRecorderCapabilities {
+    get_screen_recorder_capabilities_impl()
+}
+
+#[tauri::command]
+fn get_screen_recorder_status(
+    screen_recorder: State<'_, ScreenRecorderManager>,
+) -> ScreenRecorderSnapshot {
+    screen_recorder.snapshot()
+}
+
+#[tauri::command]
+async fn pick_screen_recording_region(
+    window: tauri::WebviewWindow,
+    hide_main_window: Option<bool>,
+) -> Result<CaptureRect, AppError> {
+    let should_hide = hide_main_window.unwrap_or(true);
+    let was_visible = window.is_visible().unwrap_or(true);
+    if should_hide && was_visible {
+        let _ = window.hide();
+        std::thread::sleep(Duration::from_millis(160));
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        pick_screen_region_rect_impl("拖动框选录屏区域 · 按 Esc 或右键取消", &cancel)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Region selector worker failed."))?;
+
+    if should_hide && was_visible {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    res
+}
+
+#[tauri::command]
+async fn start_screen_recording(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    previews: State<'_, MediaPreviewRegistry>,
+    screen_recorder: State<'_, ScreenRecorderManager>,
+    req: StartScreenRecordingRequest,
+) -> Result<ScreenRecorderSnapshot, AppError> {
+    let reg = registry.inner().clone();
+    let prev = previews.inner().clone();
+    let mgr = screen_recorder.inner().clone();
+    let media_root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        mgr.start_recording(&app, &reg, &prev, &media_root, req)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Screen recording startup failed."))?
+}
+
+#[tauri::command]
+async fn stop_screen_recording(
+    app: AppHandle,
+    screen_recorder: State<'_, ScreenRecorderManager>,
+) -> Result<ScreenRecorderSnapshot, AppError> {
+    let mgr = screen_recorder.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(mgr.stop_and_save(&app)))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Screen recording stop failed."))?
+}
+
+#[tauri::command]
+async fn discard_screen_recording(
+    app: AppHandle,
+    screen_recorder: State<'_, ScreenRecorderManager>,
+) -> Result<ScreenRecorderSnapshot, AppError> {
+    let mgr = screen_recorder.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(mgr.discard(&app)))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Screen recording discard failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -3757,10 +3850,12 @@ fn get_task_snapshot(registry: State<'_, TaskRegistry>) -> TaskRegistrySnapshot 
 fn request_window_close(
     registry: State<'_, TaskRegistry>,
     recorder: State<'_, AudioRecorderManager>,
+    screen_recorder: State<'_, ScreenRecorderManager>,
 ) -> CloseRequestDecision {
     let decision = registry.evaluate_close_request();
     if decision.immediate_close_allowed {
         recorder.cleanup_on_exit();
+        screen_recorder.cleanup_on_exit();
     }
     decision
 }
@@ -3769,15 +3864,18 @@ fn request_window_close(
 async fn begin_graceful_shutdown(
     registry: State<'_, TaskRegistry>,
     recorder: State<'_, AudioRecorderManager>,
+    screen_recorder: State<'_, ScreenRecorderManager>,
     timeout_ms: Option<u64>,
 ) -> Result<ShutdownDrainResult, AppError> {
     let reg = registry.inner().clone();
     let mgr = recorder.inner().clone();
+    let scr = screen_recorder.inner().clone();
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(8_000).clamp(100, 30_000));
     tauri::async_runtime::spawn_blocking(move || {
         let res = reg.begin_shutdown_and_drain(timeout);
         if res.ready_to_close {
             mgr.cleanup_on_exit();
+            scr.cleanup_on_exit();
         }
         res
     })
@@ -3801,6 +3899,7 @@ pub fn run() {
         .manage(ImageAssetStore::default())
         .manage(preview_registry)
         .manage(AudioRecorderManager::new())
+        .manage(ScreenRecorderManager::new())
         .register_uri_scheme_protocol("winkitmedia", move |_ctx, request| {
             handle_winkit_media_protocol(&preview_registry_for_proto, request)
         })
@@ -3924,6 +4023,13 @@ pub fn run() {
             stop_audio_recording,
             discard_audio_recording,
             save_audio_recording,
+            list_audio_playback_devices,
+            get_screen_recorder_capabilities,
+            get_screen_recorder_status,
+            pick_screen_recording_region,
+            start_screen_recording,
+            stop_screen_recording,
+            discard_screen_recording,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
