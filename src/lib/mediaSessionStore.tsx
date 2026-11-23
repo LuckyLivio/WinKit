@@ -10,13 +10,23 @@ import {
 import {
   bindDisposableListener,
   cancelBackendTask,
+  convertVideoToGif,
   extractAudioBatch,
+  extractVideoFrames,
   muteVideosBatch,
   subscribeMediaTaskProgress,
   trimVideoFile,
   type AudioExtractFormat,
+  type ConvertVideoToGifRequest,
+  type ConvertVideoToGifResult,
   type ExtractAudioBatchRequest,
   type ExtractAudioBatchResponse,
+  type ExtractFramesRequest,
+  type ExtractFramesResponse,
+  type FrameExtractMode,
+  type FrameImageFormat,
+  type FrameResolutionPreset,
+  type GifWidthPreset,
   type MediaProbeReport,
   type MediaTaskProgressPayload,
   type MuteVideosBatchRequest,
@@ -92,11 +102,57 @@ export interface AudioExtractSessionState {
   errorMessage: string | null;
 }
 
+export interface VideoFramesSessionState {
+  sourcePath: string | null;
+  probe: MediaProbeReport | null;
+  previewUrl: string | null;
+  posterUrl: string | null;
+  playbackUnsupported: boolean;
+  outputDir: string;
+  mode: FrameExtractMode;
+  timestampSec: number;
+  intervalSec: number;
+  frameCount: number;
+  useCustomRange: boolean;
+  startSec: number;
+  endSec: number;
+  resolution: FrameResolutionPreset;
+  format: FrameImageFormat;
+  quality: number;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastReport: ExtractFramesResponse | null;
+  errorMessage: string | null;
+}
+
+export interface VideoGifSessionState {
+  sourcePath: string | null;
+  probe: MediaProbeReport | null;
+  previewUrl: string | null;
+  posterUrl: string | null;
+  playbackUnsupported: boolean;
+  outputPath: string;
+  useCustomRange: boolean;
+  startSec: number;
+  endSec: number;
+  fps: 10 | 15 | 24;
+  widthPreset: GifWidthPreset;
+  loopForever: boolean;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastResult: ConvertVideoToGifResult | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
   videoMute: VideoMuteSessionState;
   audioExtract: AudioExtractSessionState;
+  videoFrames: VideoFramesSessionState;
+  videoGif: VideoGifSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -144,6 +200,48 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastReport: null,
     errorMessage: null,
   },
+  videoFrames: {
+    sourcePath: null,
+    probe: null,
+    previewUrl: null,
+    posterUrl: null,
+    playbackUnsupported: false,
+    outputDir: "",
+    mode: "single_time",
+    timestampSec: 0,
+    intervalSec: 1,
+    frameCount: 6,
+    useCustomRange: false,
+    startSec: 0,
+    endSec: 0,
+    resolution: "original",
+    format: "png",
+    quality: 90,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
+  videoGif: {
+    sourcePath: null,
+    probe: null,
+    previewUrl: null,
+    posterUrl: null,
+    playbackUnsupported: false,
+    outputPath: "",
+    useCustomRange: false,
+    startSec: 0,
+    endSec: 0,
+    fps: 15,
+    widthPreset: "w480",
+    loopForever: true,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -169,6 +267,20 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<ExtractAudioBatchResponse | null>;
   cancelAudioExtractBatch: () => Promise<void>;
+  updateVideoFramesSession: (
+    updater: (prev: VideoFramesSessionState) => VideoFramesSessionState,
+  ) => void;
+  startVideoFramesTask: (
+    req: Omit<ExtractFramesRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<ExtractFramesResponse | null>;
+  cancelVideoFramesTask: () => Promise<void>;
+  updateVideoGifSession: (updater: (prev: VideoGifSessionState) => VideoGifSessionState) => void;
+  startVideoGifTask: (
+    req: Omit<ConvertVideoToGifRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<ConvertVideoToGifResult | null>;
+  cancelVideoGifTask: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -194,6 +306,8 @@ export function MediaSessionProvider({
   const activeTrimTaskRef = useRef<string | null>(null);
   const activeMuteTaskRef = useRef<string | null>(null);
   const activeAudioExtractTaskRef = useRef<string | null>(null);
+  const activeFramesTaskRef = useRef<string | null>(null);
+  const activeGifTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
 
@@ -219,6 +333,16 @@ export function MediaSessionProvider({
               ...prev,
               audioExtract: { ...prev.audioExtract, liveProgress: payload },
             }));
+          } else if (payload.toolId === "V04" && payload.taskId === activeFramesTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoFrames: { ...prev.videoFrames, liveProgress: payload },
+            }));
+          } else if (payload.toolId === "V15" && payload.taskId === activeGifTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoGif: { ...prev.videoGif, liveProgress: payload },
+            }));
           }
         }),
       "winkit://media-progress",
@@ -227,20 +351,14 @@ export function MediaSessionProvider({
 
   const updateMediaInfoSession = useCallback(
     (updater: (prev: MediaInfoSessionState) => MediaInfoSessionState) => {
-      setMediaSession((prev) => ({
-        ...prev,
-        mediaInfo: updater(prev.mediaInfo),
-      }));
+      setMediaSession((prev) => ({ ...prev, mediaInfo: updater(prev.mediaInfo) }));
     },
     [],
   );
 
   const updateVideoTrimSession = useCallback(
     (updater: (prev: VideoTrimSessionState) => VideoTrimSessionState) => {
-      setMediaSession((prev) => ({
-        ...prev,
-        videoTrim: updater(prev.videoTrim),
-      }));
+      setMediaSession((prev) => ({ ...prev, videoTrim: updater(prev.videoTrim) }));
     },
     [],
   );
@@ -273,7 +391,6 @@ export function MediaSessionProvider({
           errorMessage: null,
         },
       }));
-
       try {
         const res = await trimVideoFile({ ...req, taskId });
         if (activeTrimTaskRef.current !== taskId) return null;
@@ -316,10 +433,7 @@ export function MediaSessionProvider({
 
   const updateVideoMuteSession = useCallback(
     (updater: (prev: VideoMuteSessionState) => VideoMuteSessionState) => {
-      setMediaSession((prev) => ({
-        ...prev,
-        videoMute: updater(prev.videoMute),
-      }));
+      setMediaSession((prev) => ({ ...prev, videoMute: updater(prev.videoMute) }));
     },
     [],
   );
@@ -394,10 +508,7 @@ export function MediaSessionProvider({
 
   const updateAudioExtractSession = useCallback(
     (updater: (prev: AudioExtractSessionState) => AudioExtractSessionState) => {
-      setMediaSession((prev) => ({
-        ...prev,
-        audioExtract: updater(prev.audioExtract),
-      }));
+      setMediaSession((prev) => ({ ...prev, audioExtract: updater(prev.audioExtract) }));
     },
     [],
   );
@@ -470,6 +581,156 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateVideoFramesSession = useCallback(
+    (updater: (prev: VideoFramesSessionState) => VideoFramesSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoFrames: updater(prev.videoFrames) }));
+    },
+    [],
+  );
+
+  const startVideoFramesTask = useCallback(
+    async (
+      req: Omit<ExtractFramesRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<ExtractFramesResponse | null> => {
+      if (activeFramesTaskRef.current) return null;
+      const taskId = `v04-frames-${Date.now()}-${taskSeqRef.current++}`;
+      activeFramesTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoFrames: {
+          ...prev.videoFrames,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V04",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.frameCount ?? 1,
+            itemName: req.sourcePath,
+            percent: 0,
+            outTimeSec: null,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await extractVideoFrames({ ...req, taskId });
+        if (activeFramesTaskRef.current !== taskId) return null;
+        activeFramesTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoFrames: {
+            ...prev.videoFrames,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeFramesTaskRef.current !== taskId) return null;
+        activeFramesTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoFrames: {
+            ...prev.videoFrames,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoFramesTask = useCallback(async () => {
+    const tid = activeFramesTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateVideoGifSession = useCallback(
+    (updater: (prev: VideoGifSessionState) => VideoGifSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoGif: updater(prev.videoGif) }));
+    },
+    [],
+  );
+
+  const startVideoGifTask = useCallback(
+    async (
+      req: Omit<ConvertVideoToGifRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<ConvertVideoToGifResult | null> => {
+      if (activeGifTaskRef.current) return null;
+      const taskId = `v15-gif-${Date.now()}-${taskSeqRef.current++}`;
+      activeGifTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoGif: {
+          ...prev.videoGif,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V15",
+            phase: "running",
+            currentItem: 1,
+            totalItems: 1,
+            itemName: req.sourcePath,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await convertVideoToGif({ ...req, taskId });
+        if (activeGifTaskRef.current !== taskId) return null;
+        activeGifTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoGif: {
+            ...prev.videoGif,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeGifTaskRef.current !== taskId) return null;
+        activeGifTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoGif: {
+            ...prev.videoGif,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoGifTask = useCallback(async () => {
+    const tid = activeGifTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -504,6 +765,12 @@ export function MediaSessionProvider({
         updateAudioExtractSession,
         startAudioExtractBatch,
         cancelAudioExtractBatch,
+        updateVideoFramesSession,
+        startVideoFramesTask,
+        cancelVideoFramesTask,
+        updateVideoGifSession,
+        startVideoGifTask,
+        cancelVideoGifTask,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,

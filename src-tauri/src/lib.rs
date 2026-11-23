@@ -18,6 +18,8 @@ pub mod iso_reader;
 pub mod jwt;
 pub mod media_core;
 pub mod media_extract_audio;
+pub mod media_frames;
+pub mod media_gif;
 pub mod media_info;
 pub mod media_mute;
 pub mod media_trim;
@@ -111,6 +113,10 @@ use crate::media_core::{
 use crate::media_extract_audio::{
     extract_audio_batch_impl, preview_audio_track_impl, AudioTrackPreviewResult,
     ExtractAudioBatchRequest, ExtractAudioBatchResponse,
+};
+use crate::media_frames::{extract_video_frames_impl, ExtractFramesRequest, ExtractFramesResponse};
+use crate::media_gif::{
+    convert_video_to_gif_impl, ConvertVideoToGifRequest, ConvertVideoToGifResult,
 };
 use crate::media_info::{probe_media_info_impl, MediaProbeReport};
 use crate::media_mute::{mute_videos_batch_impl, MuteVideosBatchRequest, MuteVideosBatchResponse};
@@ -2650,6 +2656,120 @@ async fn extract_audio_batch<R: Runtime>(
 }
 
 #[tauri::command]
+async fn extract_video_frames<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: ExtractFramesRequest,
+) -> Result<ExtractFramesResponse, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid frame extract task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V04", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V04", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = extract_video_frames_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V04".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V04", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V04", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Frame extract worker failed."))?
+}
+
+#[tauri::command]
+async fn convert_video_to_gif<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    preview_reg: State<'_, MediaPreviewRegistry>,
+    req: ConvertVideoToGifRequest,
+) -> Result<ConvertVideoToGifResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid GIF conversion task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V15", true)?;
+    let root = app_media_root(&app);
+    let reg = preview_reg.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V15", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = convert_video_to_gif_impl(&root, &reg, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V15".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V15", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V15", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "GIF conversion worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -2787,6 +2907,8 @@ pub fn run() {
             mute_videos_batch,
             preview_audio_track,
             extract_audio_batch,
+            extract_video_frames,
+            convert_video_to_gif,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

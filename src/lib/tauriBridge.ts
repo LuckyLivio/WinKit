@@ -651,7 +651,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.12.0",
+      version: "0.13.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -1860,4 +1860,88 @@ export async function extractAudioBatch(
 ): Promise<ExtractAudioBatchResponse> {
   assertFrontendNotShuttingDown();
   return invoke<ExtractAudioBatchResponse>("extract_audio_batch", { req });
+}
+
+// ---------- Phase 4A Batch 3: V04 Extract Frames & V15 Video to GIF ----------
+
+export type FrameExtractMode = "single_time" | "interval_seconds" | "even_count";
+export type FrameResolutionPreset = "original" | "p1080" | "p720";
+export type FrameImageFormat = "png" | "jpeg" | "webp" | "heic";
+
+export interface ExtractFramesRequest {
+  taskId: string;
+  sourcePath: string;
+  outputDir: string;
+  mode: FrameExtractMode;
+  timestampSec?: number | null;
+  intervalSec?: number | null;
+  frameCount?: number | null;
+  startSec?: number | null;
+  endSec?: number | null;
+  resolution: FrameResolutionPreset;
+  format: FrameImageFormat;
+  quality?: number | null;
+}
+
+export interface ExtractedFrameItem {
+  index: number;
+  timestampSec: number;
+  outputPath: string;
+  fileName: string;
+  width: number;
+  height: number;
+  byteSize: number;
+  thumbnailDataUrl: string;
+}
+
+export interface ExtractFramesResponse {
+  taskId: string;
+  outputDir: string;
+  cancelled: boolean;
+  extractedCount: number;
+  requestedCount: number;
+  elapsedMs: number;
+  frames: ExtractedFrameItem[];
+}
+
+export type GifWidthPreset = "w320" | "w480" | "w640" | "original";
+
+export interface ConvertVideoToGifRequest {
+  taskId: string;
+  sourcePath: string;
+  outputPath: string;
+  startSec?: number | null;
+  endSec?: number | null;
+  fps: 10 | 15 | 24;
+  widthPreset: GifWidthPreset;
+  loopForever: boolean;
+  allowUpscale?: boolean;
+  allowOverwrite?: boolean;
+}
+
+export interface ConvertVideoToGifResult {
+  outputPath: string;
+  previewUrl: string;
+  byteSize: number;
+  width: number;
+  height: number;
+  frameCount: number;
+  durationSec: number;
+  fps: number;
+  loopForever: boolean;
+  elapsedMs: number;
+}
+
+export async function extractVideoFrames(
+  req: ExtractFramesRequest,
+): Promise<ExtractFramesResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<ExtractFramesResponse>("extract_video_frames", { req });
+}
+
+export async function convertVideoToGif(
+  req: ConvertVideoToGifRequest,
+): Promise<ConvertVideoToGifResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<ConvertVideoToGifResult>("convert_video_to_gif", { req });
 }
