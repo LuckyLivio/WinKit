@@ -87,6 +87,10 @@ export interface Messages {
     DISK_FULL: string;
     SIZE_LIMIT_EXCEEDED: string;
     DECODE_FAILED: string;
+    MODEL_MISSING: string;
+    MODEL_INVALID: string;
+    MODEL_LOAD_FAILED: string;
+    INFERENCE_FAILED: string;
     TASK_CANCELLED: string;
     INVALID_PARAMETER: string;
     FALLBACK: string;
@@ -1025,6 +1029,10 @@ export const MESSAGES: Record<Locale, Messages> = {
       DISK_FULL: "目标磁盘剩余空间不足，无法完成写入。",
       SIZE_LIMIT_EXCEEDED: "输入体积、输出预估或画布像素超出安全上限。",
       DECODE_FAILED: "编码内容或图像格式无法解析。",
+      MODEL_MISSING: "未在安装目录中找到内置离线人脸检测模型。",
+      MODEL_INVALID: "内置人脸检测模型校验失败，请重新安装 WinKit。",
+      MODEL_LOAD_FAILED: "本地人脸检测模型加载失败。",
+      INFERENCE_FAILED: "本地人脸检测执行失败。",
       TASK_CANCELLED: "任务已按请求取消。",
       INVALID_PARAMETER: "输入参数或路径格式无效。",
       FALLBACK: "执行本地操作时发生错误。",
@@ -2086,6 +2094,12 @@ export const MESSAGES: Record<Locale, Messages> = {
       SIZE_LIMIT_EXCEEDED:
         "Input size, estimated output, or canvas dimensions exceed safety limits.",
       DECODE_FAILED: "Unable to decode encoded payload or image format.",
+      MODEL_MISSING:
+        "Bundled offline face detection model was not found in the installation folder.",
+      MODEL_INVALID:
+        "Bundled face detection model integrity check failed. Please reinstall WinKit.",
+      MODEL_LOAD_FAILED: "Failed to load local offline face detection model.",
+      INFERENCE_FAILED: "Local face detection inference failed.",
       TASK_CANCELLED: "Operation cancelled.",
       INVALID_PARAMETER: "Invalid input parameter or file path.",
       FALLBACK: "An unexpected local error occurred.",

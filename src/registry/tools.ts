@@ -32,6 +32,7 @@ import { ImageMetadataWorkspace } from "../tools/image-metadata/ImageMetadataWor
 import { ImageRedactWorkspace } from "../tools/image-redact/ImageRedactWorkspace";
 import { ImageAnnotateWorkspace } from "../tools/image-annotate/ImageAnnotateWorkspace";
 import { ImageWatermarkWorkspace } from "../tools/image-watermark/ImageWatermarkWorkspace";
+import { BlurFacesWorkspace } from "../tools/blur-faces/BlurFacesWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -59,6 +60,7 @@ export type ToolIconName =
   | "folder-input"
   | "frame"
   | "screenshot"
+  | "blur-faces"
   | "image-convert"
   | "image-compress"
   | "image-resize"
@@ -623,6 +625,43 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "screenshot",
     implementationStatus: "full",
     component: ScreenCaptureWorkspace,
+  },
+  {
+    id: "I02",
+    category: "image",
+    name: {
+      "zh-CN": "人脸自动打码",
+      "en-US": "Blur Faces",
+    },
+    summary: {
+      "zh-CN":
+        "离线本地 CPU 自动识别单张合影与批量照片中的人脸，支持逐脸取消、手动补框、移动调大小、模糊/像素化/实色遮盖与安全副本批量导出",
+      "en-US":
+        "Offline CPU face detection for single group photos or batches with editable boxes, per-face toggle, manual add, blur/pixelate/solid redaction, before/after compare, and safe batch export",
+    },
+    keywords: [
+      "face",
+      "blur",
+      "blur faces",
+      "mosaic",
+      "pixelate",
+      "privacy",
+      "redact",
+      "portrait",
+      "group photo",
+      "yunet",
+      "人脸",
+      "打码",
+      "自动打码",
+      "马赛克",
+      "模糊",
+      "遮脸",
+      "合影",
+      "隐私",
+    ],
+    icon: "blur-faces",
+    implementationStatus: "full",
+    component: BlurFacesWorkspace,
   },
   {
     id: "I03",

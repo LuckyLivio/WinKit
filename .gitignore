@@ -9,6 +9,7 @@ coverage/
 # Rust / Tauri build output & bundles
 src-tauri/target/
 src-tauri/gen/schemas/
+src-tauri/resources/models/
 *.exe
 *.msi
 *.pdb

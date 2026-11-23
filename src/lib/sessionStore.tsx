@@ -96,6 +96,7 @@ import type {
 import {
   beautifyImagesBatch,
   bindDisposableListener,
+  blurFacesBatch,
   cancelBackendTask,
   compressImagesBatch,
   convertImagesBatch,
@@ -113,12 +114,14 @@ import {
   type BatchRenameSkippedItem,
   type BeautifyBackgroundKind,
   type BeautifyBatchRequest,
+  type BlurFacesBatchRequest,
   type CaptureMonitorInfo,
   type CaptureProgressPayload,
   type CaptureResultPayload,
   type CaptureWindowInfo,
   type ImageAssetPayload,
   type RedactionKind,
+  type SaveAssetFormat,
   type WatermarkImagesBatchRequest,
   type WatermarkPlacement,
 } from "./tauriBridge";
@@ -319,7 +322,7 @@ export interface CaseConverterSessionState {
 
 export type BeautifierAspect = "original" | "1:1" | "16:9" | "4:5" | "9:16";
 export type ScreenCaptureMode = "region" | "window" | "monitor" | "scroll";
-export type ImageHandoffTarget = "I03" | "I11" | "I12" | "I13";
+export type ImageHandoffTarget = "I02" | "I03" | "I11" | "I12" | "I13";
 
 export interface ScreenCaptureSessionState {
   mode: ScreenCaptureMode;
@@ -591,6 +594,61 @@ export interface ImageWatermarkSessionState {
   batchErrorMessage: string | null;
 }
 
+export interface BlurFaceBoxItem {
+  id: string;
+  source: "auto" | "manual";
+  enabled: boolean;
+  confidence: number | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type BlurFaceItemStatus = "pending" | "detecting" | "detected" | "no_faces" | "failed";
+
+export interface BlurFaceQueueEntry {
+  id: string;
+  sourcePath: string | null;
+  fileName: string;
+  assetId: string | null;
+  dataUrl: string | null;
+  width: number | null;
+  height: number | null;
+  hasAlpha: boolean;
+  thumbnailDataUrl: string | null;
+  detectionStatus: BlurFaceItemStatus;
+  detectionError: string | null;
+  detectedCount: number;
+  elapsedMs: number | null;
+  boxes: BlurFaceBoxItem[];
+  undoStack: BlurFaceBoxItem[][];
+  redoStack: BlurFaceBoxItem[][];
+  modifiedByUser: boolean;
+}
+
+export interface BlurFacesSessionState {
+  entries: BlurFaceQueueEntry[];
+  activeEntryId: string | null;
+  interactionMode: "select" | "add";
+  selectedBoxId: string | null;
+  redactionKind: RedactionKind;
+  strength: number;
+  colorHex: string;
+  compareOriginal: boolean;
+  stripMetadata: boolean;
+  exportFormat: SaveAssetFormat;
+  exportUntouchedCopies: boolean;
+  outputDir: string;
+  viewport: ViewportState;
+  lastSavedMessage: string | null;
+  batchStatus: "idle" | "running";
+  batchActiveTaskId: string | null;
+  batchLiveProgress: ImageBatchProgressPayload | null;
+  batchLastReport: BatchImageJobResponse | null;
+  batchErrorMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -609,6 +667,7 @@ export interface SessionWorkspaces {
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
   screenCapture: ScreenCaptureSessionState;
+  blurFaces: BlurFacesSessionState;
   beautifier: BeautifierSessionState;
   imageRedact: ImageRedactSessionState;
   imageAnnotate: ImageAnnotateSessionState;
@@ -1022,6 +1081,27 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     batchLastReport: null,
     batchErrorMessage: null,
   },
+  blurFaces: {
+    entries: [],
+    activeEntryId: null,
+    interactionMode: "select",
+    selectedBoxId: null,
+    redactionKind: "blur",
+    strength: 18,
+    colorHex: "#111827",
+    compareOriginal: false,
+    stripMetadata: true,
+    exportFormat: "png",
+    exportUntouchedCopies: false,
+    outputDir: "",
+    viewport: { ...DEFAULT_VIEWPORT },
+    lastSavedMessage: null,
+    batchStatus: "idle",
+    batchActiveTaskId: null,
+    batchLiveProgress: null,
+    batchLastReport: null,
+    batchErrorMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -1049,6 +1129,15 @@ interface SessionStoreContextValue {
       | Partial<ScreenCaptureSessionState>
       | ((prev: ScreenCaptureSessionState) => ScreenCaptureSessionState),
   ) => void;
+  updateBlurFacesSession: (
+    patchOrUpdater:
+      Partial<BlurFacesSessionState> | ((prev: BlurFacesSessionState) => BlurFacesSessionState),
+  ) => void;
+  startBlurFacesBatch: (
+    req: BlurFacesBatchRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<BatchImageJobResponse | null>;
+  cancelBlurFacesBatch: () => Promise<void>;
   updateBeautifierSession: (
     patchOrUpdater:
       Partial<BeautifierSessionState> | ((prev: BeautifierSessionState) => BeautifierSessionState),
@@ -1273,6 +1362,22 @@ export function SessionStoreProvider({
     [],
   );
 
+  const updateBlurFacesSession = useCallback(
+    (
+      patchOrUpdater:
+        Partial<BlurFacesSessionState> | ((prev: BlurFacesSessionState) => BlurFacesSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        blurFaces:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.blurFaces)
+            : { ...prev.blurFaces, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
   const updateBeautifierSession = useCallback(
     (
       patchOrUpdater:
@@ -1343,7 +1448,40 @@ export function SessionStoreProvider({
 
   const handoffImageToTool = useCallback(
     (targetToolId: ImageHandoffTarget, asset: ImageAssetPayload) => {
-      if (targetToolId === "I03") {
+      if (targetToolId === "I02") {
+        const entryId = `mem-face-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const entry: BlurFaceQueueEntry = {
+          id: entryId,
+          sourcePath: null,
+          fileName: asset.label || "image.png",
+          assetId: asset.assetId,
+          dataUrl: asset.dataUrl,
+          width: asset.width,
+          height: asset.height,
+          hasAlpha: asset.hasAlpha,
+          thumbnailDataUrl: asset.dataUrl,
+          detectionStatus: "pending",
+          detectionError: null,
+          detectedCount: 0,
+          elapsedMs: null,
+          boxes: [],
+          undoStack: [],
+          redoStack: [],
+          modifiedByUser: false,
+        };
+        setSession((prev) => ({
+          ...prev,
+          blurFaces: {
+            ...prev.blurFaces,
+            entries: [entry, ...prev.blurFaces.entries],
+            activeEntryId: entryId,
+            selectedBoxId: null,
+            compareOriginal: false,
+            viewport: { ...DEFAULT_VIEWPORT },
+            lastSavedMessage: null,
+          },
+        }));
+      } else if (targetToolId === "I03") {
         setSession((prev) => ({
           ...prev,
           beautifier: {
@@ -1764,6 +1902,7 @@ export function SessionStoreProvider({
   const activeMetadataTaskRef = useRef<string | null>(null);
   const activeBeautifyBatchTaskRef = useRef<string | null>(null);
   const activeWatermarkBatchTaskRef = useRef<string | null>(null);
+  const activeBlurFacesBatchTaskRef = useRef<string | null>(null);
 
   const updateImageConvertSession = useCallback(
     (
@@ -1844,6 +1983,12 @@ export function SessionStoreProvider({
               return {
                 ...prev,
                 imageWatermark: { ...prev.imageWatermark, batchLiveProgress: payload },
+              };
+            }
+            if (prev.blurFaces.batchActiveTaskId === payload.taskId) {
+              return {
+                ...prev,
+                blurFaces: { ...prev.blurFaces, batchLiveProgress: payload },
               };
             }
             return prev;
@@ -2352,6 +2497,70 @@ export function SessionStoreProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const startBlurFacesBatch = useCallback(
+    async (
+      req: BlurFacesBatchRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<BatchImageJobResponse | null> => {
+      if (activeBlurFacesBatchTaskRef.current) return null;
+      const taskId = `i02-faces-${Date.now()}-${imgBatchSeqRef.current++}`;
+      activeBlurFacesBatchTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        blurFaces: {
+          ...prev.blurFaces,
+          batchStatus: "running",
+          batchActiveTaskId: taskId,
+          batchLiveProgress: {
+            taskId,
+            toolId: "I02",
+            currentIndex: 1,
+            totalItems: req.items.length,
+            currentFileName: req.items[0]?.sourcePath ?? "",
+          },
+          batchErrorMessage: null,
+        },
+      }));
+      try {
+        const res = await blurFacesBatch(taskId, req);
+        if (activeBlurFacesBatchTaskRef.current !== taskId) return null;
+        activeBlurFacesBatchTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          blurFaces: {
+            ...prev.blurFaces,
+            batchStatus: "idle",
+            batchActiveTaskId: null,
+            batchLiveProgress: null,
+            batchLastReport: res,
+            batchErrorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeBlurFacesBatchTaskRef.current !== taskId) return null;
+        activeBlurFacesBatchTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          blurFaces: {
+            ...prev.blurFaces,
+            batchStatus: "idle",
+            batchActiveTaskId: null,
+            batchLiveProgress: null,
+            batchErrorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelBlurFacesBatch = useCallback(async () => {
+    const tid = activeBlurFacesBatchTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -2373,6 +2582,9 @@ export function SessionStoreProvider({
         updateWordCounterSession,
         updateCaseConverterSession,
         updateScreenCaptureSession,
+        updateBlurFacesSession,
+        startBlurFacesBatch,
+        cancelBlurFacesBatch,
         updateBeautifierSession,
         startBeautifyBatch,
         cancelBeautifyBatch,

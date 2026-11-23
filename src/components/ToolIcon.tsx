@@ -23,6 +23,7 @@ import {
   QrCode,
   Regex,
   RotateCw,
+  ScanFace,
   Scaling,
   ScanText,
   ShieldCheck,
@@ -79,6 +80,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Frame size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "screenshot":
       return <Camera size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "blur-faces":
+      return <ScanFace size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-convert":
       return <ArrowLeftRight size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-compress":

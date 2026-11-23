@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:desktop",
     "frontendDist": "../dist"
   },
   "app": {
@@ -34,7 +34,9 @@
     "resources": {
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
       "../licenses/F01.txt": "licenses/F01.txt",
-      "../licenses/F04-unrar-rs.txt": "licenses/F04-unrar-rs.txt"
+      "../licenses/F04-unrar-rs.txt": "licenses/F04-unrar-rs.txt",
+      "../licenses/I02-yunet-mit.txt": "licenses/I02-yunet-mit.txt",
+      "resources/models/face_detection_yunet_2023mar.onnx": "models/face_detection_yunet_2023mar.onnx"
     },
     "publisher": "Livio",
     "copyright": "Copyright (c) 2026 Livio",

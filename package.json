@@ -7,7 +7,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "ensure-face-model": "node scripts/ensure-face-model.mjs",
     "build": "vite build",
+    "build:desktop": "node scripts/ensure-face-model.mjs && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
