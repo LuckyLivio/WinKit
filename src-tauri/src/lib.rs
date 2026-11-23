@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod audio_cleanup;
 pub mod audio_convert;
 pub mod audio_trim;
 pub mod batch_rename;
@@ -38,6 +39,7 @@ pub mod screen_capture;
 pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
+pub mod video_replace_audio;
 pub mod wic_heic;
 
 use crate::archive::{
@@ -45,6 +47,10 @@ use crate::archive::{
     open_local_directory_impl, ArchivePreviewResponse, CreateArchiveRequest, CreateArchiveResponse,
     ExtractArchivesBatchResponse, ExtractArchivesRequest, ARCHIVE_PROGRESS_EVENT,
     DEFAULT_MAX_EXTRACT_BYTES_PER_ARCHIVE,
+};
+use crate::audio_cleanup::{
+    clean_up_audio_impl, preview_audio_cleanup_impl, CleanUpAudioRequest, CleanUpAudioResult,
+    PreviewAudioCleanupRequest, PreviewAudioCleanupResult,
 };
 use crate::audio_convert::{
     convert_audio_batch_impl, ConvertAudioBatchRequest, ConvertAudioBatchResponse,
@@ -178,6 +184,10 @@ use crate::unicode_inspector::{
 };
 use crate::uuid_tool::{
     generate_uuid_batch, inspect_uuid_string, UuidGenVersion, UuidInspectResult,
+};
+use crate::video_replace_audio::{
+    preview_replace_audio_impl, replace_video_audio_impl, PreviewReplaceAudioRequest,
+    PreviewReplaceAudioResult, ReplaceAudioRequest, ReplaceAudioResult,
 };
 use crate::wic_heic::{get_heic_capabilities, HeicCapabilities};
 use serde::Serialize;
@@ -3311,6 +3321,162 @@ async fn convert_audio_batch<R: Runtime>(
 }
 
 #[tauri::command]
+async fn preview_audio_cleanup<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    preview_registry: State<'_, MediaPreviewRegistry>,
+    req: PreviewAudioCleanupRequest,
+) -> Result<PreviewAudioCleanupResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    let preview_reg = preview_registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_audio_cleanup_impl(&root, &preview_reg, &req)
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Audio cleanup preview worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn clean_up_audio<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: CleanUpAudioRequest,
+) -> Result<CleanUpAudioResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid audio cleanup task ID."));
+    }
+    let guard = registry.register_checked(&tid, "A01", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "A01", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = clean_up_audio_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "A01".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "A01", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "A01", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio cleanup worker failed."))?
+}
+
+#[tauri::command]
+async fn preview_replace_audio<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    preview_registry: State<'_, MediaPreviewRegistry>,
+    req: PreviewReplaceAudioRequest,
+) -> Result<PreviewReplaceAudioResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    let preview_reg = preview_registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_replace_audio_impl(&root, &preview_reg, &req)
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Replace audio preview worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn replace_video_audio<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: ReplaceAudioRequest,
+) -> Result<ReplaceAudioResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid replace audio task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V14", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V14", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = replace_video_audio_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V14".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V14", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V14", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Replace audio worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -3462,6 +3628,10 @@ pub fn run() {
             extract_audio_waveform,
             trim_audio_file,
             convert_audio_batch,
+            preview_audio_cleanup,
+            clean_up_audio,
+            preview_replace_audio,
+            replace_video_audio,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

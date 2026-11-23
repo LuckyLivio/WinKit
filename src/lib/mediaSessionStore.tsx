@@ -11,6 +11,7 @@ import {
   bindDisposableListener,
   cancelBackendTask,
   changeVideoSpeedBatch,
+  cleanUpAudio,
   compressVideosBatch,
   convertAudioBatch,
   convertVideosBatch,
@@ -20,16 +21,20 @@ import {
   extractVideoFrames,
   mergeVideos,
   muteVideosBatch,
+  replaceVideoAudio,
   resizeVideosBatch,
   subscribeMediaTaskProgress,
   trimAudioFile,
   trimVideoFile,
   type AudioBitDepthOption,
   type AudioConvertFormat,
+  type AudioDenoiseLevel,
   type AudioExtractFormat,
   type AudioWaveformPayload,
   type ChangeVideoSpeedBatchRequest,
   type ChangeVideoSpeedBatchResponse,
+  type CleanUpAudioRequest,
+  type CleanUpAudioResult,
   type CompressQualityPreset,
   type CompressResolutionCap,
   type CompressVideoCodec,
@@ -60,8 +65,14 @@ import {
   type MergeVideosResult,
   type MuteVideosBatchRequest,
   type MuteVideosBatchResponse,
+  type PreviewAudioCleanupResult,
+  type PreviewReplaceAudioResult,
+  type ReplaceAudioMode,
+  type ReplaceAudioRequest,
+  type ReplaceAudioResult,
   type ResizeVideosBatchRequest,
   type ResizeVideosBatchResponse,
+  type ShortAudioBehavior,
   type TrimAudioRequest,
   type TrimAudioResult,
   type TrimKeyframeAnalysis,
@@ -326,6 +337,50 @@ export interface AudioConvertSessionState {
   errorMessage: string | null;
 }
 
+export interface AudioCleanupSessionState {
+  sourcePath: string | null;
+  probe: MediaProbeReport | null;
+  audioTrackIndex: number;
+  denoiseLevel: AudioDenoiseLevel;
+  highpassRumble: boolean;
+  normalizeLoudness: boolean;
+  targetLufs: number;
+  removeSilence: boolean;
+  previewStartSec: number;
+  preview: PreviewAudioCleanupResult | null;
+  previewLoading: boolean;
+  previewError: string | null;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastResult: CleanUpAudioResult | null;
+  errorMessage: string | null;
+}
+
+export interface VideoReplaceAudioSessionState {
+  videoPath: string | null;
+  videoProbe: MediaProbeReport | null;
+  videoPreviewUrl: string | null;
+  videoPosterUrl: string | null;
+  audioSourcePath: string | null;
+  audioProbe: MediaProbeReport | null;
+  audioSourceTrackIndex: number;
+  mode: ReplaceAudioMode;
+  originalVolume: number;
+  newAudioVolume: number;
+  shortAudioBehavior: ShortAudioBehavior;
+  preview: PreviewReplaceAudioResult | null;
+  previewLoading: boolean;
+  previewError: string | null;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastResult: ReplaceAudioResult | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
@@ -341,6 +396,8 @@ export interface MediaSessionRoot {
   videoMerge: VideoMergeSessionState;
   audioTrim: AudioTrimSessionState;
   audioConvert: AudioConvertSessionState;
+  audioCleanup: AudioCleanupSessionState;
+  videoReplaceAudio: VideoReplaceAudioSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -554,6 +611,48 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastReport: null,
     errorMessage: null,
   },
+  audioCleanup: {
+    sourcePath: null,
+    probe: null,
+    audioTrackIndex: 0,
+    denoiseLevel: "medium",
+    highpassRumble: true,
+    normalizeLoudness: true,
+    targetLufs: -16,
+    removeSilence: false,
+    previewStartSec: 0,
+    preview: null,
+    previewLoading: false,
+    previewError: null,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  videoReplaceAudio: {
+    videoPath: null,
+    videoProbe: null,
+    videoPreviewUrl: null,
+    videoPosterUrl: null,
+    audioSourcePath: null,
+    audioProbe: null,
+    audioSourceTrackIndex: 0,
+    mode: "replace",
+    originalVolume: 0.4,
+    newAudioVolume: 1.0,
+    shortAudioBehavior: "loop_to_fill",
+    preview: null,
+    previewLoading: false,
+    previewError: null,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -653,6 +752,22 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<ConvertAudioBatchResponse | null>;
   cancelAudioConvertBatch: () => Promise<void>;
+  updateAudioCleanupSession: (
+    updater: (prev: AudioCleanupSessionState) => AudioCleanupSessionState,
+  ) => void;
+  startAudioCleanupTask: (
+    req: Omit<CleanUpAudioRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<CleanUpAudioResult | null>;
+  cancelAudioCleanupTask: () => Promise<void>;
+  updateVideoReplaceAudioSession: (
+    updater: (prev: VideoReplaceAudioSessionState) => VideoReplaceAudioSessionState,
+  ) => void;
+  startVideoReplaceAudioTask: (
+    req: Omit<ReplaceAudioRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<ReplaceAudioResult | null>;
+  cancelVideoReplaceAudioTask: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -688,6 +803,8 @@ export function MediaSessionProvider({
   const activeMergeTaskRef = useRef<string | null>(null);
   const activeAudioTrimTaskRef = useRef<string | null>(null);
   const activeAudioConvertTaskRef = useRef<string | null>(null);
+  const activeAudioCleanupTaskRef = useRef<string | null>(null);
+  const activeVideoReplaceAudioTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
 
@@ -768,6 +885,22 @@ export function MediaSessionProvider({
             setMediaSession((prev) => ({
               ...prev,
               audioConvert: { ...prev.audioConvert, liveProgress: payload },
+            }));
+          } else if (
+            payload.toolId === "A01" &&
+            payload.taskId === activeAudioCleanupTaskRef.current
+          ) {
+            setMediaSession((prev) => ({
+              ...prev,
+              audioCleanup: { ...prev.audioCleanup, liveProgress: payload },
+            }));
+          } else if (
+            payload.toolId === "V14" &&
+            payload.taskId === activeVideoReplaceAudioTaskRef.current
+          ) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoReplaceAudio: { ...prev.videoReplaceAudio, liveProgress: payload },
             }));
           }
         }),
@@ -1757,6 +1890,156 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateAudioCleanupSession = useCallback(
+    (updater: (prev: AudioCleanupSessionState) => AudioCleanupSessionState) => {
+      setMediaSession((prev) => ({ ...prev, audioCleanup: updater(prev.audioCleanup) }));
+    },
+    [],
+  );
+
+  const startAudioCleanupTask = useCallback(
+    async (
+      req: Omit<CleanUpAudioRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<CleanUpAudioResult | null> => {
+      if (activeAudioCleanupTaskRef.current) return null;
+      const taskId = `a01-clean-${Date.now()}-${taskSeqRef.current++}`;
+      activeAudioCleanupTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        audioCleanup: {
+          ...prev.audioCleanup,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "A01",
+            phase: "analyzing",
+            currentItem: 1,
+            totalItems: 1,
+            itemName: req.sourcePath,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await cleanUpAudio({ ...req, taskId });
+        if (activeAudioCleanupTaskRef.current !== taskId) return null;
+        activeAudioCleanupTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          audioCleanup: {
+            ...prev.audioCleanup,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeAudioCleanupTaskRef.current !== taskId) return null;
+        activeAudioCleanupTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          audioCleanup: {
+            ...prev.audioCleanup,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelAudioCleanupTask = useCallback(async () => {
+    const tid = activeAudioCleanupTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateVideoReplaceAudioSession = useCallback(
+    (updater: (prev: VideoReplaceAudioSessionState) => VideoReplaceAudioSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoReplaceAudio: updater(prev.videoReplaceAudio) }));
+    },
+    [],
+  );
+
+  const startVideoReplaceAudioTask = useCallback(
+    async (
+      req: Omit<ReplaceAudioRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<ReplaceAudioResult | null> => {
+      if (activeVideoReplaceAudioTaskRef.current) return null;
+      const taskId = `v14-replace-${Date.now()}-${taskSeqRef.current++}`;
+      activeVideoReplaceAudioTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoReplaceAudio: {
+          ...prev.videoReplaceAudio,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V14",
+            phase: "running",
+            currentItem: 1,
+            totalItems: 1,
+            itemName: req.options.videoPath,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await replaceVideoAudio({ ...req, taskId });
+        if (activeVideoReplaceAudioTaskRef.current !== taskId) return null;
+        activeVideoReplaceAudioTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoReplaceAudio: {
+            ...prev.videoReplaceAudio,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeVideoReplaceAudioTaskRef.current !== taskId) return null;
+        activeVideoReplaceAudioTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoReplaceAudio: {
+            ...prev.videoReplaceAudio,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoReplaceAudioTask = useCallback(async () => {
+    const tid = activeVideoReplaceAudioTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -1821,6 +2104,12 @@ export function MediaSessionProvider({
         updateAudioConvertSession,
         startAudioConvertBatch,
         cancelAudioConvertBatch,
+        updateAudioCleanupSession,
+        startAudioCleanupTask,
+        cancelAudioCleanupTask,
+        updateVideoReplaceAudioSession,
+        startVideoReplaceAudioTask,
+        cancelVideoReplaceAudioTask,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,

@@ -989,6 +989,13 @@ export function AudioTrimWorkspace() {
                     <button
                       type="button"
                       className="btn btn-ghost"
+                      onClick={() => handoffMediaFileToTool("A01", state.lastResult!.outputPath)}
+                    >
+                      <span>{isZh ? "音频降噪 (A01)" : "Clean Up (A01)"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
                       onClick={() => handoffMediaFileToTool("A05", state.lastResult!.outputPath)}
                     >
                       <span>{isZh ? "格式转换 (A05)" : "Convert (A05)"}</span>
