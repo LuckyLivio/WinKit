@@ -23,6 +23,7 @@ import {
   Scaling,
   ScanText,
   ShieldCheck,
+  ShieldOff,
   Table2,
   TextQuote,
 } from "lucide-react";
@@ -80,6 +81,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Scaling size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-rotate":
       return <RotateCw size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "image-metadata":
+      return <ShieldOff size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "table-2":
       return <Table2 size={size} strokeWidth={1.75} aria-hidden="true" />;
   }

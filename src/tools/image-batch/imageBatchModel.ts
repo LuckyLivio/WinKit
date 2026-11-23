@@ -179,6 +179,17 @@ export interface RotateImagesBatchRequest {
   steps: TransformStep[];
 }
 
+export interface StripMetadataBatchRequest {
+  sourcePaths: string[];
+  outputDir: string;
+  keepOrientation: boolean;
+  keepColorProfile: boolean;
+}
+
+export function formatSupportsMetadataStripping(fmt: ImageFileFormat): boolean {
+  return fmt === "jpeg" || fmt === "png" || fmt === "webp" || fmt === "tiff";
+}
+
 export const IMAGE_FILE_DIALOG_EXTENSIONS = [
   "jpg",
   "jpeg",

@@ -7,6 +7,7 @@ pub mod find_duplicates;
 pub mod fs_guard;
 pub mod hasher;
 pub mod image_core;
+pub mod image_metadata;
 pub mod image_transform;
 pub mod iso_reader;
 pub mod jwt;
@@ -60,6 +61,7 @@ use crate::image_core::{
     PreviewCompressImageRequest, PreviewCompressImageResponse, PreviewConvertImageRequest,
     PreviewConvertImageResponse, IMAGE_BATCH_PROGRESS_EVENT,
 };
+use crate::image_metadata::{strip_images_metadata_batch_impl, StripMetadataBatchRequest};
 use crate::image_transform::{
     preview_rotate_image_impl, resize_images_batch_impl, rotate_images_batch_impl,
     PreviewRotateImageRequest, PreviewRotateImageResponse, ResizeImagesBatchRequest,
@@ -1375,6 +1377,66 @@ async fn rotate_images_batch<R: Runtime>(
 }
 
 #[tauri::command]
+async fn strip_images_metadata_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: StripMetadataBatchRequest,
+) -> Result<BatchImageJobResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param(
+            "Invalid image metadata strip task ID.",
+        ));
+    }
+    let guard = registry.register_checked(trimmed_id, "I09", true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = strip_images_metadata_batch_impl(&tid, &req, &cancel_flag, |ev| {
+            let _ = app.emit(IMAGE_BATCH_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = done.succeeded_count as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image metadata strip worker failed."))?
+}
+
+#[tauri::command]
 async fn preview_organize_downloads(
     registry: State<'_, TaskRegistry>,
     req: OrganizePreviewRequest,
@@ -1528,6 +1590,7 @@ pub fn run() {
             resize_images_batch,
             preview_rotate_image,
             rotate_images_batch,
+            strip_images_metadata_batch,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,
