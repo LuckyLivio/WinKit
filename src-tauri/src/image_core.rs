@@ -644,6 +644,146 @@ fn detect_animation_and_pages(bytes: &[u8], format: ImageFileFormat) -> (bool, u
     }
 }
 
+fn scan_raw_exif_bytes(raw_tiff: &[u8], flags: &mut ImageMetadataFlags) {
+    let trimmed = raw_tiff.strip_prefix(b"Exif\0\0").unwrap_or(raw_tiff);
+    match ExifReader::new().read_raw(trimmed.to_vec()) {
+        Ok(exif) => {
+            let mut non_orientation_count = 0usize;
+            for f in exif.fields() {
+                if f.tag == Tag::Orientation {
+                    continue;
+                }
+                non_orientation_count += 1;
+                match f.tag {
+                    Tag::GPSLatitude
+                    | Tag::GPSLongitude
+                    | Tag::GPSAltitude
+                    | Tag::GPSLatitudeRef
+                    | Tag::GPSLongitudeRef => {
+                        flags.has_gps = true;
+                    }
+                    Tag::Make | Tag::Model | Tag::LensModel | Tag::Software => {
+                        flags.has_camera_info = true;
+                    }
+                    Tag::DateTime | Tag::DateTimeOriginal | Tag::DateTimeDigitized => {
+                        flags.has_datetime = true;
+                    }
+                    _ => {}
+                }
+            }
+            if non_orientation_count > 0 {
+                flags.has_exif = true;
+            }
+        }
+        Err(_) => {
+            // Unparseable EXIF payload must not be misreported as clean
+            flags.has_exif = true;
+        }
+    }
+}
+
+fn scan_classic_tiff_metadata(bytes: &[u8], flags: &mut ImageMetadataFlags) {
+    if bytes.len() < 8 {
+        return;
+    }
+    let little = match &bytes[0..2] {
+        b"II" => true,
+        b"MM" => false,
+        _ => return,
+    };
+    let r16 = |b: &[u8]| {
+        if little {
+            u16::from_le_bytes([b[0], b[1]])
+        } else {
+            u16::from_be_bytes([b[0], b[1]])
+        }
+    };
+    let r32 = |b: &[u8]| {
+        if little {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        }
+    };
+    if r16(&bytes[2..4]) != 42 {
+        return;
+    }
+
+    let mut visited = std::collections::HashSet::new();
+    let mut ifd_off = r32(&bytes[4..8]) as usize;
+    while ifd_off != 0 && visited.insert(ifd_off) && visited.len() <= 128 {
+        if ifd_off + 2 > bytes.len() {
+            break;
+        }
+        let n = r16(&bytes[ifd_off..ifd_off + 2]) as usize;
+        let entries_start = ifd_off + 2;
+        let entries_end = entries_start.saturating_add(n.saturating_mul(12));
+        if entries_end + 4 > bytes.len() {
+            break;
+        }
+        for idx in 0..n {
+            let off = entries_start + idx * 12;
+            let tag = r16(&bytes[off..off + 2]);
+            match tag {
+                // Core display / pixel-layout / orientation / ICC tags are NOT personal metadata
+                254
+                | 255
+                | 256
+                | 257
+                | 258
+                | 259
+                | 262
+                | 266
+                | 273
+                | 274
+                | 277
+                | 278
+                | 279
+                | 280
+                | 281
+                | 282
+                | 283
+                | 284
+                | 296
+                | 317
+                | 320
+                | 322
+                | 323
+                | 324
+                | 325
+                | 338
+                | 339
+                | 347
+                | 512..=532
+                | 34675 => {}
+                700 => flags.has_xmp = true,
+                33723 | 34377 => flags.has_iptc = true,
+                34853 => {
+                    flags.has_gps = true;
+                    flags.has_exif = true;
+                }
+                34665 => flags.has_exif = true,
+                271 | 272 | 305 => {
+                    flags.has_camera_info = true;
+                    flags.has_exif = true;
+                }
+                306 => {
+                    flags.has_datetime = true;
+                    flags.has_exif = true;
+                }
+                269 | 270 | 285 | 315 | 316 | 33432 => {
+                    flags.has_comments = true;
+                    flags.has_exif = true;
+                }
+                _ => {
+                    flags.has_exif = true;
+                }
+            }
+        }
+        ifd_off = r32(&bytes[entries_end..entries_end + 4]) as usize;
+    }
+}
+
 pub fn inspect_metadata_flags(bytes: &[u8], format: ImageFileFormat) -> ImageMetadataFlags {
     let mut flags = ImageMetadataFlags {
         has_exif: false,
@@ -657,36 +797,6 @@ pub fn inspect_metadata_flags(bytes: &[u8], format: ImageFileFormat) -> ImageMet
         duplicate_segment_count: 0,
         tag_highlights: Vec::new(),
     };
-
-    // Inspect EXIF via kamadak-exif across containers
-    if let Ok(exif) = ExifReader::new().read_from_container(&mut Cursor::new(bytes)) {
-        let mut non_orientation_count = 0usize;
-        for f in exif.fields() {
-            if f.tag == Tag::Orientation {
-                continue;
-            }
-            non_orientation_count += 1;
-            match f.tag {
-                Tag::GPSLatitude
-                | Tag::GPSLongitude
-                | Tag::GPSAltitude
-                | Tag::GPSLatitudeRef
-                | Tag::GPSLongitudeRef => {
-                    flags.has_gps = true;
-                }
-                Tag::Make | Tag::Model | Tag::LensModel | Tag::Software => {
-                    flags.has_camera_info = true;
-                }
-                Tag::DateTime | Tag::DateTimeOriginal | Tag::DateTimeDigitized => {
-                    flags.has_datetime = true;
-                }
-                _ => {}
-            }
-        }
-        if non_orientation_count > 0 {
-            flags.has_exif = true;
-        }
-    }
 
     match format {
         ImageFileFormat::Jpeg => {
@@ -723,6 +833,7 @@ pub fn inspect_metadata_flags(bytes: &[u8], format: ImageFileFormat) -> ImageMet
                 if marker == 0xE1 {
                     if payload.starts_with(b"Exif\0\0") {
                         exif_count += 1;
+                        scan_raw_exif_bytes(&payload[6..], &mut flags);
                     } else if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
                         || payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
                     {
@@ -763,8 +874,8 @@ pub fn inspect_metadata_flags(bytes: &[u8], format: ImageFileFormat) -> ImageMet
                     let data = &bytes[i + 8..i + 8 + len];
                     match kind {
                         b"eXIf" => {
-                            flags.has_exif = true;
                             exif_count += 1;
+                            scan_raw_exif_bytes(data, &mut flags);
                         }
                         b"tIME" => {
                             flags.has_datetime = true;
@@ -810,8 +921,10 @@ pub fn inspect_metadata_flags(bytes: &[u8], format: ImageFileFormat) -> ImageMet
                     if i + 8 + len > bytes.len() {
                         break;
                     }
+                    let payload = &bytes[i + 8..i + 8 + len];
                     if fourcc == b"EXIF" {
                         exif_count += 1;
+                        scan_raw_exif_bytes(payload, &mut flags);
                     } else if fourcc == b"XMP " {
                         flags.has_xmp = true;
                         xmp_count += 1;
@@ -827,42 +940,38 @@ pub fn inspect_metadata_flags(bytes: &[u8], format: ImageFileFormat) -> ImageMet
             }
         }
         ImageFileFormat::Tiff => {
-            if let Ok(mut dec) = tiff::decoder::Decoder::new(Cursor::new(bytes)) {
-                if dec.get_tag(tiff::tags::Tag::Unknown(700)).is_ok() {
-                    flags.has_xmp = true;
+            scan_classic_tiff_metadata(bytes, &mut flags);
+        }
+        _ => {
+            if let Ok(exif) = ExifReader::new().read_from_container(&mut Cursor::new(bytes)) {
+                let mut non_orientation_count = 0usize;
+                for f in exif.fields() {
+                    if f.tag == Tag::Orientation {
+                        continue;
+                    }
+                    non_orientation_count += 1;
+                    match f.tag {
+                        Tag::GPSLatitude
+                        | Tag::GPSLongitude
+                        | Tag::GPSAltitude
+                        | Tag::GPSLatitudeRef
+                        | Tag::GPSLongitudeRef => {
+                            flags.has_gps = true;
+                        }
+                        Tag::Make | Tag::Model | Tag::LensModel | Tag::Software => {
+                            flags.has_camera_info = true;
+                        }
+                        Tag::DateTime | Tag::DateTimeOriginal | Tag::DateTimeDigitized => {
+                            flags.has_datetime = true;
+                        }
+                        _ => {}
+                    }
                 }
-                if dec.get_tag(tiff::tags::Tag::Unknown(33723)).is_ok()
-                    || dec.get_tag(tiff::tags::Tag::Unknown(34377)).is_ok()
-                {
-                    flags.has_iptc = true;
-                }
-                if dec.get_tag(tiff::tags::Tag::Unknown(34853)).is_ok() {
-                    flags.has_gps = true;
+                if non_orientation_count > 0 {
                     flags.has_exif = true;
-                }
-                if dec.get_tag(tiff::tags::Tag::Unknown(34665)).is_ok() {
-                    flags.has_exif = true;
-                }
-                if dec.get_tag(tiff::tags::Tag::Make).is_ok()
-                    || dec.get_tag(tiff::tags::Tag::Model).is_ok()
-                    || dec.get_tag(tiff::tags::Tag::Software).is_ok()
-                {
-                    flags.has_camera_info = true;
-                    flags.has_exif = true;
-                }
-                if dec.get_tag(tiff::tags::Tag::DateTime).is_ok() {
-                    flags.has_datetime = true;
-                    flags.has_exif = true;
-                }
-                if dec.get_tag(tiff::tags::Tag::ImageDescription).is_ok()
-                    || dec.get_tag(tiff::tags::Tag::Artist).is_ok()
-                    || dec.get_tag(tiff::tags::Tag::Copyright).is_ok()
-                {
-                    flags.has_comments = true;
                 }
             }
         }
-        _ => {}
     }
 
     if flags.has_gps {

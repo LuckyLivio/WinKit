@@ -84,6 +84,7 @@ import type {
   ResizeImagesBatchRequest,
   ResizeMode,
   RotateImagesBatchRequest,
+  StripMetadataBatchRequest,
   TransformStep,
 } from "../tools/image-batch/imageBatchModel";
 import {
@@ -97,6 +98,7 @@ import {
   resizeImagesBatch,
   rotateImagesBatch,
   scanDuplicateFolders,
+  stripImagesMetadataBatch,
   subscribeArchiveProgress,
   subscribeDuplicateScanProgress,
   subscribeImageBatchProgress,
@@ -430,6 +432,19 @@ export interface ImageRotateSessionState {
   errorMessage: string | null;
 }
 
+export interface ImageMetadataSessionState {
+  items: InspectedImageItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  keepOrientation: boolean;
+  keepColorProfile: boolean;
+  status: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: ImageBatchProgressPayload | null;
+  lastReport: BatchImageJobResponse | null;
+  errorMessage: string | null;
+}
+
 export interface SessionWorkspaces {
   json: JsonSessionState;
   hash: HashSessionState;
@@ -456,6 +471,7 @@ export interface SessionWorkspaces {
   imageCompress: ImageCompressSessionState;
   imageResize: ImageResizeSessionState;
   imageRotate: ImageRotateSessionState;
+  imageMetadata: ImageMetadataSessionState;
 }
 
 const INITIAL_SESSION_STATE: SessionWorkspaces = {
@@ -738,6 +754,18 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     lastReport: null,
     errorMessage: null,
   },
+  imageMetadata: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    keepOrientation: true,
+    keepColorProfile: true,
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
 };
 
 interface SessionStoreContextValue {
@@ -834,6 +862,16 @@ interface SessionStoreContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<BatchImageJobResponse | null>;
   cancelImageRotateBatch: () => Promise<void>;
+  updateImageMetadataSession: (
+    patchOrUpdater:
+      | Partial<ImageMetadataSessionState>
+      | ((prev: ImageMetadataSessionState) => ImageMetadataSessionState),
+  ) => void;
+  startImageMetadataBatch: (
+    req: StripMetadataBatchRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<BatchImageJobResponse | null>;
+  cancelImageMetadataBatch: () => Promise<void>;
 }
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
@@ -1263,6 +1301,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
   const activeCompressTaskRef = useRef<string | null>(null);
   const activeResizeTaskRef = useRef<string | null>(null);
   const activeRotateTaskRef = useRef<string | null>(null);
+  const activeMetadataTaskRef = useRef<string | null>(null);
 
   const updateImageConvertSession = useCallback(
     (
@@ -1325,6 +1364,12 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
               return {
                 ...prev,
                 imageRotate: { ...prev.imageRotate, liveProgress: payload },
+              };
+            }
+            if (prev.imageMetadata.activeTaskId === payload.taskId) {
+              return {
+                ...prev,
+                imageMetadata: { ...prev.imageMetadata, liveProgress: payload },
               };
             }
             return prev;
@@ -1624,6 +1669,87 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateImageMetadataSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ImageMetadataSessionState>
+        | ((prev: ImageMetadataSessionState) => ImageMetadataSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        imageMetadata:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.imageMetadata)
+            : { ...prev.imageMetadata, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  const startImageMetadataBatch = useCallback(
+    async (
+      req: StripMetadataBatchRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<BatchImageJobResponse | null> => {
+      if (activeMetadataTaskRef.current) return null;
+      const taskId = `i09-metadata-${Date.now()}-${imgBatchSeqRef.current++}`;
+      activeMetadataTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        imageMetadata: {
+          ...prev.imageMetadata,
+          status: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "I09",
+            currentIndex: 1,
+            totalItems: req.sourcePaths.length,
+            currentFileName: req.sourcePaths[0] ?? "",
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await stripImagesMetadataBatch(taskId, req);
+        if (activeMetadataTaskRef.current !== taskId) return null;
+        activeMetadataTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageMetadata: {
+            ...prev.imageMetadata,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeMetadataTaskRef.current !== taskId) return null;
+        activeMetadataTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          imageMetadata: {
+            ...prev.imageMetadata,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelImageMetadataBatch = useCallback(async () => {
+    const tid = activeMetadataTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -1666,6 +1792,9 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateImageRotateSession,
         startImageRotateBatch,
         cancelImageRotateBatch,
+        updateImageMetadataSession,
+        startImageMetadataBatch,
+        cancelImageMetadataBatch,
       }}
     >
       {children}

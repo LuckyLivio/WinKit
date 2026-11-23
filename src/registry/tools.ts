@@ -27,6 +27,7 @@ import { ImageConvertWorkspace } from "../tools/image-convert/ImageConvertWorksp
 import { ImageCompressWorkspace } from "../tools/image-compress/ImageCompressWorkspace";
 import { ImageResizeWorkspace } from "../tools/image-resize/ImageResizeWorkspace";
 import { ImageRotateWorkspace } from "../tools/image-rotate/ImageRotateWorkspace";
+import { ImageMetadataWorkspace } from "../tools/image-metadata/ImageMetadataWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -56,7 +57,8 @@ export type ToolIconName =
   | "image-convert"
   | "image-compress"
   | "image-resize"
-  | "image-rotate";
+  | "image-rotate"
+  | "image-metadata";
 
 export interface RegisteredTool {
   id: string;
@@ -725,6 +727,36 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "image-rotate",
     implementationStatus: "full",
     component: ImageRotateWorkspace,
+  },
+  {
+    id: "I09",
+    category: "image",
+    name: { "zh-CN": "图片元数据清除", "en-US": "Remove Metadata" },
+    summary: {
+      "zh-CN":
+        "容器级无损清除 JPEG、PNG、WebP 与经典 TIFF 中的 GPS、相机、时间、EXIF、XMP、IPTC 与重复段，默认保留方向与色彩配置并二次校验",
+      "en-US":
+        "Losslessly strip GPS, camera, timestamp, EXIF, XMP, IPTC, and duplicate segments across JPEG, PNG, WebP, and classic TIFF while keeping orientation and ICC profiles by default",
+    },
+    keywords: [
+      "metadata",
+      "exif",
+      "gps",
+      "xmp",
+      "iptc",
+      "strip",
+      "remove",
+      "privacy",
+      "icc",
+      "元数据",
+      "隐私",
+      "定位",
+      "清除exif",
+      "去exif",
+    ],
+    icon: "image-metadata",
+    implementationStatus: "full",
+    component: ImageMetadataWorkspace,
   },
   {
     id: "F01",

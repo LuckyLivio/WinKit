@@ -76,6 +76,7 @@ import type {
   PreviewRotateImageResponse,
   ResizeImagesBatchRequest,
   RotateImagesBatchRequest,
+  StripMetadataBatchRequest,
 } from "../tools/image-batch/imageBatchModel";
 
 export interface AppRuntimeInfo {
@@ -344,7 +345,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.9.0",
+      version: "0.10.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -935,6 +936,14 @@ export async function rotateImagesBatch(
 ): Promise<BatchImageJobResponse> {
   assertFrontendNotShuttingDown();
   return invoke<BatchImageJobResponse>("rotate_images_batch", { taskId, req });
+}
+
+export async function stripImagesMetadataBatch(
+  taskId: string,
+  req: StripMetadataBatchRequest,
+): Promise<BatchImageJobResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchImageJobResponse>("strip_images_metadata_batch", { taskId, req });
 }
 
 export async function subscribeImageBatchProgress(
