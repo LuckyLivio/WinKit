@@ -2,6 +2,7 @@ import {
   ArrowLeftRight,
   Binary,
   Braces,
+  Camera,
   CaseSensitive,
   Clock,
   Compass,
@@ -73,6 +74,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <CaseSensitive size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "frame":
       return <Frame size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "screenshot":
+      return <Camera size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-convert":
       return <ArrowLeftRight size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-compress":

@@ -88,6 +88,7 @@ import type {
   TransformStep,
 } from "../tools/image-batch/imageBatchModel";
 import {
+  beautifyImagesBatch,
   bindDisposableListener,
   cancelBackendTask,
   compressImagesBatch,
@@ -103,6 +104,13 @@ import {
   subscribeDuplicateScanProgress,
   subscribeImageBatchProgress,
   type BatchRenameSkippedItem,
+  type BeautifyBackgroundKind,
+  type BeautifyBatchRequest,
+  type CaptureMonitorInfo,
+  type CaptureProgressPayload,
+  type CaptureResultPayload,
+  type CaptureWindowInfo,
+  type ImageAssetPayload,
 } from "./tauriBridge";
 
 export type JsonIndentOption = "2" | "4" | "tab";
@@ -299,21 +307,55 @@ export interface CaseConverterSessionState {
   selectedStyle: CaseStyleId;
 }
 
-export type BeautifierAspect = "original" | "1:1" | "16:9";
+export type BeautifierAspect = "original" | "1:1" | "16:9" | "4:5" | "9:16";
+export type ScreenCaptureMode = "region" | "window" | "monitor" | "scroll";
+export type ImageHandoffTarget = "I03" | "I11" | "I12" | "I13";
+
+export interface ScreenCaptureSessionState {
+  mode: ScreenCaptureMode;
+  countdownSeconds: number;
+  includeCursor: boolean;
+  monitors: CaptureMonitorInfo[];
+  selectedMonitorId: string;
+  windows: CaptureWindowInfo[];
+  selectedWindowHwnd: number | null;
+  status: "idle" | "capturing";
+  activeTaskId: string | null;
+  liveProgress: CaptureProgressPayload | null;
+  lastCapture: CaptureResultPayload | null;
+  partialDecision: "pending" | "kept" | null;
+  errorMessage: string | null;
+}
 
 export interface BeautifierSessionState {
+  mode: "single" | "batch";
   sourcePath: string | null;
+  assetId: string | null;
   sourceFileName: string | null;
   previewDataUrl: string | null;
   sourceWidth: number | null;
   sourceHeight: number | null;
   hasAlpha: boolean;
+  backgroundKind: BeautifyBackgroundKind;
   backgroundColor: string;
+  gradientStartHex: string;
+  gradientEndHex: string;
+  gradientAngleDeg: number;
+  backgroundImagePath: string | null;
+  backgroundImagePreviewUrl: string | null;
   padding: number;
   cornerRadius: number;
   shadowStrength: number;
   aspectRatio: BeautifierAspect;
   lastSavedMessage: string | null;
+  batchItems: InspectedImageItem[];
+  batchSelectedPath: string | null;
+  batchOutputDir: string;
+  batchStatus: "idle" | "running";
+  batchActiveTaskId: string | null;
+  batchLiveProgress: ImageBatchProgressPayload | null;
+  batchLastReport: BatchImageJobResponse | null;
+  batchErrorMessage: string | null;
 }
 
 export interface BatchRenameSessionState {
@@ -462,6 +504,7 @@ export interface SessionWorkspaces {
   csvJson: CsvJsonSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
+  screenCapture: ScreenCaptureSessionState;
   beautifier: BeautifierSessionState;
   batchRename: BatchRenameSessionState;
   findDuplicates: FindDuplicatesSessionState;
@@ -634,19 +677,50 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     textInput: "",
     selectedStyle: "snake",
   },
+  screenCapture: {
+    mode: "region",
+    countdownSeconds: 0,
+    includeCursor: false,
+    monitors: [],
+    selectedMonitorId: "",
+    windows: [],
+    selectedWindowHwnd: null,
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastCapture: null,
+    partialDecision: null,
+    errorMessage: null,
+  },
   beautifier: {
+    mode: "single",
     sourcePath: null,
+    assetId: null,
     sourceFileName: null,
     previewDataUrl: null,
     sourceWidth: null,
     sourceHeight: null,
     hasAlpha: false,
+    backgroundKind: "solid",
     backgroundColor: "#E8ECF2",
+    gradientStartHex: "#DBEAFE",
+    gradientEndHex: "#E0E7FF",
+    gradientAngleDeg: 135,
+    backgroundImagePath: null,
+    backgroundImagePreviewUrl: null,
     padding: 48,
     cornerRadius: 12,
     shadowStrength: 28,
     aspectRatio: "original",
     lastSavedMessage: null,
+    batchItems: [],
+    batchSelectedPath: null,
+    batchOutputDir: "",
+    batchStatus: "idle",
+    batchActiveTaskId: null,
+    batchLiveProgress: null,
+    batchLastReport: null,
+    batchErrorMessage: null,
   },
   batchRename: {
     entries: [],
@@ -788,7 +862,21 @@ interface SessionStoreContextValue {
   updateCsvJsonSession: (patch: Partial<CsvJsonSessionState>) => void;
   updateWordCounterSession: (patch: Partial<WordCounterSessionState>) => void;
   updateCaseConverterSession: (patch: Partial<CaseConverterSessionState>) => void;
-  updateBeautifierSession: (patch: Partial<BeautifierSessionState>) => void;
+  updateScreenCaptureSession: (
+    patchOrUpdater:
+      | Partial<ScreenCaptureSessionState>
+      | ((prev: ScreenCaptureSessionState) => ScreenCaptureSessionState),
+  ) => void;
+  updateBeautifierSession: (
+    patchOrUpdater:
+      Partial<BeautifierSessionState> | ((prev: BeautifierSessionState) => BeautifierSessionState),
+  ) => void;
+  startBeautifyBatch: (
+    req: BeautifyBatchRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<BatchImageJobResponse | null>;
+  cancelBeautifyBatch: () => Promise<void>;
+  handoffImageToTool: (targetToolId: ImageHandoffTarget, asset: ImageAssetPayload) => void;
   updateBatchRenameSession: (
     patchOrUpdater:
       | Partial<BatchRenameSessionState>
@@ -876,9 +964,17 @@ interface SessionStoreContextValue {
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
 
-export function SessionStoreProvider({ children }: { children: ReactNode }) {
+export function SessionStoreProvider({
+  children,
+  onNavigateToTool,
+}: {
+  children: ReactNode;
+  onNavigateToTool?: (toolId: string) => void;
+}) {
   // Stored strictly in memory for the current process session; never persisted to disk.
   const [session, setSession] = useState<SessionWorkspaces>(INITIAL_SESSION_STATE);
+  const navRef = useRef(onNavigateToTool);
+  navRef.current = onNavigateToTool;
 
   const updateJsonSession = (patch: Partial<JsonSessionState>) => {
     setSession((prev) => ({ ...prev, json: { ...prev.json, ...patch } }));
@@ -958,9 +1054,63 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     setSession((prev) => ({ ...prev, caseConverter: { ...prev.caseConverter, ...patch } }));
   };
 
-  const updateBeautifierSession = (patch: Partial<BeautifierSessionState>) => {
-    setSession((prev) => ({ ...prev, beautifier: { ...prev.beautifier, ...patch } }));
-  };
+  const updateScreenCaptureSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<ScreenCaptureSessionState>
+        | ((prev: ScreenCaptureSessionState) => ScreenCaptureSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        screenCapture:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.screenCapture)
+            : { ...prev.screenCapture, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  const updateBeautifierSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<BeautifierSessionState>
+        | ((prev: BeautifierSessionState) => BeautifierSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        beautifier:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.beautifier)
+            : { ...prev.beautifier, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  const handoffImageToTool = useCallback(
+    (targetToolId: ImageHandoffTarget, asset: ImageAssetPayload) => {
+      if (targetToolId === "I03") {
+        setSession((prev) => ({
+          ...prev,
+          beautifier: {
+            ...prev.beautifier,
+            mode: "single",
+            sourcePath: null,
+            assetId: asset.assetId,
+            sourceFileName: asset.label,
+            previewDataUrl: asset.dataUrl,
+            sourceWidth: asset.width,
+            sourceHeight: asset.height,
+            hasAlpha: asset.hasAlpha,
+            lastSavedMessage: null,
+          },
+        }));
+      }
+      navRef.current?.(targetToolId);
+    },
+    [],
+  );
 
   const updateBatchRenameSession = useCallback(
     (
@@ -1302,6 +1452,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
   const activeResizeTaskRef = useRef<string | null>(null);
   const activeRotateTaskRef = useRef<string | null>(null);
   const activeMetadataTaskRef = useRef<string | null>(null);
+  const activeBeautifyBatchTaskRef = useRef<string | null>(null);
 
   const updateImageConvertSession = useCallback(
     (
@@ -1370,6 +1521,12 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
               return {
                 ...prev,
                 imageMetadata: { ...prev.imageMetadata, liveProgress: payload },
+              };
+            }
+            if (prev.beautifier.batchActiveTaskId === payload.taskId) {
+              return {
+                ...prev,
+                beautifier: { ...prev.beautifier, batchLiveProgress: payload },
               };
             }
             return prev;
@@ -1750,6 +1907,70 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const startBeautifyBatch = useCallback(
+    async (
+      req: BeautifyBatchRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<BatchImageJobResponse | null> => {
+      if (activeBeautifyBatchTaskRef.current) return null;
+      const taskId = `i03-beautify-${Date.now()}-${imgBatchSeqRef.current++}`;
+      activeBeautifyBatchTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        beautifier: {
+          ...prev.beautifier,
+          batchStatus: "running",
+          batchActiveTaskId: taskId,
+          batchLiveProgress: {
+            taskId,
+            toolId: "I03",
+            currentIndex: 1,
+            totalItems: req.sourcePaths.length,
+            currentFileName: req.sourcePaths[0] ?? "",
+          },
+          batchErrorMessage: null,
+        },
+      }));
+      try {
+        const res = await beautifyImagesBatch(taskId, req);
+        if (activeBeautifyBatchTaskRef.current !== taskId) return null;
+        activeBeautifyBatchTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          beautifier: {
+            ...prev.beautifier,
+            batchStatus: "idle",
+            batchActiveTaskId: null,
+            batchLiveProgress: null,
+            batchLastReport: res,
+            batchErrorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeBeautifyBatchTaskRef.current !== taskId) return null;
+        activeBeautifyBatchTaskRef.current = null;
+        setSession((prev) => ({
+          ...prev,
+          beautifier: {
+            ...prev.beautifier,
+            batchStatus: "idle",
+            batchActiveTaskId: null,
+            batchLiveProgress: null,
+            batchErrorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelBeautifyBatch = useCallback(async () => {
+    const tid = activeBeautifyBatchTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -1770,7 +1991,11 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         updateCsvJsonSession,
         updateWordCounterSession,
         updateCaseConverterSession,
+        updateScreenCaptureSession,
         updateBeautifierSession,
+        startBeautifyBatch,
+        cancelBeautifyBatch,
+        handoffImageToTool,
         updateBatchRenameSession,
         updateFindDuplicatesSession,
         startDuplicateScan,

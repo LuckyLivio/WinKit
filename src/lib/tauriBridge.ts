@@ -172,15 +172,50 @@ export interface SourceImageInspection {
   previewDataUrl: string;
 }
 
-export interface BeautifyExportParams {
-  inputPath: string;
-  outputPath: string;
+export type BeautifyBackgroundKind = "solid" | "gradient" | "image";
+export type BeautifyAspectPreset = "original" | "1:1" | "16:9" | "4:5" | "9:16";
+
+export interface BeautifyStyleConfig {
+  backgroundKind: BeautifyBackgroundKind;
   backgroundHex: string;
+  gradientStartHex?: string | null;
+  gradientEndHex?: string | null;
+  gradientAngleDeg?: number | null;
+  backgroundImagePath?: string | null;
   padding: number;
   cornerRadius: number;
   shadowStrength: number;
-  aspectRatio: "original" | "1:1" | "16:9";
+  aspectRatio: BeautifyAspectPreset;
+}
+
+export interface BeautifyExportParams {
+  inputPath?: string | null;
+  assetId?: string | null;
+  outputPath: string;
+  backgroundKind?: BeautifyBackgroundKind;
+  backgroundHex: string;
+  gradientStartHex?: string | null;
+  gradientEndHex?: string | null;
+  gradientAngleDeg?: number | null;
+  backgroundImagePath?: string | null;
+  padding: number;
+  cornerRadius: number;
+  shadowStrength: number;
+  aspectRatio: BeautifyAspectPreset;
   overwrite: boolean;
+}
+
+export interface BeautifyRenderAssetRequest {
+  inputPath?: string | null;
+  assetId?: string | null;
+  label?: string | null;
+  style: BeautifyStyleConfig;
+}
+
+export interface BeautifyBatchRequest {
+  sourcePaths: string[];
+  outputDir: string;
+  style: BeautifyStyleConfig;
 }
 
 export interface BeautifyExportResult {
@@ -188,6 +223,111 @@ export interface BeautifyExportResult {
   outputWidth: number;
   outputHeight: number;
   byteLength: number;
+}
+
+export interface ImageAssetPayload {
+  assetId: string;
+  label: string;
+  width: number;
+  height: number;
+  hasAlpha: boolean;
+  byteLength: number;
+  dataUrl: string;
+}
+
+export type SaveAssetFormat = "png" | "jpeg";
+
+export interface SavedImageAssetResult {
+  outputPath: string;
+  width: number;
+  height: number;
+  byteLength: number;
+}
+
+export interface CaptureRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CaptureMonitorInfo {
+  id: string;
+  deviceName: string;
+  isPrimary: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scalePercent: number;
+}
+
+export interface CaptureWindowInfo {
+  hwnd: number;
+  title: string;
+  processName: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  isProtected: boolean;
+}
+
+export type ScrollStopReason =
+  | "reached_bottom"
+  | "user_stopped"
+  | "alignment_failed"
+  | "size_limit_reached"
+  | "max_frames_reached"
+  | "single_frame_only";
+
+export interface CaptureProgressPayload {
+  taskId: string;
+  phase: string;
+  countdownRemaining: number | null;
+  frameCount: number;
+  stitchedHeight: number;
+}
+
+export interface CaptureResultPayload {
+  asset: ImageAssetPayload;
+  mode: string;
+  rect: CaptureRect;
+  frameCount: number;
+  stopReason: ScrollStopReason | null;
+  isPartial: boolean;
+  note: string | null;
+}
+
+export interface CaptureRegionRequest {
+  countdownSeconds: number;
+  includeCursor: boolean;
+  explicitRect?: CaptureRect | null;
+  hideMainWindow?: boolean | null;
+}
+
+export interface CaptureMonitorRequest {
+  monitorId: string;
+  countdownSeconds: number;
+  includeCursor: boolean;
+  hideMainWindow?: boolean | null;
+}
+
+export interface CaptureWindowRequest {
+  hwnd: number;
+  countdownSeconds: number;
+  includeCursor: boolean;
+  hideMainWindow?: boolean | null;
+}
+
+export interface CaptureScrollRequest {
+  countdownSeconds: number;
+  maxFrames?: number | null;
+  maxHeight?: number | null;
+  wheelNotches?: number | null;
+  stepDelayMs?: number | null;
+  explicitRect?: CaptureRect | null;
+  hideMainWindow?: boolean | null;
 }
 
 export interface BatchRenameSkippedItem {
@@ -746,6 +886,126 @@ export async function exportBeautifiedImage(
 ): Promise<BeautifyExportResult> {
   assertFrontendNotShuttingDown();
   return invoke<BeautifyExportResult>("export_beautified_png", { params });
+}
+
+export async function renderBeautifiedAsset(
+  req: BeautifyRenderAssetRequest,
+): Promise<ImageAssetPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImageAssetPayload>("render_beautified_asset", { req });
+}
+
+export async function beautifyImagesBatch(
+  taskId: string,
+  req: BeautifyBatchRequest,
+): Promise<BatchImageJobResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<BatchImageJobResponse>("beautify_images_batch", { taskId, req });
+}
+
+export async function listCaptureMonitors(): Promise<CaptureMonitorInfo[]> {
+  if (!isTauriDesktop()) return [];
+  return invoke<CaptureMonitorInfo[]>("list_capture_monitors");
+}
+
+export async function listCaptureWindows(): Promise<CaptureWindowInfo[]> {
+  if (!isTauriDesktop()) return [];
+  return invoke<CaptureWindowInfo[]>("list_capture_windows");
+}
+
+export async function captureScreenRegion(
+  taskId: string,
+  req: CaptureRegionRequest,
+): Promise<CaptureResultPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<CaptureResultPayload>("capture_screen_region", { taskId, req });
+}
+
+export async function captureScreenMonitor(
+  taskId: string,
+  req: CaptureMonitorRequest,
+): Promise<CaptureResultPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<CaptureResultPayload>("capture_screen_monitor", { taskId, req });
+}
+
+export async function captureScreenWindow(
+  taskId: string,
+  req: CaptureWindowRequest,
+): Promise<CaptureResultPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<CaptureResultPayload>("capture_screen_window", { taskId, req });
+}
+
+export async function captureScreenScroll(
+  taskId: string,
+  req: CaptureScrollRequest,
+): Promise<CaptureResultPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<CaptureResultPayload>("capture_screen_scroll", { taskId, req });
+}
+
+export async function subscribeCaptureProgress(
+  handler: (payload: CaptureProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<CaptureProgressPayload>("winkit://capture-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function storePngAsset(dataUrl: string, label: string): Promise<ImageAssetPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImageAssetPayload>("store_png_asset", { dataUrl, label });
+}
+
+export async function loadFileAsImageAsset(path: string): Promise<ImageAssetPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImageAssetPayload>("load_file_as_image_asset", { path });
+}
+
+export async function getImageAsset(assetId: string): Promise<ImageAssetPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImageAssetPayload>("get_image_asset", { assetId });
+}
+
+export async function copyImageAssetToClipboard(params: {
+  assetId?: string | null;
+  dataUrl?: string | null;
+}): Promise<void> {
+  assertFrontendNotShuttingDown();
+  return invoke<void>("copy_image_asset_to_clipboard", {
+    assetId: params.assetId ?? null,
+    dataUrl: params.dataUrl ?? null,
+  });
+}
+
+export async function readClipboardImageAsAsset(): Promise<ImageAssetPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImageAssetPayload>("read_clipboard_image_as_asset");
+}
+
+export async function saveImageAssetFile(params: {
+  assetId?: string | null;
+  dataUrl?: string | null;
+  outputPath: string;
+  format: SaveAssetFormat;
+  jpegQuality?: number;
+  overwrite: boolean;
+  toolId?: string;
+}): Promise<SavedImageAssetResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<SavedImageAssetResult>("save_image_asset_file", {
+    assetId: params.assetId ?? null,
+    dataUrl: params.dataUrl ?? null,
+    outputPath: params.outputPath,
+    format: params.format,
+    jpegQuality: params.jpegQuality ?? 92,
+    overwrite: params.overwrite,
+    toolId: params.toolId ?? "I01",
+  });
 }
 
 export async function inspectBatchRenameSources(

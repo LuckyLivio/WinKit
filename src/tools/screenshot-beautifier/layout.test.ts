@@ -49,6 +49,47 @@ describe("I03 shared frame layout engine", () => {
     expect(square.canvasWidth).toBe(1080);
     expect(square.canvasHeight).toBe(1080);
     expect(square.effectiveRadius).toBe(160); // clamped to slider bound <= min(w,h)/2
+
+    // 4:5 portrait social frame on 1000x600 + padding 40 -> base 1080x680 -> 1080x1350
+    const portrait45 = computeFrameLayout({
+      sourceWidth: 1000,
+      sourceHeight: 600,
+      padding: 40,
+      cornerRadius: 16,
+      shadowStrength: 20,
+      aspectRatio: "4:5",
+    });
+    expect(portrait45.canvasWidth).toBe(1080);
+    expect(portrait45.canvasHeight).toBe(1350);
+    expect(portrait45.imageWidth).toBe(1000);
+    expect(portrait45.imageHeight).toBe(600);
+    expect(portrait45.exceedsLimits).toBe(false);
+
+    // 9:16 story frame on 800x600 + padding 50 -> base 900x700 -> 900x1600
+    const story916 = computeFrameLayout({
+      sourceWidth: 800,
+      sourceHeight: 600,
+      padding: 50,
+      cornerRadius: 12,
+      shadowStrength: 24,
+      aspectRatio: "9:16",
+    });
+    expect(story916.canvasWidth).toBe(900);
+    expect(story916.canvasHeight).toBe(1600);
+    expect(story916.exceedsLimits).toBe(false);
+
+    // Ultra-tall scrolling capture (800x10000) stays within safety bounds in original mode
+    const ultraTall = computeFrameLayout({
+      sourceWidth: 800,
+      sourceHeight: 10000,
+      padding: 40,
+      cornerRadius: 12,
+      shadowStrength: 20,
+      aspectRatio: "original",
+    });
+    expect(ultraTall.canvasWidth).toBe(880);
+    expect(ultraTall.canvasHeight).toBe(10080);
+    expect(ultraTall.exceedsLimits).toBe(false);
   });
 
   it("flags oversized canvases that exceed safety pixel bounds", () => {
