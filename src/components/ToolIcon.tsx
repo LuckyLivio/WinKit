@@ -28,6 +28,7 @@ import {
   KeyRound,
   Link2,
   LockKeyhole,
+  Mic,
   Minimize2,
   Pencil,
   Pipette,
@@ -143,6 +144,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Combine size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "audio-trim":
       return <AudioWaveform size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "audio-record":
+      return <Mic size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "audio-convert":
       return <AudioLines size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "audio-cleanup":

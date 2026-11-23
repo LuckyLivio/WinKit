@@ -27,9 +27,11 @@ import {
   beginGracefulShutdown,
   bindDisposableListener,
   destroyCurrentWindow,
+  discardAudioRecording,
   fetchRuntimeInfo,
   formatLocalizedError,
   requestWindowClose,
+  stopAudioRecording,
   subscribeNativeCloseRequest,
   subscribeTaskProgress,
   type AppRuntimeInfo,
@@ -162,10 +164,14 @@ export function App({ toolsOverride }: AppProps = {}) {
 
     // Active tasks exist and user has not confirmed exit yet: restore frontend admission while confirming
     resetFrontendShutdownGate();
+    const recordingToolIds = snapshot.tasks
+      .map((item) => item.toolId)
+      .filter((id) => id === "A02" || id === "V05");
     setCoordinatedShutdown({
       phase: "confirming",
       activeCount: Math.max(1, snapshot.activeCount),
       writeFinishingCount: snapshot.writeFinishingCount,
+      recordingToolIds,
     });
   }, [setCoordinatedShutdown]);
 
@@ -190,15 +196,34 @@ export function App({ toolsOverride }: AppProps = {}) {
     }
   }, [setCoordinatedShutdown]);
 
+  const handleStopAndKeepRecording = useCallback(async () => {
+    if (shutdownPhaseRef.current !== "confirming") {
+      return;
+    }
+    const recTools =
+      shutdownState.phase === "confirming" ? (shutdownState.recordingToolIds ?? []) : [];
+    resetFrontendShutdownGate();
+    setCoordinatedShutdown({ phase: "idle" });
+    if (recTools.includes("A02")) {
+      await stopAudioRecording().catch(() => {});
+      setRoute({ kind: "tool", toolId: "A02" });
+    }
+  }, [setCoordinatedShutdown, shutdownState]);
+
   const handleConfirmQuit = useCallback(async () => {
     if (shutdownPhaseRef.current === "draining" || shutdownPhaseRef.current === "closing") {
       return;
     }
+    const recTools =
+      shutdownState.phase === "confirming" ? (shutdownState.recordingToolIds ?? []) : [];
     enterFrontendShutdownGate();
     terminateAllFrontendWorkers();
     setCoordinatedShutdown({ phase: "draining" });
 
     try {
+      if (recTools.includes("A02")) {
+        await discardAudioRecording().catch(() => {});
+      }
       const drain = await beginGracefulShutdown(8000);
       if (!drain.readyToClose) {
         resetFrontendShutdownGate();
@@ -233,7 +258,7 @@ export function App({ toolsOverride }: AppProps = {}) {
         message: formatLocalizedError(err, tRef.current),
       });
     }
-  }, [setCoordinatedShutdown]);
+  }, [setCoordinatedShutdown, shutdownState]);
 
   // Global Ctrl+K shortcut to focus tool search (disabled while shutdown dialog is open)
   useEffect(() => {
@@ -389,6 +414,7 @@ export function App({ toolsOverride }: AppProps = {}) {
             state={shutdownState}
             liveActiveCount={activeTaskIds.length}
             onStay={handleStayInApp}
+            onStopAndKeepRecording={() => void handleStopAndKeepRecording()}
             onConfirmQuit={() => void handleConfirmQuit()}
           />
         </MediaSessionProvider>

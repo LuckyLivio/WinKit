@@ -47,6 +47,7 @@ import { VideoCropWorkspace } from "../tools/video-crop/VideoCropWorkspace";
 import { VideoSpeedWorkspace } from "../tools/video-speed/VideoSpeedWorkspace";
 import { VideoMergeWorkspace } from "../tools/video-merge/VideoMergeWorkspace";
 import { AudioTrimWorkspace } from "../tools/audio-trim/AudioTrimWorkspace";
+import { AudioRecorderWorkspace } from "../tools/audio-recorder/AudioRecorderWorkspace";
 import { AudioConvertWorkspace } from "../tools/audio-convert/AudioConvertWorkspace";
 import { AudioCleanupWorkspace } from "../tools/audio-cleanup/AudioCleanupWorkspace";
 import { VideoReplaceAudioWorkspace } from "../tools/video-replace-audio/VideoReplaceAudioWorkspace";
@@ -101,6 +102,7 @@ export type ToolIconName =
   | "video-speed"
   | "video-merge"
   | "audio-trim"
+  | "audio-record"
   | "audio-convert"
   | "audio-cleanup"
   | "video-replace-audio"
@@ -1544,6 +1546,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "audio-cleanup",
     implementationStatus: "full",
     component: AudioCleanupWorkspace,
+  },
+  {
+    id: "A02",
+    category: "audio",
+    name: { "zh-CN": "录音机", "en-US": "Record Audio" },
+    summary: {
+      "zh-CN":
+        "选择麦克风查看实时输入电平，支持开始、暂停、继续、停止试听并保存为无损 WAV 或 M4A/AAC，保存后可一键送往 A03 剪切或 A01 降噪（离线转写留阶段 6）",
+      "en-US":
+        "Select a microphone with live input metering, record with pause/resume, audition, and save as WAV or M4A/AAC with one-click handoff to A03 Trim or A01 Clean Up (offline transcription in Phase 6)",
+    },
+    keywords: [
+      "a02",
+      "record audio",
+      "voice recorder",
+      "microphone",
+      "mic",
+      "wav",
+      "m4a",
+      "aac",
+      "wasapi",
+      "录音",
+      "录音机",
+      "麦克风",
+      "电平",
+    ],
+    icon: "audio-record",
+    implementationStatus: "partial",
+    component: AudioRecorderWorkspace,
   },
   {
     id: "A03",

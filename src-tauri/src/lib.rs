@@ -1,7 +1,9 @@
 pub mod archive;
 pub mod audio_cleanup;
 pub mod audio_convert;
+pub mod audio_recorder;
 pub mod audio_trim;
+pub mod audio_wasapi;
 pub mod batch_rename;
 pub mod beautifier;
 pub mod codec;
@@ -57,10 +59,15 @@ use crate::audio_cleanup::{
 use crate::audio_convert::{
     convert_audio_batch_impl, ConvertAudioBatchRequest, ConvertAudioBatchResponse,
 };
+use crate::audio_recorder::{
+    list_audio_capture_devices_impl, AudioRecorderManager, AudioRecorderSnapshot,
+    SaveAudioRecordingRequest, SaveAudioRecordingResult,
+};
 use crate::audio_trim::{
     extract_audio_waveform_impl, trim_audio_file_impl, AudioWaveformPayload, TrimAudioRequest,
     TrimAudioResult,
 };
+use crate::audio_wasapi::AudioDeviceInfo;
 use crate::batch_rename::{
     execute_batch_rename_impl, inspect_sources_impl, undo_last_batch_rename_impl,
     BatchRenameExecuteResponse, BatchRenameInspectResponse, BatchRenameState,
@@ -3628,6 +3635,110 @@ async fn watermark_video<R: Runtime>(
 }
 
 #[tauri::command]
+async fn list_audio_capture_devices() -> Result<Vec<AudioDeviceInfo>, AppError> {
+    tauri::async_runtime::spawn_blocking(list_audio_capture_devices_impl)
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio device enumeration failed."))?
+}
+
+#[tauri::command]
+fn get_audio_recorder_status(recorder: State<'_, AudioRecorderManager>) -> AudioRecorderSnapshot {
+    recorder.snapshot()
+}
+
+#[tauri::command]
+async fn start_audio_monitor(
+    app: AppHandle,
+    recorder: State<'_, AudioRecorderManager>,
+    device_id: Option<String>,
+) -> Result<AudioRecorderSnapshot, AppError> {
+    let mgr = recorder.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || mgr.start_monitor(&app, device_id))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio monitor startup failed."))?
+}
+
+#[tauri::command]
+async fn stop_audio_monitor(
+    app: AppHandle,
+    recorder: State<'_, AudioRecorderManager>,
+) -> Result<AudioRecorderSnapshot, AppError> {
+    let mgr = recorder.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(mgr.stop_monitor(&app)))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio monitor stop failed."))?
+}
+
+#[tauri::command]
+async fn start_audio_recording(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    previews: State<'_, MediaPreviewRegistry>,
+    recorder: State<'_, AudioRecorderManager>,
+    device_id: Option<String>,
+) -> Result<AudioRecorderSnapshot, AppError> {
+    let reg = registry.inner().clone();
+    let prev = previews.inner().clone();
+    let mgr = recorder.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || mgr.start_recording(&app, &reg, &prev, device_id))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio recording startup failed."))?
+}
+
+#[tauri::command]
+fn pause_audio_recording(
+    app: AppHandle,
+    recorder: State<'_, AudioRecorderManager>,
+) -> Result<AudioRecorderSnapshot, AppError> {
+    recorder.pause_recording(&app)
+}
+
+#[tauri::command]
+fn resume_audio_recording(
+    app: AppHandle,
+    recorder: State<'_, AudioRecorderManager>,
+) -> Result<AudioRecorderSnapshot, AppError> {
+    recorder.resume_recording(&app)
+}
+
+#[tauri::command]
+async fn stop_audio_recording(
+    app: AppHandle,
+    recorder: State<'_, AudioRecorderManager>,
+) -> Result<AudioRecorderSnapshot, AppError> {
+    let mgr = recorder.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || mgr.stop_recording(&app))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio recording stop failed."))?
+}
+
+#[tauri::command]
+async fn discard_audio_recording(
+    app: AppHandle,
+    recorder: State<'_, AudioRecorderManager>,
+) -> Result<AudioRecorderSnapshot, AppError> {
+    let mgr = recorder.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(mgr.discard(&app)))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio recording discard failed."))?
+}
+
+#[tauri::command]
+async fn save_audio_recording(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    recorder: State<'_, AudioRecorderManager>,
+    req: SaveAudioRecordingRequest,
+) -> Result<SaveAudioRecordingResult, AppError> {
+    let reg = registry.inner().clone();
+    let mgr = recorder.inner().clone();
+    let media_root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || mgr.save_recording(&app, &reg, &media_root, &req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio recording save failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -3643,20 +3754,35 @@ fn get_task_snapshot(registry: State<'_, TaskRegistry>) -> TaskRegistrySnapshot 
 }
 
 #[tauri::command]
-fn request_window_close(registry: State<'_, TaskRegistry>) -> CloseRequestDecision {
-    registry.evaluate_close_request()
+fn request_window_close(
+    registry: State<'_, TaskRegistry>,
+    recorder: State<'_, AudioRecorderManager>,
+) -> CloseRequestDecision {
+    let decision = registry.evaluate_close_request();
+    if decision.immediate_close_allowed {
+        recorder.cleanup_on_exit();
+    }
+    decision
 }
 
 #[tauri::command]
 async fn begin_graceful_shutdown(
     registry: State<'_, TaskRegistry>,
+    recorder: State<'_, AudioRecorderManager>,
     timeout_ms: Option<u64>,
 ) -> Result<ShutdownDrainResult, AppError> {
     let reg = registry.inner().clone();
+    let mgr = recorder.inner().clone();
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(8_000).clamp(100, 30_000));
-    tauri::async_runtime::spawn_blocking(move || reg.begin_shutdown_and_drain(timeout))
-        .await
-        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Shutdown coordinator failed."))
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = reg.begin_shutdown_and_drain(timeout);
+        if res.ready_to_close {
+            mgr.cleanup_on_exit();
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Shutdown coordinator failed."))
 }
 
 #[tauri::command]
@@ -3674,6 +3800,7 @@ pub fn run() {
         .manage(BatchRenameState::default())
         .manage(ImageAssetStore::default())
         .manage(preview_registry)
+        .manage(AudioRecorderManager::new())
         .register_uri_scheme_protocol("winkitmedia", move |_ctx, request| {
             handle_winkit_media_protocol(&preview_registry_for_proto, request)
         })
@@ -3787,6 +3914,16 @@ pub fn run() {
             preview_burned_subtitle_frame,
             burn_in_subtitles,
             watermark_video,
+            list_audio_capture_devices,
+            get_audio_recorder_status,
+            start_audio_monitor,
+            stop_audio_monitor,
+            start_audio_recording,
+            pause_audio_recording,
+            resume_audio_recording,
+            stop_audio_recording,
+            discard_audio_recording,
+            save_audio_recording,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
