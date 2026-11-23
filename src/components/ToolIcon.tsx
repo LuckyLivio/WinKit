@@ -6,6 +6,7 @@ import {
   CaseSensitive,
   Clock,
   Compass,
+  EyeOff,
   FileArchive,
   FilePenLine,
   FileText,
@@ -18,6 +19,7 @@ import {
   Link2,
   LockKeyhole,
   Minimize2,
+  Pencil,
   QrCode,
   Regex,
   RotateCw,
@@ -86,6 +88,10 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <RotateCw size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-metadata":
       return <ShieldOff size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "image-redact":
+      return <EyeOff size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "image-annotate":
+      return <Pencil size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "table-2":
       return <Table2 size={size} strokeWidth={1.75} aria-hidden="true" />;
   }

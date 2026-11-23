@@ -957,6 +957,31 @@ fn verify_stripped_output(
     Ok(decoded.dimensions())
 }
 
+/// Reuses I09's container-level metadata stripper and independent post-strip verifier on
+/// encoded PNG or JPEG bytes so exported redacted copies contain zero EXIF, GPS, XMP, IPTC,
+/// comments, or embedded thumbnails.
+pub fn strip_encoded_bytes_privacy_verified(
+    bytes: &[u8],
+    format: ImageFileFormat,
+) -> Result<Vec<u8>, AppError> {
+    let stripped = match format {
+        ImageFileFormat::Png => strip_png_container(bytes, false, false)?,
+        ImageFileFormat::Jpeg => strip_jpeg_container(bytes, false, false)?,
+        _ => {
+            return Err(AppError::invalid_param(
+                "Privacy metadata strip helper expects PNG or JPEG bytes.",
+            ))
+        }
+    };
+    let label = match format {
+        ImageFileFormat::Png => Path::new("redacted.png"),
+        ImageFileFormat::Jpeg => Path::new("redacted.jpg"),
+        _ => Path::new("redacted.bin"),
+    };
+    verify_stripped_output(&stripped.bytes, format, label)?;
+    Ok(stripped.bytes)
+}
+
 pub fn strip_images_metadata_batch_impl<F>(
     task_id: &str,
     req: &StripMetadataBatchRequest,

@@ -244,6 +244,43 @@ export interface SavedImageAssetResult {
   byteLength: number;
 }
 
+export type RedactionKind = "blur" | "pixelate" | "solid";
+
+export interface RedactionRegionPayload {
+  kind: RedactionKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  strength: number;
+  colorHex?: string | null;
+}
+
+export interface ApplyRedactionsAssetRequest {
+  assetId: string;
+  regions: RedactionRegionPayload[];
+  label?: string | null;
+}
+
+export interface ExportRedactedImageRequest {
+  assetId: string;
+  sourcePath?: string | null;
+  regions: RedactionRegionPayload[];
+  outputPath: string;
+  format: SaveAssetFormat;
+  jpegQuality?: number | null;
+  stripMetadata: boolean;
+  overwrite: boolean;
+}
+
+export interface ExportRedactedImageResult {
+  outputPath: string;
+  width: number;
+  height: number;
+  byteLength: number;
+  metadataStripped: boolean;
+}
+
 export interface CaptureRect {
   x: number;
   y: number;
@@ -1006,6 +1043,20 @@ export async function saveImageAssetFile(params: {
     overwrite: params.overwrite,
     toolId: params.toolId ?? "I01",
   });
+}
+
+export async function applyImageRedactionsToAsset(
+  req: ApplyRedactionsAssetRequest,
+): Promise<ImageAssetPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<ImageAssetPayload>("apply_image_redactions_to_asset", { req });
+}
+
+export async function exportRedactedImageFile(
+  req: ExportRedactedImageRequest,
+): Promise<ExportRedactedImageResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<ExportRedactedImageResult>("export_redacted_image_file", { req });
 }
 
 export async function inspectBatchRenameSources(
