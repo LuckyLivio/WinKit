@@ -1189,6 +1189,24 @@ pub fn run_ffmpeg_cancellable(
     args: &[String],
     total_duration_sec: Option<f64>,
     cancel_flag: &AtomicBool,
+    on_progress: impl FnMut(Option<f64>, Option<f64>),
+) -> Result<(), AppError> {
+    run_ffmpeg_cancellable_in_dir(
+        ffmpeg,
+        args,
+        None,
+        total_duration_sec,
+        cancel_flag,
+        on_progress,
+    )
+}
+
+pub fn run_ffmpeg_cancellable_in_dir(
+    ffmpeg: &Path,
+    args: &[String],
+    working_dir: Option<&Path>,
+    total_duration_sec: Option<f64>,
+    cancel_flag: &AtomicBool,
     mut on_progress: impl FnMut(Option<f64>, Option<f64>),
 ) -> Result<(), AppError> {
     if cancel_flag.load(Ordering::Relaxed) {
@@ -1196,6 +1214,9 @@ pub fn run_ffmpeg_cancellable(
     }
 
     let mut cmd = Command::new(ffmpeg);
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
     cmd.arg("-hide_banner")
         .arg("-y")
         .arg("-loglevel")

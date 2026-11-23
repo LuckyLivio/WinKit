@@ -181,9 +181,9 @@ pub fn extract_audio_waveform_impl(
         .unwrap_or(DEFAULT_WAVEFORM_BUCKETS)
         .clamp(MIN_WAVEFORM_BUCKETS, MAX_WAVEFORM_BUCKETS);
 
-    // Choose adaptive streaming sample rate: ~48 samples per bucket, bounded to [400, 8000] Hz
-    let ideal_sr = ((buckets as f64 * 48.0) / duration_sec).ceil() as u32;
-    let analysis_sr = ideal_sr.clamp(400, 8000);
+    // Stream mono s16le PCM at 8 kHz (4 kHz Nyquist covers speech & music bands cleanly while
+    // streaming in fixed 32 KiB chunks -> strictly O(buckets) RAM even on multi-hour recordings).
+    let analysis_sr: u32 = 8000;
     let expected_samples = (duration_sec * f64::from(analysis_sr)).max(buckets as f64);
 
     let mut cmd = Command::new(&tools.ffmpeg);

@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   bindDisposableListener,
+  burnInSubtitles,
   cancelBackendTask,
   changeVideoSpeedBatch,
   cleanUpAudio,
@@ -26,13 +27,22 @@ import {
   subscribeMediaTaskProgress,
   trimAudioFile,
   trimVideoFile,
+  watermarkVideo,
   type AudioBitDepthOption,
   type AudioConvertFormat,
   type AudioDenoiseLevel,
   type AudioExtractFormat,
   type AudioWaveformPayload,
+  type BurnInSubtitlesRequest,
+  type BurnInSubtitlesResult,
   type ChangeVideoSpeedBatchRequest,
   type ChangeVideoSpeedBatchResponse,
+  type ParsedSubtitleFile,
+  type PreviewSubtitleFrameResult,
+  type SubtitleBoxStyle,
+  type SubtitlePosition,
+  type WatermarkVideoRequest,
+  type WatermarkVideoResult,
   type CleanUpAudioRequest,
   type CleanUpAudioResult,
   type CompressQualityPreset,
@@ -381,6 +391,43 @@ export interface VideoReplaceAudioSessionState {
   errorMessage: string | null;
 }
 
+export interface VideoSubtitlesSessionState {
+  videoPath: string | null;
+  videoProbe: MediaProbeReport | null;
+  posterUrl: string | null;
+  subtitlePath: string | null;
+  parsedSubtitle: ParsedSubtitleFile | null;
+  subtitleParseError: string | null;
+  selectedCueIndex: number | null;
+  previewTimestampSec: number;
+  previewFrame: PreviewSubtitleFrameResult | null;
+  previewLoading: boolean;
+  previewError: string | null;
+  fontSize: number;
+  position: SubtitlePosition;
+  boxStyle: SubtitleBoxStyle;
+  marginV: number;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastResult: BurnInSubtitlesResult | null;
+  errorMessage: string | null;
+}
+
+export interface VideoWatermarkSessionState {
+  videoPath: string | null;
+  videoProbe: MediaProbeReport | null;
+  posterUrl: string | null;
+  posterTimestampSec: number;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastResult: WatermarkVideoResult | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
@@ -398,6 +445,8 @@ export interface MediaSessionRoot {
   audioConvert: AudioConvertSessionState;
   audioCleanup: AudioCleanupSessionState;
   videoReplaceAudio: VideoReplaceAudioSessionState;
+  videoSubtitles: VideoSubtitlesSessionState;
+  videoWatermark: VideoWatermarkSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -653,6 +702,41 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  videoSubtitles: {
+    videoPath: null,
+    videoProbe: null,
+    posterUrl: null,
+    subtitlePath: null,
+    parsedSubtitle: null,
+    subtitleParseError: null,
+    selectedCueIndex: null,
+    previewTimestampSec: 0,
+    previewFrame: null,
+    previewLoading: false,
+    previewError: null,
+    fontSize: 38,
+    position: "bottom",
+    boxStyle: "outline_shadow",
+    marginV: 36,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  videoWatermark: {
+    videoPath: null,
+    videoProbe: null,
+    posterUrl: null,
+    posterTimestampSec: 0.5,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -768,6 +852,22 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<ReplaceAudioResult | null>;
   cancelVideoReplaceAudioTask: () => Promise<void>;
+  updateVideoSubtitlesSession: (
+    updater: (prev: VideoSubtitlesSessionState) => VideoSubtitlesSessionState,
+  ) => void;
+  startVideoSubtitlesTask: (
+    req: Omit<BurnInSubtitlesRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<BurnInSubtitlesResult | null>;
+  cancelVideoSubtitlesTask: () => Promise<void>;
+  updateVideoWatermarkSession: (
+    updater: (prev: VideoWatermarkSessionState) => VideoWatermarkSessionState,
+  ) => void;
+  startVideoWatermarkTask: (
+    req: Omit<WatermarkVideoRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<WatermarkVideoResult | null>;
+  cancelVideoWatermarkTask: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -805,6 +905,8 @@ export function MediaSessionProvider({
   const activeAudioConvertTaskRef = useRef<string | null>(null);
   const activeAudioCleanupTaskRef = useRef<string | null>(null);
   const activeVideoReplaceAudioTaskRef = useRef<string | null>(null);
+  const activeVideoSubtitlesTaskRef = useRef<string | null>(null);
+  const activeVideoWatermarkTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
 
@@ -901,6 +1003,22 @@ export function MediaSessionProvider({
             setMediaSession((prev) => ({
               ...prev,
               videoReplaceAudio: { ...prev.videoReplaceAudio, liveProgress: payload },
+            }));
+          } else if (
+            payload.toolId === "V02" &&
+            payload.taskId === activeVideoSubtitlesTaskRef.current
+          ) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoSubtitles: { ...prev.videoSubtitles, liveProgress: payload },
+            }));
+          } else if (
+            payload.toolId === "I13" &&
+            payload.taskId === activeVideoWatermarkTaskRef.current
+          ) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoWatermark: { ...prev.videoWatermark, liveProgress: payload },
             }));
           }
         }),
@@ -2040,6 +2158,156 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateVideoSubtitlesSession = useCallback(
+    (updater: (prev: VideoSubtitlesSessionState) => VideoSubtitlesSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoSubtitles: updater(prev.videoSubtitles) }));
+    },
+    [],
+  );
+
+  const startVideoSubtitlesTask = useCallback(
+    async (
+      req: Omit<BurnInSubtitlesRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<BurnInSubtitlesResult | null> => {
+      if (activeVideoSubtitlesTaskRef.current) return null;
+      const taskId = `v02-sub-${Date.now()}-${taskSeqRef.current++}`;
+      activeVideoSubtitlesTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoSubtitles: {
+          ...prev.videoSubtitles,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V02",
+            phase: "running",
+            currentItem: 1,
+            totalItems: 1,
+            itemName: req.videoPath,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await burnInSubtitles({ ...req, taskId });
+        if (activeVideoSubtitlesTaskRef.current !== taskId) return null;
+        activeVideoSubtitlesTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeVideoSubtitlesTaskRef.current !== taskId) return null;
+        activeVideoSubtitlesTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoSubtitlesTask = useCallback(async () => {
+    const tid = activeVideoSubtitlesTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateVideoWatermarkSession = useCallback(
+    (updater: (prev: VideoWatermarkSessionState) => VideoWatermarkSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoWatermark: updater(prev.videoWatermark) }));
+    },
+    [],
+  );
+
+  const startVideoWatermarkTask = useCallback(
+    async (
+      req: Omit<WatermarkVideoRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<WatermarkVideoResult | null> => {
+      if (activeVideoWatermarkTaskRef.current) return null;
+      const taskId = `i13-vidwm-${Date.now()}-${taskSeqRef.current++}`;
+      activeVideoWatermarkTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoWatermark: {
+          ...prev.videoWatermark,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "I13",
+            phase: "running",
+            currentItem: 1,
+            totalItems: 1,
+            itemName: req.sourcePath,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await watermarkVideo({ ...req, taskId });
+        if (activeVideoWatermarkTaskRef.current !== taskId) return null;
+        activeVideoWatermarkTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoWatermark: {
+            ...prev.videoWatermark,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeVideoWatermarkTaskRef.current !== taskId) return null;
+        activeVideoWatermarkTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoWatermark: {
+            ...prev.videoWatermark,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoWatermarkTask = useCallback(async () => {
+    const tid = activeVideoWatermarkTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -2110,6 +2378,12 @@ export function MediaSessionProvider({
         updateVideoReplaceAudioSession,
         startVideoReplaceAudioTask,
         cancelVideoReplaceAudioTask,
+        updateVideoSubtitlesSession,
+        startVideoSubtitlesTask,
+        cancelVideoSubtitlesTask,
+        updateVideoWatermarkSession,
+        startVideoWatermarkTask,
+        cancelVideoWatermarkTask,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,
@@ -2118,6 +2392,10 @@ export function MediaSessionProvider({
       {children}
     </MediaSessionContext.Provider>
   );
+}
+
+export function useOptionalMediaSession(): MediaSessionContextValue | null {
+  return useContext(MediaSessionContext);
 }
 
 export function useMediaSession(): MediaSessionContextValue {

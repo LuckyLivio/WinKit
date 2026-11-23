@@ -31,6 +31,7 @@ pub mod media_merge;
 pub mod media_mute;
 pub mod media_resize;
 pub mod media_speed;
+pub mod media_subtitles;
 pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
@@ -40,6 +41,7 @@ pub mod tasks;
 pub mod unicode_inspector;
 pub mod uuid_tool;
 pub mod video_replace_audio;
+pub mod video_watermark;
 pub mod wic_heic;
 
 use crate::archive::{
@@ -160,6 +162,11 @@ use crate::media_resize::{
 use crate::media_speed::{
     change_video_speed_batch_impl, ChangeVideoSpeedBatchRequest, ChangeVideoSpeedBatchResponse,
 };
+use crate::media_subtitles::{
+    burn_in_subtitles_impl, parse_subtitle_file_impl, preview_burned_subtitle_frame_impl,
+    BurnInSubtitlesRequest, BurnInSubtitlesResult, ParsedSubtitleFile, PreviewSubtitleFrameRequest,
+    PreviewSubtitleFrameResult,
+};
 use crate::media_trim::{
     analyze_trim_keyframes_impl, trim_video_file_impl, TrimKeyframeAnalysis,
     TrimKeyframeAnalysisRequest, TrimVideoRequest, TrimVideoResult,
@@ -189,6 +196,7 @@ use crate::video_replace_audio::{
     preview_replace_audio_impl, replace_video_audio_impl, PreviewReplaceAudioRequest,
     PreviewReplaceAudioResult, ReplaceAudioRequest, ReplaceAudioResult,
 };
+use crate::video_watermark::{watermark_video_impl, WatermarkVideoRequest, WatermarkVideoResult};
 use crate::wic_heic::{get_heic_capabilities, HeicCapabilities};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -3477,6 +3485,149 @@ async fn replace_video_audio<R: Runtime>(
 }
 
 #[tauri::command]
+async fn parse_subtitle_file(
+    registry: State<'_, TaskRegistry>,
+    path: String,
+) -> Result<ParsedSubtitleFile, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || parse_subtitle_file_impl(&path))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Subtitle parse worker failed."))?
+}
+
+#[tauri::command]
+async fn preview_burned_subtitle_frame<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: PreviewSubtitleFrameRequest,
+) -> Result<PreviewSubtitleFrameResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || preview_burned_subtitle_frame_impl(&root, &req))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "INTERNAL_JOIN_ERROR",
+                "Subtitle frame preview worker failed.",
+            )
+        })?
+}
+
+#[tauri::command]
+async fn burn_in_subtitles<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: BurnInSubtitlesRequest,
+) -> Result<BurnInSubtitlesResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param(
+            "Invalid burn-in subtitles task ID.",
+        ));
+    }
+    let guard = registry.register_checked(&tid, "V02", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V02", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = burn_in_subtitles_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V02".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V02", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V02", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Burn-in subtitles worker failed."))?
+}
+
+#[tauri::command]
+async fn watermark_video<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: WatermarkVideoRequest,
+) -> Result<WatermarkVideoResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid video watermark task ID."));
+    }
+    let guard = registry.register_checked(&tid, "I13", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "I13", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = watermark_video_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "I13".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "I13", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "I13", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video watermark worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -3632,6 +3783,10 @@ pub fn run() {
             clean_up_audio,
             preview_replace_audio,
             replace_video_audio,
+            parse_subtitle_file,
+            preview_burned_subtitle_frame,
+            burn_in_subtitles,
+            watermark_video,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

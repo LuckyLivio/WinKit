@@ -347,7 +347,10 @@ export function AudioCleanupWorkspace() {
       <section className="media-section-card">
         <div className="media-section-header">
           <div>
-            <h2 className="media-section-title">
+            <h2
+              className="media-section-title"
+              style={{ justifyContent: "flex-start", gap: "8px", margin: 0 }}
+            >
               <SlidersHorizontal size={16} aria-hidden="true" />
               <span>{isZh ? "音频降噪与人声增强" : "Clean Up Audio"}</span>
             </h2>
@@ -489,7 +492,8 @@ export function AudioCleanupWorkspace() {
                     {isZh ? "背景降噪强度" : "Background Denoise"}
                   </span>
                   <div
-                    className="segmented-control"
+                    className="segmented"
+                    style={{ display: "flex", width: "100%" }}
                     role="radiogroup"
                     aria-label={isZh ? "降噪强度" : "Denoise level"}
                   >
@@ -499,7 +503,8 @@ export function AudioCleanupWorkspace() {
                         type="button"
                         role="radio"
                         aria-checked={state.denoiseLevel === choice.value}
-                        className={`segmented-option ${state.denoiseLevel === choice.value ? "is-active" : ""}`}
+                        style={{ flex: 1 }}
+                        className={`segmented-btn ${state.denoiseLevel === choice.value ? "is-selected" : ""}`}
                         disabled={running}
                         onClick={() => {
                           invalidatePreview();
@@ -702,7 +707,7 @@ export function AudioCleanupWorkspace() {
                   <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                     <div className="media-actions-row" style={{ flexWrap: "wrap" }}>
                       <div
-                        className="segmented-control"
+                        className="segmented"
                         role="tablist"
                         aria-label={isZh ? "对比试听切换" : "Before or After"}
                       >
@@ -710,7 +715,7 @@ export function AudioCleanupWorkspace() {
                           type="button"
                           role="tab"
                           aria-selected={auditionSide === "before"}
-                          className={`segmented-option ${auditionSide === "before" ? "is-active" : ""}`}
+                          className={`segmented-btn ${auditionSide === "before" ? "is-selected" : ""}`}
                           onClick={() => handleSwitchAuditionSide("before")}
                         >
                           {isZh ? "处理前 (原声)" : "Before (Original)"}
@@ -719,7 +724,7 @@ export function AudioCleanupWorkspace() {
                           type="button"
                           role="tab"
                           aria-selected={auditionSide === "after"}
-                          className={`segmented-option ${auditionSide === "after" ? "is-active" : ""}`}
+                          className={`segmented-btn ${auditionSide === "after" ? "is-selected" : ""}`}
                           onClick={() => handleSwitchAuditionSide("after")}
                         >
                           {isZh ? "处理后 (降噪+标准化)" : "After (Cleaned)"}
