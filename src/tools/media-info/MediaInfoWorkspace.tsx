@@ -409,13 +409,29 @@ export function MediaInfoWorkspace() {
                 </>
               )}
               {report?.hasAudio && (
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => handoffMediaFileToTool("A04", report.path)}
-                >
-                  <span>{isZh ? "提取音频 (A04)" : "Extract Audio (A04)"}</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("A03", report.path)}
+                  >
+                    <span>{isZh ? "音频剪切 (A03)" : "Trim Audio (A03)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("A04", report.path)}
+                  >
+                    <span>{isZh ? "提取音频 (A04)" : "Extract Audio (A04)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handoffMediaFileToTool("A05", report.path)}
+                  >
+                    <span>{isZh ? "音频转换 (A05)" : "Convert Audio (A05)"}</span>
+                  </button>
+                </>
               )}
             </div>
             <button type="button" className="btn btn-ghost" onClick={handleClearAll}>

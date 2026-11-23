@@ -1,4 +1,6 @@
 pub mod archive;
+pub mod audio_convert;
+pub mod audio_trim;
 pub mod batch_rename;
 pub mod beautifier;
 pub mod codec;
@@ -43,6 +45,13 @@ use crate::archive::{
     open_local_directory_impl, ArchivePreviewResponse, CreateArchiveRequest, CreateArchiveResponse,
     ExtractArchivesBatchResponse, ExtractArchivesRequest, ARCHIVE_PROGRESS_EVENT,
     DEFAULT_MAX_EXTRACT_BYTES_PER_ARCHIVE,
+};
+use crate::audio_convert::{
+    convert_audio_batch_impl, ConvertAudioBatchRequest, ConvertAudioBatchResponse,
+};
+use crate::audio_trim::{
+    extract_audio_waveform_impl, trim_audio_file_impl, AudioWaveformPayload, TrimAudioRequest,
+    TrimAudioResult,
 };
 use crate::batch_rename::{
     execute_batch_rename_impl, inspect_sources_impl, undo_last_batch_rename_impl,
@@ -3172,6 +3181,136 @@ async fn merge_videos<R: Runtime>(
 }
 
 #[tauri::command]
+async fn extract_audio_waveform<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    preview_registry: State<'_, MediaPreviewRegistry>,
+    source_path: String,
+    buckets: Option<usize>,
+) -> Result<AudioWaveformPayload, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    let preview_reg = preview_registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_audio_waveform_impl(&root, &preview_reg, &source_path, buckets)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio waveform worker failed."))?
+}
+
+#[tauri::command]
+async fn trim_audio_file<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: TrimAudioRequest,
+) -> Result<TrimAudioResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid audio trim task ID."));
+    }
+    let guard = registry.register_checked(&tid, "A03", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "A03", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = trim_audio_file_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "A03".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "A03", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "A03", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio trim worker failed."))?
+}
+
+#[tauri::command]
+async fn convert_audio_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: ConvertAudioBatchRequest,
+) -> Result<ConvertAudioBatchResponse, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid audio convert task ID."));
+    }
+    let guard = registry.register_checked(&tid, "A05", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "A05", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = convert_audio_batch_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "A05".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "A05", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "A05", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Audio convert worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -3320,6 +3459,9 @@ pub fn run() {
             crop_rotate_video,
             change_video_speed_batch,
             merge_videos,
+            extract_audio_waveform,
+            trim_audio_file,
+            convert_audio_batch,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

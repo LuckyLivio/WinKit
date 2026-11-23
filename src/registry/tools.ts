@@ -46,6 +46,8 @@ import { VideoResizeWorkspace } from "../tools/video-resize/VideoResizeWorkspace
 import { VideoCropWorkspace } from "../tools/video-crop/VideoCropWorkspace";
 import { VideoSpeedWorkspace } from "../tools/video-speed/VideoSpeedWorkspace";
 import { VideoMergeWorkspace } from "../tools/video-merge/VideoMergeWorkspace";
+import { AudioTrimWorkspace } from "../tools/audio-trim/AudioTrimWorkspace";
+import { AudioConvertWorkspace } from "../tools/audio-convert/AudioConvertWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -94,7 +96,9 @@ export type ToolIconName =
   | "video-resize"
   | "video-crop"
   | "video-speed"
-  | "video-merge";
+  | "video-merge"
+  | "audio-trim"
+  | "audio-convert";
 
 export interface RegisteredTool {
   id: string;
@@ -1448,6 +1452,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     component: VideoGifWorkspace,
   },
   {
+    id: "A03",
+    category: "audio",
+    name: { "zh-CN": "音频剪切", "en-US": "Trim Audio" },
+    summary: {
+      "zh-CN":
+        "流式有界内存生成真实波形，支持拖动选区、精确起止时间、选区试听及独立淡入/淡出控制（短选区明示有效范围），切换工具保留选区",
+      "en-US":
+        "Trim audio on real bounded-memory waveforms with draggable selection, exact start/end inputs, selection audition, and separate fade-in/fade-out controls",
+    },
+    keywords: [
+      "trim audio",
+      "cut audio",
+      "waveform",
+      "fade in",
+      "fade out",
+      "audio",
+      "mp3",
+      "wav",
+      "音频剪切",
+      "剪辑录音",
+      "波形",
+      "淡入",
+      "淡出",
+    ],
+    icon: "audio-trim",
+    implementationStatus: "full",
+    component: AudioTrimWorkspace,
+  },
+  {
     id: "A04",
     category: "audio",
     name: { "zh-CN": "提取视频音频", "en-US": "Extract Audio" },
@@ -1473,6 +1506,34 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "audio-extract",
     implementationStatus: "full",
     component: AudioExtractWorkspace,
+  },
+  {
+    id: "A05",
+    category: "audio",
+    name: { "zh-CN": "音频格式转换", "en-US": "Convert Audio" },
+    summary: {
+      "zh-CN":
+        "单文件与批量转换为 MP3、M4A (AAC)、WAV、FLAC 与 AIFF，按格式提供码率/采样率/位深选项，无损格式默认保留源位深、采样率与声道",
+      "en-US":
+        "Convert single or batch audio to MP3, M4A (AAC), WAV, FLAC, or AIFF with format-appropriate bitrate, sample rate, and lossless source-precision preservation",
+    },
+    keywords: [
+      "convert audio",
+      "mp3",
+      "m4a",
+      "aac",
+      "wav",
+      "flac",
+      "aiff",
+      "lossless",
+      "24-bit",
+      "音频格式转换",
+      "音频转码",
+      "无损",
+    ],
+    icon: "audio-convert",
+    implementationStatus: "full",
+    component: AudioConvertWorkspace,
   },
 ];
 

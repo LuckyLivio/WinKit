@@ -1299,6 +1299,8 @@ mod tests {
                     channels: Some(2),
                     channel_layout: Some("stereo".into()),
                     sample_rate_hz: Some(48000),
+                    sample_fmt: None,
+                    bits_per_sample: None,
                     bitrate_bps: Some(128_000),
                     duration_sec: Some(5.0),
                     is_default: i == 0,

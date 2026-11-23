@@ -50,6 +50,8 @@ pub struct AudioStreamInfo {
     pub channels: Option<u32>,
     pub channel_layout: Option<String>,
     pub sample_rate_hz: Option<u32>,
+    pub sample_fmt: Option<String>,
+    pub bits_per_sample: Option<u32>,
     pub bitrate_bps: Option<u64>,
     pub duration_sec: Option<f64>,
     pub is_default: bool,
@@ -123,6 +125,9 @@ struct FfprobeStream {
     channels: Option<u32>,
     channel_layout: Option<String>,
     sample_rate: Option<String>,
+    sample_fmt: Option<String>,
+    bits_per_sample: Option<u32>,
+    bits_per_raw_sample: Option<String>,
     #[serde(default)]
     disposition: BTreeMap<String, i64>,
     #[serde(default)]
@@ -195,6 +200,23 @@ pub fn parse_rational_fps(raw: Option<&str>) -> Option<f64> {
         }
     } else {
         parse_positive_f64(Some(s)).filter(|v| *v <= 2000.0)
+    }
+}
+
+fn infer_pcm_bits(codec: Option<&str>) -> Option<u32> {
+    let c = codec?.to_ascii_lowercase();
+    if c.contains("64") {
+        Some(64)
+    } else if c.contains("32") {
+        Some(32)
+    } else if c.contains("24") {
+        Some(24)
+    } else if c.contains("16") {
+        Some(16)
+    } else if c.contains("u8") || c.contains("s8") {
+        Some(8)
+    } else {
+        None
     }
 }
 
@@ -607,10 +629,15 @@ pub fn parse_ffprobe_json(
                 let track_idx = audio_streams.len();
                 let stream_dur = parse_positive_f64(st.duration.as_deref())
                     .or_else(|| parse_tag_duration(&st.tags));
+                let codec_name = non_empty_string(st.codec_name.as_deref());
+                let sample_fmt = non_empty_string(st.sample_fmt.as_deref());
+                let inferred_bits = parse_positive_u32(st.bits_per_raw_sample.as_deref())
+                    .or_else(|| st.bits_per_sample.filter(|&b| b > 0))
+                    .or_else(|| infer_pcm_bits(codec_name.as_deref()));
                 audio_streams.push(AudioStreamInfo {
                     index: idx,
                     audio_track_index: track_idx,
-                    codec_name: non_empty_string(st.codec_name.as_deref()),
+                    codec_name,
                     codec_long_name: non_empty_string(st.codec_long_name.as_deref()),
                     profile: non_empty_string(st.profile.as_deref()),
                     language: find_tag_ci(&st.tags, "language"),
@@ -618,6 +645,8 @@ pub fn parse_ffprobe_json(
                     channels: st.channels.filter(|&c| c > 0),
                     channel_layout: non_empty_string(st.channel_layout.as_deref()),
                     sample_rate_hz: parse_positive_u32(st.sample_rate.as_deref()),
+                    sample_fmt,
+                    bits_per_sample: inferred_bits,
                     bitrate_bps: parse_positive_u64(st.bit_rate.as_deref()),
                     duration_sec: stream_dur,
                     is_default: st.disposition.get("default").copied().unwrap_or(0) == 1,

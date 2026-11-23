@@ -1,5 +1,7 @@
 import {
   ArrowLeftRight,
+  AudioLines,
+  AudioWaveform,
   Binary,
   Braces,
   Camera,
@@ -136,5 +138,9 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Gauge size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "video-merge":
       return <Combine size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "audio-trim":
+      return <AudioWaveform size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "audio-convert":
+      return <AudioLines size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

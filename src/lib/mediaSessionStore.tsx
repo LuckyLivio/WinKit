@@ -12,6 +12,7 @@ import {
   cancelBackendTask,
   changeVideoSpeedBatch,
   compressVideosBatch,
+  convertAudioBatch,
   convertVideosBatch,
   convertVideoToGif,
   cropRotateVideo,
@@ -21,8 +22,12 @@ import {
   muteVideosBatch,
   resizeVideosBatch,
   subscribeMediaTaskProgress,
+  trimAudioFile,
   trimVideoFile,
+  type AudioBitDepthOption,
+  type AudioConvertFormat,
   type AudioExtractFormat,
+  type AudioWaveformPayload,
   type ChangeVideoSpeedBatchRequest,
   type ChangeVideoSpeedBatchResponse,
   type CompressQualityPreset,
@@ -30,6 +35,8 @@ import {
   type CompressVideoCodec,
   type CompressVideosBatchRequest,
   type CompressVideosBatchResponse,
+  type ConvertAudioBatchRequest,
+  type ConvertAudioBatchResponse,
   type ConvertVideosBatchRequest,
   type ConvertVideosBatchResponse,
   type ConvertVideoToGifRequest,
@@ -55,6 +62,8 @@ import {
   type MuteVideosBatchResponse,
   type ResizeVideosBatchRequest,
   type ResizeVideosBatchResponse,
+  type TrimAudioRequest,
+  type TrimAudioResult,
   type TrimKeyframeAnalysis,
   type TrimVideoRequest,
   type TrimVideoResult,
@@ -283,6 +292,40 @@ export interface VideoMergeSessionState {
   errorMessage: string | null;
 }
 
+export interface AudioTrimSessionState {
+  sourcePath: string | null;
+  probe: MediaProbeReport | null;
+  waveform: AudioWaveformPayload | null;
+  startSec: number;
+  endSec: number;
+  playheadSec: number;
+  fadeInEnabled: boolean;
+  fadeInSec: number;
+  fadeOutEnabled: boolean;
+  fadeOutSec: number;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastResult: TrimAudioResult | null;
+  errorMessage: string | null;
+}
+
+export interface AudioConvertSessionState {
+  items: MediaQueuedProbeItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  targetFormat: AudioConvertFormat;
+  bitrateKbps: number;
+  sampleRateHz: number | null;
+  bitDepth: AudioBitDepthOption;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastReport: ConvertAudioBatchResponse | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
@@ -296,6 +339,8 @@ export interface MediaSessionRoot {
   videoCrop: VideoCropSessionState;
   videoSpeed: VideoSpeedSessionState;
   videoMerge: VideoMergeSessionState;
+  audioTrim: AudioTrimSessionState;
+  audioConvert: AudioConvertSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -477,6 +522,38 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  audioTrim: {
+    sourcePath: null,
+    probe: null,
+    waveform: null,
+    startSec: 0,
+    endSec: 0,
+    playheadSec: 0,
+    fadeInEnabled: false,
+    fadeInSec: 0.5,
+    fadeOutEnabled: false,
+    fadeOutSec: 0.5,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  audioConvert: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    targetFormat: "mp3",
+    bitrateKbps: 192,
+    sampleRateHz: null,
+    bitDepth: "source",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -562,6 +639,20 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<MergeVideosResult | null>;
   cancelVideoMergeTask: () => Promise<void>;
+  updateAudioTrimSession: (updater: (prev: AudioTrimSessionState) => AudioTrimSessionState) => void;
+  startAudioTrimTask: (
+    req: Omit<TrimAudioRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<TrimAudioResult | null>;
+  cancelAudioTrimTask: () => Promise<void>;
+  updateAudioConvertSession: (
+    updater: (prev: AudioConvertSessionState) => AudioConvertSessionState,
+  ) => void;
+  startAudioConvertBatch: (
+    req: Omit<ConvertAudioBatchRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<ConvertAudioBatchResponse | null>;
+  cancelAudioConvertBatch: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -595,6 +686,8 @@ export function MediaSessionProvider({
   const activeCropTaskRef = useRef<string | null>(null);
   const activeSpeedTaskRef = useRef<string | null>(null);
   const activeMergeTaskRef = useRef<string | null>(null);
+  const activeAudioTrimTaskRef = useRef<string | null>(null);
+  const activeAudioConvertTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
 
@@ -659,6 +752,22 @@ export function MediaSessionProvider({
             setMediaSession((prev) => ({
               ...prev,
               videoMerge: { ...prev.videoMerge, liveProgress: payload },
+            }));
+          } else if (
+            payload.toolId === "A03" &&
+            payload.taskId === activeAudioTrimTaskRef.current
+          ) {
+            setMediaSession((prev) => ({
+              ...prev,
+              audioTrim: { ...prev.audioTrim, liveProgress: payload },
+            }));
+          } else if (
+            payload.toolId === "A05" &&
+            payload.taskId === activeAudioConvertTaskRef.current
+          ) {
+            setMediaSession((prev) => ({
+              ...prev,
+              audioConvert: { ...prev.audioConvert, liveProgress: payload },
             }));
           }
         }),
@@ -1498,6 +1607,156 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateAudioTrimSession = useCallback(
+    (updater: (prev: AudioTrimSessionState) => AudioTrimSessionState) => {
+      setMediaSession((prev) => ({ ...prev, audioTrim: updater(prev.audioTrim) }));
+    },
+    [],
+  );
+
+  const startAudioTrimTask = useCallback(
+    async (
+      req: Omit<TrimAudioRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<TrimAudioResult | null> => {
+      if (activeAudioTrimTaskRef.current) return null;
+      const taskId = `a03-trim-${Date.now()}-${taskSeqRef.current++}`;
+      activeAudioTrimTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        audioTrim: {
+          ...prev.audioTrim,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "A03",
+            phase: "running",
+            currentItem: 1,
+            totalItems: 1,
+            itemName: req.sourcePath,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: Math.max(0, req.endSec - req.startSec),
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await trimAudioFile({ ...req, taskId });
+        if (activeAudioTrimTaskRef.current !== taskId) return null;
+        activeAudioTrimTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          audioTrim: {
+            ...prev.audioTrim,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeAudioTrimTaskRef.current !== taskId) return null;
+        activeAudioTrimTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          audioTrim: {
+            ...prev.audioTrim,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelAudioTrimTask = useCallback(async () => {
+    const tid = activeAudioTrimTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateAudioConvertSession = useCallback(
+    (updater: (prev: AudioConvertSessionState) => AudioConvertSessionState) => {
+      setMediaSession((prev) => ({ ...prev, audioConvert: updater(prev.audioConvert) }));
+    },
+    [],
+  );
+
+  const startAudioConvertBatch = useCallback(
+    async (
+      req: Omit<ConvertAudioBatchRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<ConvertAudioBatchResponse | null> => {
+      if (activeAudioConvertTaskRef.current) return null;
+      const taskId = `a05-conv-${Date.now()}-${taskSeqRef.current++}`;
+      activeAudioConvertTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        audioConvert: {
+          ...prev.audioConvert,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "A05",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.sourcePaths.length,
+            itemName: req.sourcePaths[0] ?? null,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await convertAudioBatch({ ...req, taskId });
+        if (activeAudioConvertTaskRef.current !== taskId) return null;
+        activeAudioConvertTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          audioConvert: {
+            ...prev.audioConvert,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeAudioConvertTaskRef.current !== taskId) return null;
+        activeAudioConvertTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          audioConvert: {
+            ...prev.audioConvert,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelAudioConvertBatch = useCallback(async () => {
+    const tid = activeAudioConvertTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -1556,6 +1815,12 @@ export function MediaSessionProvider({
         updateVideoMergeSession,
         startVideoMergeTask,
         cancelVideoMergeTask,
+        updateAudioTrimSession,
+        startAudioTrimTask,
+        cancelAudioTrimTask,
+        updateAudioConvertSession,
+        startAudioConvertBatch,
+        cancelAudioConvertBatch,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,
