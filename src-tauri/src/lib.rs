@@ -7,6 +7,7 @@ pub mod find_duplicates;
 pub mod fs_guard;
 pub mod hasher;
 pub mod image_core;
+pub mod image_transform;
 pub mod iso_reader;
 pub mod jwt;
 pub mod organize_downloads;
@@ -58,6 +59,11 @@ use crate::image_core::{
     CompressImagesBatchRequest, ConvertImagesBatchRequest, InspectBatchImagesResponse,
     PreviewCompressImageRequest, PreviewCompressImageResponse, PreviewConvertImageRequest,
     PreviewConvertImageResponse, IMAGE_BATCH_PROGRESS_EVENT,
+};
+use crate::image_transform::{
+    preview_rotate_image_impl, resize_images_batch_impl, rotate_images_batch_impl,
+    PreviewRotateImageRequest, PreviewRotateImageResponse, ResizeImagesBatchRequest,
+    RotateImagesBatchRequest,
 };
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
 use crate::organize_downloads::{
@@ -1242,6 +1248,133 @@ async fn compress_images_batch<R: Runtime>(
 }
 
 #[tauri::command]
+async fn resize_images_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: ResizeImagesBatchRequest,
+) -> Result<BatchImageJobResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid image resize task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I07", true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = resize_images_batch_impl(&tid, &req, &cancel_flag, |ev| {
+            let _ = app.emit(IMAGE_BATCH_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = (done.succeeded_count + done.kept_original_count) as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image resize worker failed."))?
+}
+
+#[tauri::command]
+async fn preview_rotate_image(
+    registry: State<'_, TaskRegistry>,
+    req: PreviewRotateImageRequest,
+) -> Result<PreviewRotateImageResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || preview_rotate_image_impl(&req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Rotate preview worker failed."))?
+}
+
+#[tauri::command]
+async fn rotate_images_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    task_id: String,
+    req: RotateImagesBatchRequest,
+) -> Result<BatchImageJobResponse, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid image rotate task ID."));
+    }
+    let guard = registry.register_checked(trimmed_id, "I08", true)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let tool = guard.tool_id().to_string();
+        let cancel_flag = guard.cancel_flag();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, &tool, None),
+        );
+        let res = rotate_images_batch_impl(&tid, &req, &cancel_flag, |ev| {
+            let _ = app.emit(IMAGE_BATCH_PROGRESS_EVENT, ev);
+        });
+        drop(guard);
+        match &res {
+            Ok(done) => {
+                if done.cancelled {
+                    let err = AppError::cancelled();
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, &err),
+                    );
+                } else {
+                    let n = done.succeeded_count as u64;
+                    let _ = app.emit(
+                        TASK_PROGRESS_EVENT,
+                        TaskProgressPayload::completed(&tid, &tool, n, Some(n)),
+                    );
+                }
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, &tool, 0, None, err),
+                );
+            }
+        }
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image rotate worker failed."))?
+}
+
+#[tauri::command]
 async fn preview_organize_downloads(
     registry: State<'_, TaskRegistry>,
     req: OrganizePreviewRequest,
@@ -1392,6 +1525,9 @@ pub fn run() {
             convert_images_batch,
             preview_compress_image,
             compress_images_batch,
+            resize_images_batch,
+            preview_rotate_image,
+            rotate_images_batch,
             inspect_beautifier_image,
             export_beautified_png,
             cancel_task,

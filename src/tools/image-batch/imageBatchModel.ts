@@ -5,6 +5,9 @@ export type ImageFileFormat = "jpeg" | "png" | "webp" | "tiff" | "bmp" | "heic" 
 export type ImageConvertTargetFormat = "jpeg" | "png" | "webp" | "tiff" | "bmp" | "heic";
 export type CompressQualityPreset = "low" | "medium" | "high";
 export type PngCompressMode = "lossless" | "lossy_palette";
+export type ResizeMode = "percentage" | "longest_edge" | "exact";
+export type TransformStep =
+  "rotate_left" | "rotate_right" | "rotate_180" | "flip_horizontal" | "flip_vertical";
 
 export interface HeicCapabilities {
   decodeAvailable: boolean;
@@ -144,6 +147,38 @@ export interface PreviewCompressImageResponse {
   codecLabel: string;
 }
 
+export interface ResizeImagesBatchRequest {
+  sourcePaths: string[];
+  outputDir: string;
+  mode: ResizeMode;
+  percentage: number;
+  longestEdge: number;
+  targetWidth: number;
+  targetHeight: number;
+  keepAspectRatio: boolean;
+  preventUpscale: boolean;
+}
+
+export interface PreviewRotateImageRequest {
+  path: string;
+  steps: TransformStep[];
+}
+
+export interface PreviewRotateImageResponse {
+  previewDataUrl: string;
+  sourceExifOrientation: number;
+  displayWidth: number;
+  displayHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+}
+
+export interface RotateImagesBatchRequest {
+  sourcePaths: string[];
+  outputDir: string;
+  steps: TransformStep[];
+}
+
 export const IMAGE_FILE_DIALOG_EXTENSIONS = [
   "jpg",
   "jpeg",
@@ -241,4 +276,86 @@ export function mergeInspectedItems(
     }
   }
   return next;
+}
+
+export interface ComputedResizeTarget {
+  width: number;
+  height: number;
+  unchanged: boolean;
+}
+
+/**
+ * Exact mirror of Rust `compute_resize_target_dimensions` operating on display-oriented dimensions.
+ */
+export function computeResizeTargetDimensions(
+  displayW: number,
+  displayH: number,
+  opts: {
+    mode: ResizeMode;
+    percentage: number;
+    longestEdge: number;
+    targetWidth: number;
+    targetHeight: number;
+    keepAspectRatio: boolean;
+    preventUpscale: boolean;
+  },
+): ComputedResizeTarget {
+  const w = Math.max(1, Math.round(displayW));
+  const h = Math.max(1, Math.round(displayH));
+  let outW = w;
+  let outH = h;
+
+  if (opts.mode === "percentage") {
+    const clampedPct = Number.isFinite(opts.percentage)
+      ? Math.min(400, Math.max(1, opts.percentage))
+      : 100;
+    const eff = opts.preventUpscale && clampedPct > 100 ? 100 : clampedPct;
+    const scale = eff / 100;
+    outW = Math.max(1, Math.round(w * scale));
+    outH = Math.max(1, Math.round(h * scale));
+  } else if (opts.mode === "longest_edge") {
+    const edge = Math.min(32768, Math.max(1, Math.round(opts.longestEdge || 1)));
+    const curLong = Math.max(w, h);
+    if (!(opts.preventUpscale && curLong <= edge)) {
+      const scale = edge / curLong;
+      outW = Math.max(1, Math.round(w * scale));
+      outH = Math.max(1, Math.round(h * scale));
+    }
+  } else {
+    const reqW = Math.min(32768, Math.max(1, Math.round(opts.targetWidth || 1)));
+    const reqH = Math.min(32768, Math.max(1, Math.round(opts.targetHeight || 1)));
+    if (opts.keepAspectRatio) {
+      let scale = Math.min(reqW / w, reqH / h);
+      if (opts.preventUpscale && scale > 1) {
+        scale = 1;
+      }
+      outW = Math.max(1, Math.round(w * scale));
+      outH = Math.max(1, Math.round(h * scale));
+    } else if (opts.preventUpscale) {
+      outW = Math.min(reqW, w);
+      outH = Math.min(reqH, h);
+    } else {
+      outW = reqW;
+      outH = reqH;
+    }
+  }
+
+  return { width: outW, height: outH, unchanged: outW === w && outH === h };
+}
+
+export function computeRotatedDimensions(
+  displayW: number,
+  displayH: number,
+  steps: readonly TransformStep[],
+): { width: number; height: number } {
+  let w = displayW;
+  let h = displayH;
+  for (const step of steps) {
+    if (step === "rotate_left" || step === "rotate_right") {
+      const tmp = w;
+      w = h;
+      h = tmp;
+    }
+  }
+  return { width: w, height: h };
 }
