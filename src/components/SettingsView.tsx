@@ -3,6 +3,7 @@ import { useI18n } from "../i18n/I18nContext";
 import type { Locale, ThemePreference } from "../i18n/messages";
 import type { AppRuntimeInfo } from "../lib/tauriBridge";
 import { MediaToolsSetupPanel } from "./MediaToolsSetupPanel";
+import { YtdlpSetupPanel } from "./YtdlpSetupPanel";
 
 interface SettingsViewProps {
   theme: ThemePreference;
@@ -139,6 +140,13 @@ export function SettingsView({
             : "Media Components (FFmpeg / ffprobe)"}
         </h2>
         <MediaToolsSetupPanel mode="settings" />
+      </section>
+
+      <section className="settings-section" aria-labelledby="settings-ytdlp-heading">
+        <h2 id="settings-ytdlp-heading" className="settings-section-title">
+          {locale === "zh-CN" ? "视频下载组件（yt-dlp）" : "Video Downloader Component (yt-dlp)"}
+        </h2>
+        <YtdlpSetupPanel mode="settings" />
       </section>
 
       {runtime && (

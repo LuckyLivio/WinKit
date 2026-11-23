@@ -1,6 +1,6 @@
 [package]
 name = "winkit"
-version = "0.15.0"
+version = "0.16.0"
 description = "WinKit local-first Windows desktop utility workbench"
 authors = ["Livio <liviow@163.com>"]
 edition = "2021"
@@ -75,6 +75,7 @@ windows = { version = "0.62", features = [
   "Win32_Storage_Xps",
   "Win32_System_Com",
   "Win32_System_Com_StructuredStorage",
+  "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
   "Win32_System_Memory",
   "Win32_System_Registry",

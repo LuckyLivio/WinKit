@@ -53,6 +53,7 @@ import { AudioCleanupWorkspace } from "../tools/audio-cleanup/AudioCleanupWorksp
 import { VideoReplaceAudioWorkspace } from "../tools/video-replace-audio/VideoReplaceAudioWorkspace";
 import { VideoSubtitlesWorkspace } from "../tools/video-subtitles/VideoSubtitlesWorkspace";
 import { ScreenRecorderWorkspace } from "../tools/screen-recorder/ScreenRecorderWorkspace";
+import { VideoDownloadWorkspace } from "../tools/video-download/VideoDownloadWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -108,7 +109,8 @@ export type ToolIconName =
   | "audio-cleanup"
   | "video-replace-audio"
   | "video-subtitles"
-  | "screen-record";
+  | "screen-record"
+  | "video-download";
 
 export interface RegisteredTool {
   id: string;
@@ -1161,6 +1163,38 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "folder-input",
     implementationStatus: "full",
     component: OrganizeDownloadsWorkspace,
+  },
+  {
+    id: "V01",
+    category: "video",
+    name: { "zh-CN": "视频下载", "en-US": "Video Downloader" },
+    summary: {
+      "zh-CN":
+        "粘贴一条或多条 HTTP(S) 链接解析标题、清晰度与音轨语言，支持最佳/1080p/720p/仅音频 M4A、优先 H.264、队列取消重试、直链独立下载与受管 yt-dlp",
+      "en-US":
+        "Inspect and queue one or more HTTP(S) video or direct media links with resolution caps, H.264 preference, audio language selection, M4A export, cancel/retry, and verified yt-dlp",
+    },
+    keywords: [
+      "video download",
+      "downloader",
+      "yt-dlp",
+      "ytdlp",
+      "hls",
+      "dash",
+      "m3u8",
+      "mp4",
+      "m4a",
+      "h264",
+      "url",
+      "视频下载",
+      "下载视频",
+      "网页视频",
+      "直链下载",
+      "音频提取",
+    ],
+    icon: "video-download",
+    implementationStatus: "full",
+    component: VideoDownloadWorkspace,
   },
   {
     id: "V02",

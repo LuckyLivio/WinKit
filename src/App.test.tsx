@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 52 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
+  it("registers all 53 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -128,6 +128,7 @@ describe("WinKit desktop workbench shell", () => {
       "F03",
       "F04",
       "F05",
+      "V01",
       "V02",
       "V03",
       "V04",
@@ -148,6 +149,11 @@ describe("WinKit desktop workbench shell", () => {
       "A04",
       "A05",
     ]);
+    for (const query of ["视频下载", "video download", "yt-dlp"]) {
+      expect(
+        filterTools(REGISTERED_TOOLS, { query, category: "video" }).map((tool) => tool.id),
+      ).toEqual(["V01"]);
+    }
     for (const query of ["屏幕录制", "screen record", "wasapi"]) {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "video" }).map((tool) => tool.id),
