@@ -39,9 +39,11 @@ import {
   Scissors,
   ShieldCheck,
   ShieldOff,
+  SlidersHorizontal,
   Stamp,
   Table2,
   TextQuote,
+  Volume2,
   VolumeX,
 } from "lucide-react";
 import type { ToolIconName } from "../registry/tools";
@@ -142,5 +144,9 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <AudioWaveform size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "audio-convert":
       return <AudioLines size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "audio-cleanup":
+      return <SlidersHorizontal size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "video-replace-audio":
+      return <Volume2 size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

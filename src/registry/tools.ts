@@ -48,6 +48,8 @@ import { VideoSpeedWorkspace } from "../tools/video-speed/VideoSpeedWorkspace";
 import { VideoMergeWorkspace } from "../tools/video-merge/VideoMergeWorkspace";
 import { AudioTrimWorkspace } from "../tools/audio-trim/AudioTrimWorkspace";
 import { AudioConvertWorkspace } from "../tools/audio-convert/AudioConvertWorkspace";
+import { AudioCleanupWorkspace } from "../tools/audio-cleanup/AudioCleanupWorkspace";
+import { VideoReplaceAudioWorkspace } from "../tools/video-replace-audio/VideoReplaceAudioWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -98,7 +100,9 @@ export type ToolIconName =
   | "video-speed"
   | "video-merge"
   | "audio-trim"
-  | "audio-convert";
+  | "audio-convert"
+  | "audio-cleanup"
+  | "video-replace-audio";
 
 export interface RegisteredTool {
   id: string;
@@ -1427,6 +1431,34 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     component: VideoMuteWorkspace,
   },
   {
+    id: "V14",
+    category: "video",
+    name: { "zh-CN": "替换视频音频", "en-US": "Replace Audio" },
+    summary: {
+      "zh-CN":
+        "用本地音频或另一段视频的音轨替换或混合视频原声，独立调节原声与新音频音量、控制短音频循环铺满或单次播放并支持导出前同步试听",
+      "en-US":
+        "Replace or mix a video's audio using an audio file or another video track with independent volumes, Loop-to-Fill vs Play-Once, and live pre-export mix audition",
+    },
+    keywords: [
+      "replace audio",
+      "dub",
+      "mix audio",
+      "bgm",
+      "soundtrack",
+      "loop",
+      "video",
+      "替换音频",
+      "配音",
+      "混音",
+      "换背景音乐",
+      "音轨",
+    ],
+    icon: "video-replace-audio",
+    implementationStatus: "full",
+    component: VideoReplaceAudioWorkspace,
+  },
+  {
     id: "V15",
     category: "video",
     name: { "zh-CN": "视频转 GIF", "en-US": "Video to GIF" },
@@ -1450,6 +1482,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "video-gif",
     implementationStatus: "full",
     component: VideoGifWorkspace,
+  },
+  {
+    id: "A01",
+    category: "audio",
+    name: { "zh-CN": "音频降噪与增强", "en-US": "Clean Up Audio" },
+    summary: {
+      "zh-CN":
+        "支持音频与含音轨视频的轻/中/强本地降噪、低频隆隆声/哼声过滤、两遍 EBU R128 响度标准化（默认 -16 LUFS）、同片段对比试听及纯音频静默裁剪",
+      "en-US":
+        "Offline Light/Medium/Strong denoise, rumble/hum filter, 2-pass EBU R128 loudness normalization (-16 LUFS default), Before/After audition, and audio-only silence trimming",
+    },
+    keywords: [
+      "clean up audio",
+      "denoise",
+      "noise reduction",
+      "loudness",
+      "lufs",
+      "rumble",
+      "hum",
+      "voice",
+      "音频降噪",
+      "人声增强",
+      "响度标准化",
+      "去噪",
+      "底噪",
+    ],
+    icon: "audio-cleanup",
+    implementationStatus: "full",
+    component: AudioCleanupWorkspace,
   },
   {
     id: "A03",

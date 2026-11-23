@@ -2417,3 +2417,129 @@ export async function convertAudioBatch(
   assertFrontendNotShuttingDown();
   return invoke<ConvertAudioBatchResponse>("convert_audio_batch", { req });
 }
+
+// ---------- Phase 4B2 PR 2: A01 Clean Up Audio & V14 Replace Audio ----------
+
+export type AudioDenoiseLevel = "off" | "light" | "medium" | "strong";
+
+export interface CleanUpAudioOptions {
+  audioTrackIndex: number;
+  denoiseLevel: AudioDenoiseLevel;
+  highpassRumble: boolean;
+  normalizeLoudness: boolean;
+  targetLufs?: number | null;
+  removeSilence: boolean;
+}
+
+export interface PreviewAudioCleanupRequest {
+  sourcePath: string;
+  startSec: number;
+  durationSec?: number | null;
+  options: CleanUpAudioOptions;
+}
+
+export interface PreviewAudioCleanupResult {
+  beforeUrl: string;
+  afterUrl: string;
+  startSec: number;
+  previewDurationSec: number;
+  beforeLufs: number | null;
+  beforeTruePeakDb: number | null;
+  afterLufs: number | null;
+  afterTruePeakDb: number | null;
+  isAllSilence: boolean;
+}
+
+export interface CleanUpAudioRequest {
+  taskId: string;
+  sourcePath: string;
+  outputPath: string;
+  options: CleanUpAudioOptions;
+  allowOverwrite?: boolean;
+}
+
+export interface CleanUpAudioResult {
+  outputPath: string;
+  byteSize: number;
+  durationSec: number | null;
+  hasVideo: boolean;
+  videoStreamCopied: boolean;
+  processedTrackIndex: number;
+  totalAudioTracks: number;
+  preservedOtherTracks: number;
+  isAllSilence: boolean;
+  silenceRemovalApplied: boolean;
+  measuredBeforeLufs: number | null;
+  measuredBeforeTruePeakDb: number | null;
+  measuredAfterLufs: number | null;
+  measuredAfterTruePeakDb: number | null;
+  elapsedMs: number;
+}
+
+export type ReplaceAudioMode = "replace" | "mix";
+export type ShortAudioBehavior = "loop_to_fill" | "play_once";
+
+export interface ReplaceAudioOptions {
+  videoPath: string;
+  audioSourcePath: string;
+  audioSourceTrackIndex: number;
+  mode: ReplaceAudioMode;
+  originalVolume: number;
+  newAudioVolume: number;
+  shortAudioBehavior: ShortAudioBehavior;
+}
+
+export interface PreviewReplaceAudioRequest {
+  options: ReplaceAudioOptions;
+  startSec?: number | null;
+  maxDurationSec?: number | null;
+}
+
+export interface PreviewReplaceAudioResult {
+  previewUrl: string;
+  startSec: number;
+  previewDurationSec: number;
+  effectiveMode: ReplaceAudioMode;
+}
+
+export interface ReplaceAudioRequest {
+  taskId: string;
+  options: ReplaceAudioOptions;
+  outputPath: string;
+  allowOverwrite?: boolean;
+}
+
+export interface ReplaceAudioResult {
+  outputPath: string;
+  byteSize: number;
+  durationSec: number | null;
+  videoStreamCopied: boolean;
+  effectiveMode: ReplaceAudioMode;
+  targetVideoHadAudio: boolean;
+  hasOutputAudio: boolean;
+  elapsedMs: number;
+}
+
+export async function previewAudioCleanup(
+  req: PreviewAudioCleanupRequest,
+): Promise<PreviewAudioCleanupResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<PreviewAudioCleanupResult>("preview_audio_cleanup", { req });
+}
+
+export async function cleanUpAudio(req: CleanUpAudioRequest): Promise<CleanUpAudioResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<CleanUpAudioResult>("clean_up_audio", { req });
+}
+
+export async function previewReplaceAudio(
+  req: PreviewReplaceAudioRequest,
+): Promise<PreviewReplaceAudioResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<PreviewReplaceAudioResult>("preview_replace_audio", { req });
+}
+
+export async function replaceVideoAudio(req: ReplaceAudioRequest): Promise<ReplaceAudioResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<ReplaceAudioResult>("replace_video_audio", { req });
+}
