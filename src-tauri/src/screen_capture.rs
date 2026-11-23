@@ -2314,6 +2314,24 @@ pub fn list_capture_monitors_impl() -> Vec<CaptureMonitorInfo> {
     }
 }
 
+#[cfg(windows)]
+pub(crate) fn virtual_screen_rect_shared() -> CaptureRect {
+    win_impl::virtual_screen_rect()
+}
+
+#[cfg(windows)]
+pub(crate) fn capture_screen_rect_shared(
+    rect: CaptureRect,
+    include_cursor: bool,
+) -> Result<RgbaImage, AppError> {
+    win_impl::capture_screen_rect(rect, include_cursor)
+}
+
+#[cfg(windows)]
+pub(crate) fn is_escape_pressed_shared() -> bool {
+    win_impl::is_escape_pressed()
+}
+
 pub fn list_capture_windows_impl() -> Vec<CaptureWindowInfo> {
     #[cfg(windows)]
     {

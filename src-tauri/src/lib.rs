@@ -2,6 +2,7 @@ pub mod archive;
 pub mod batch_rename;
 pub mod beautifier;
 pub mod codec;
+pub mod color_picker;
 pub mod error;
 pub mod face_detect;
 pub mod find_duplicates;
@@ -43,6 +44,11 @@ use crate::beautifier::{
 use crate::codec::{
     compute_full_utf8_result, export_codec_result_to_file, transform_file_payload,
     transform_text_payload, CodecOptions, CodecTransformResponse,
+};
+use crate::color_picker::{
+    extract_image_palette_impl, pick_screen_color_impl, sample_screen_pixel_at_impl,
+    ExtractImagePaletteRequest, ImagePaletteResult, PickScreenColorRequest,
+    SampleScreenPixelRequest, ScreenColorSample,
 };
 use crate::error::AppError;
 use crate::face_detect::{
@@ -2236,6 +2242,58 @@ async fn blur_faces_batch<R: Runtime>(
 }
 
 #[tauri::command]
+async fn pick_screen_color<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: Option<PickScreenColorRequest>,
+) -> Result<ScreenColorSample, AppError> {
+    let task_id = next_internal_task_id("i10-pick-color");
+    let guard = registry.register_checked(&task_id, "I10", true)?;
+    let hide = req.and_then(|r| r.hide_main_window).unwrap_or(true);
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let hide_guard = MainWindowHideGuard::hide_if(&app, hide);
+        let res = pick_screen_color_impl(&cancel_flag);
+        drop(hide_guard);
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Screen color picker worker failed."))?
+}
+
+#[tauri::command]
+async fn sample_screen_pixel_at<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: SampleScreenPixelRequest,
+) -> Result<ScreenColorSample, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let hide = req.hide_main_window.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        let hide_guard = MainWindowHideGuard::hide_if(&app, hide);
+        let res = sample_screen_pixel_at_impl(req.physical_x, req.physical_y);
+        drop(hide_guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Screen pixel sampler worker failed."))?
+}
+
+#[tauri::command]
+async fn extract_image_palette(
+    registry: State<'_, TaskRegistry>,
+    store: State<'_, ImageAssetStore>,
+    req: ExtractImagePaletteRequest,
+) -> Result<ImagePaletteResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || extract_image_palette_impl(&store, &req))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Image palette worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -2352,6 +2410,9 @@ pub fn run() {
             detect_faces_in_asset,
             detect_faces_in_file,
             blur_faces_batch,
+            pick_screen_color,
+            sample_screen_pixel_at,
+            extract_image_palette,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

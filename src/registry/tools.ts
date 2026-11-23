@@ -33,6 +33,7 @@ import { ImageRedactWorkspace } from "../tools/image-redact/ImageRedactWorkspace
 import { ImageAnnotateWorkspace } from "../tools/image-annotate/ImageAnnotateWorkspace";
 import { ImageWatermarkWorkspace } from "../tools/image-watermark/ImageWatermarkWorkspace";
 import { BlurFacesWorkspace } from "../tools/blur-faces/BlurFacesWorkspace";
+import { ColorPickerWorkspace } from "../tools/color-picker/ColorPickerWorkspace";
 
 export type ToolCategory = "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -66,6 +67,7 @@ export type ToolIconName =
   | "image-resize"
   | "image-rotate"
   | "image-metadata"
+  | "color-picker"
   | "image-redact"
   | "image-annotate"
   | "image-watermark";
@@ -842,6 +844,45 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "image-metadata",
     implementationStatus: "full",
     component: ImageMetadataWorkspace,
+  },
+  {
+    id: "I10",
+    category: "image",
+    name: {
+      "zh-CN": "屏幕取色与对比度",
+      "en-US": "Color Picker & Contrast",
+    },
+    summary: {
+      "zh-CN":
+        "Windows 原生放大镜屏幕取色（方向键 1px 微调），支持 HEX/RGB/HSL/OKLCH/CSS/WinUI XAML/C#/Tailwind 复制、图片色板提取与 WCAG 2.x 对比度校验",
+      "en-US":
+        "Windows native magnifier screen color picker (1px arrow-key nudge), HEX/RGB/HSL/OKLCH/CSS/WinUI XAML/C#/Tailwind copy, image palette extraction, and WCAG 2.x contrast checker",
+    },
+    keywords: [
+      "color",
+      "picker",
+      "eyedropper",
+      "palette",
+      "contrast",
+      "wcag",
+      "oklch",
+      "hsl",
+      "rgb",
+      "hex",
+      "xaml",
+      "winui",
+      "tailwind",
+      "取色",
+      "屏幕取色",
+      "吸管",
+      "颜色",
+      "色板",
+      "调色板",
+      "对比度",
+    ],
+    icon: "color-picker",
+    implementationStatus: "partial",
+    component: ColorPickerWorkspace,
   },
   {
     id: "I11",

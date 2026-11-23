@@ -20,6 +20,7 @@ import {
   LockKeyhole,
   Minimize2,
   Pencil,
+  Pipette,
   QrCode,
   Regex,
   RotateCw,
@@ -92,6 +93,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <RotateCw size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-metadata":
       return <ShieldOff size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "color-picker":
+      return <Pipette size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-redact":
       return <EyeOff size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "image-annotate":
