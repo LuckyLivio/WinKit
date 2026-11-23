@@ -2132,3 +2132,100 @@ export async function compressVideosBatch(
   assertFrontendNotShuttingDown();
   return invoke<CompressVideosBatchResponse>("compress_videos_batch", { req });
 }
+
+// ---------- Phase 4B1 PR 2: V08 Resize Video & V09 Crop & Rotate Video ----------
+
+export type VideoResizeMode = "fit" | "pad" | "fill" | "stretch";
+
+export interface ResizeVideosBatchRequest {
+  taskId: string;
+  sourcePaths: string[];
+  outputDir: string;
+  targetWidth: number;
+  targetHeight: number;
+  mode: VideoResizeMode;
+  lockAspectRatio: boolean;
+  preventUpscale?: boolean;
+}
+
+export type ResizeItemStatus = "resized" | "skipped" | "failed";
+
+export interface ResizeVideoItemResult {
+  sourcePath: string;
+  fileName: string;
+  status: ResizeItemStatus;
+  outputPath: string | null;
+  outputBytes: number | null;
+  sourceDisplayWidth: number | null;
+  sourceDisplayHeight: number | null;
+  outputWidth: number | null;
+  outputHeight: number | null;
+  outputRotation: number | null;
+  elapsedMs: number;
+  message: string | null;
+}
+
+export interface ResizeVideosBatchResponse {
+  taskId: string;
+  outputDir: string;
+  cancelled: boolean;
+  resizedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  elapsedMs: number;
+  items: ResizeVideoItemResult[];
+}
+
+export interface OrientedPreviewFrame {
+  dataUrl: string;
+  displayWidth: number;
+  displayHeight: number;
+  timestampSec: number;
+}
+
+export interface CropRotateVideoRequest {
+  taskId: string;
+  sourcePath: string;
+  outputPath: string;
+  rotateCw: 0 | 90 | 180 | 270;
+  flipH: boolean;
+  flipV: boolean;
+  cropX: number;
+  cropY: number;
+  cropWidth: number;
+  cropHeight: number;
+  allowOverwrite?: boolean;
+}
+
+export interface CropRotateVideoResult {
+  outputPath: string;
+  byteSize: number;
+  outputWidth: number;
+  outputHeight: number;
+  outputRotation: number | null;
+  durationSec: number | null;
+  elapsedMs: number;
+}
+
+export async function resizeVideosBatch(
+  req: ResizeVideosBatchRequest,
+): Promise<ResizeVideosBatchResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<ResizeVideosBatchResponse>("resize_videos_batch", { req });
+}
+
+export async function extractOrientedPreviewFrame(
+  sourcePath: string,
+  timestampSec?: number | null,
+): Promise<OrientedPreviewFrame> {
+  assertFrontendNotShuttingDown();
+  return invoke<OrientedPreviewFrame>("extract_oriented_preview_frame", {
+    sourcePath,
+    timestampSec: timestampSec ?? null,
+  });
+}
+
+export async function cropRotateVideo(req: CropRotateVideoRequest): Promise<CropRotateVideoResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<CropRotateVideoResult>("crop_rotate_video", { req });
+}

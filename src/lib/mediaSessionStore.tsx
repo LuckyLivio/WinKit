@@ -13,9 +13,11 @@ import {
   compressVideosBatch,
   convertVideosBatch,
   convertVideoToGif,
+  cropRotateVideo,
   extractAudioBatch,
   extractVideoFrames,
   muteVideosBatch,
+  resizeVideosBatch,
   subscribeMediaTaskProgress,
   trimVideoFile,
   type AudioExtractFormat,
@@ -28,6 +30,8 @@ import {
   type ConvertVideosBatchResponse,
   type ConvertVideoToGifRequest,
   type ConvertVideoToGifResult,
+  type CropRotateVideoRequest,
+  type CropRotateVideoResult,
   type ExtractAudioBatchRequest,
   type ExtractAudioBatchResponse,
   type ExtractFramesRequest,
@@ -41,11 +45,14 @@ import {
   type MediaTaskProgressPayload,
   type MuteVideosBatchRequest,
   type MuteVideosBatchResponse,
+  type ResizeVideosBatchRequest,
+  type ResizeVideosBatchResponse,
   type TrimKeyframeAnalysis,
   type TrimVideoRequest,
   type TrimVideoResult,
   type VideoConvertFormat,
   type VideoEncoderCapabilities,
+  type VideoResizeMode,
   type VideoTrimMode,
 } from "./tauriBridge";
 
@@ -191,6 +198,47 @@ export interface VideoCompressSessionState {
   errorMessage: string | null;
 }
 
+export interface VideoResizeSessionState {
+  items: MediaQueuedProbeItem[];
+  selectedPath: string | null;
+  outputDir: string;
+  targetWidth: number;
+  targetHeight: number;
+  mode: VideoResizeMode;
+  lockAspectRatio: boolean;
+  preventUpscale: boolean;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastReport: ResizeVideosBatchResponse | null;
+  errorMessage: string | null;
+}
+
+export type CropAspectPreset = "free" | "1:1" | "16:9" | "9:16";
+
+export interface VideoCropSessionState {
+  sourcePath: string | null;
+  probe: MediaProbeReport | null;
+  previewFrameUrl: string | null;
+  previewTimestampSec: number;
+  displayWidth: number;
+  displayHeight: number;
+  rotateCw: 0 | 90 | 180 | 270;
+  flipH: boolean;
+  flipV: boolean;
+  aspectPreset: CropAspectPreset;
+  cropX: number;
+  cropY: number;
+  cropWidth: number;
+  cropHeight: number;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: MediaTaskProgressPayload | null;
+  lastResult: CropRotateVideoResult | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
@@ -200,6 +248,8 @@ export interface MediaSessionRoot {
   videoGif: VideoGifSessionState;
   videoConvert: VideoConvertSessionState;
   videoCompress: VideoCompressSessionState;
+  videoResize: VideoResizeSessionState;
+  videoCrop: VideoCropSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -320,6 +370,43 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastReport: null,
     errorMessage: null,
   },
+  videoResize: {
+    items: [],
+    selectedPath: null,
+    outputDir: "",
+    targetWidth: 1920,
+    targetHeight: 1080,
+    mode: "fit",
+    lockAspectRatio: true,
+    preventUpscale: false,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastReport: null,
+    errorMessage: null,
+  },
+  videoCrop: {
+    sourcePath: null,
+    probe: null,
+    previewFrameUrl: null,
+    previewTimestampSec: 0,
+    displayWidth: 0,
+    displayHeight: 0,
+    rotateCw: 0,
+    flipH: false,
+    flipV: false,
+    aspectPreset: "free",
+    cropX: 0,
+    cropY: 0,
+    cropWidth: 0,
+    cropHeight: 0,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -375,6 +462,20 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<CompressVideosBatchResponse | null>;
   cancelVideoCompressBatch: () => Promise<void>;
+  updateVideoResizeSession: (
+    updater: (prev: VideoResizeSessionState) => VideoResizeSessionState,
+  ) => void;
+  startVideoResizeBatch: (
+    req: Omit<ResizeVideosBatchRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<ResizeVideosBatchResponse | null>;
+  cancelVideoResizeBatch: () => Promise<void>;
+  updateVideoCropSession: (updater: (prev: VideoCropSessionState) => VideoCropSessionState) => void;
+  startVideoCropTask: (
+    req: Omit<CropRotateVideoRequest, "taskId">,
+    formatError: (err: unknown) => string,
+  ) => Promise<CropRotateVideoResult | null>;
+  cancelVideoCropTask: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -404,6 +505,8 @@ export function MediaSessionProvider({
   const activeGifTaskRef = useRef<string | null>(null);
   const activeConvertTaskRef = useRef<string | null>(null);
   const activeCompressTaskRef = useRef<string | null>(null);
+  const activeResizeTaskRef = useRef<string | null>(null);
+  const activeCropTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
 
@@ -448,6 +551,16 @@ export function MediaSessionProvider({
             setMediaSession((prev) => ({
               ...prev,
               videoCompress: { ...prev.videoCompress, liveProgress: payload },
+            }));
+          } else if (payload.toolId === "V08" && payload.taskId === activeResizeTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoResize: { ...prev.videoResize, liveProgress: payload },
+            }));
+          } else if (payload.toolId === "V09" && payload.taskId === activeCropTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoCrop: { ...prev.videoCrop, liveProgress: payload },
             }));
           }
         }),
@@ -987,6 +1100,156 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateVideoResizeSession = useCallback(
+    (updater: (prev: VideoResizeSessionState) => VideoResizeSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoResize: updater(prev.videoResize) }));
+    },
+    [],
+  );
+
+  const startVideoResizeBatch = useCallback(
+    async (
+      req: Omit<ResizeVideosBatchRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<ResizeVideosBatchResponse | null> => {
+      if (activeResizeTaskRef.current) return null;
+      const taskId = `v08-resize-${Date.now()}-${taskSeqRef.current++}`;
+      activeResizeTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoResize: {
+          ...prev.videoResize,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V08",
+            phase: "running",
+            currentItem: 1,
+            totalItems: req.sourcePaths.length,
+            itemName: req.sourcePaths[0] ?? null,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await resizeVideosBatch({ ...req, taskId });
+        if (activeResizeTaskRef.current !== taskId) return null;
+        activeResizeTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoResize: {
+            ...prev.videoResize,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastReport: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeResizeTaskRef.current !== taskId) return null;
+        activeResizeTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoResize: {
+            ...prev.videoResize,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoResizeBatch = useCallback(async () => {
+    const tid = activeResizeTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
+  const updateVideoCropSession = useCallback(
+    (updater: (prev: VideoCropSessionState) => VideoCropSessionState) => {
+      setMediaSession((prev) => ({ ...prev, videoCrop: updater(prev.videoCrop) }));
+    },
+    [],
+  );
+
+  const startVideoCropTask = useCallback(
+    async (
+      req: Omit<CropRotateVideoRequest, "taskId">,
+      formatError: (err: unknown) => string,
+    ): Promise<CropRotateVideoResult | null> => {
+      if (activeCropTaskRef.current) return null;
+      const taskId = `v09-crop-${Date.now()}-${taskSeqRef.current++}`;
+      activeCropTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoCrop: {
+          ...prev.videoCrop,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            toolId: "V09",
+            phase: "running",
+            currentItem: 1,
+            totalItems: 1,
+            itemName: req.sourcePath,
+            percent: 0,
+            outTimeSec: 0,
+            totalDurationSec: null,
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const res = await cropRotateVideo({ ...req, taskId });
+        if (activeCropTaskRef.current !== taskId) return null;
+        activeCropTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoCrop: {
+            ...prev.videoCrop,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: res,
+            errorMessage: null,
+          },
+        }));
+        return res;
+      } catch (err) {
+        if (activeCropTaskRef.current !== taskId) return null;
+        activeCropTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoCrop: {
+            ...prev.videoCrop,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelVideoCropTask = useCallback(async () => {
+    const tid = activeCropTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -1033,6 +1296,12 @@ export function MediaSessionProvider({
         updateVideoCompressSession,
         startVideoCompressBatch,
         cancelVideoCompressBatch,
+        updateVideoResizeSession,
+        startVideoResizeBatch,
+        cancelVideoResizeBatch,
+        updateVideoCropSession,
+        startVideoCropTask,
+        cancelVideoCropTask,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,

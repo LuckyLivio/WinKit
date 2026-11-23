@@ -42,6 +42,8 @@ import { VideoFramesWorkspace } from "../tools/video-frames/VideoFramesWorkspace
 import { VideoGifWorkspace } from "../tools/video-gif/VideoGifWorkspace";
 import { VideoConvertWorkspace } from "../tools/video-convert/VideoConvertWorkspace";
 import { VideoCompressWorkspace } from "../tools/video-compress/VideoCompressWorkspace";
+import { VideoResizeWorkspace } from "../tools/video-resize/VideoResizeWorkspace";
+import { VideoCropWorkspace } from "../tools/video-crop/VideoCropWorkspace";
 
 export type ToolCategory = "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -86,7 +88,9 @@ export type ToolIconName =
   | "video-frames"
   | "video-gif"
   | "video-convert"
-  | "video-compress";
+  | "video-compress"
+  | "video-resize"
+  | "video-crop";
 
 export interface RegisteredTool {
   id: string;
@@ -1218,6 +1222,60 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "video-convert",
     implementationStatus: "full",
     component: VideoConvertWorkspace,
+  },
+  {
+    id: "V08",
+    category: "video",
+    name: { "zh-CN": "视频尺寸调整", "en-US": "Resize Video" },
+    summary: {
+      "zh-CN":
+        "提供常见分辨率、1:1 方形、9:16 竖屏与自定义宽高，区分等比放入范围、留黑边与裁满画布（主动解锁比例才拉伸），导出前展示实际输出尺寸并支持批量套用",
+      "en-US":
+        "Resize single or batch videos to presets, 1:1, 9:16, or custom sizes with Fit, Letterbox/Pad, Crop-to-Fill, and explicit unlock-only Stretch",
+    },
+    keywords: [
+      "resize video",
+      "scale video",
+      "resolution",
+      "1080p",
+      "720p",
+      "9:16",
+      "square",
+      "letterbox",
+      "pad",
+      "视频尺寸调整",
+      "分辨率",
+      "缩放视频",
+    ],
+    icon: "video-resize",
+    implementationStatus: "full",
+    component: VideoResizeWorkspace,
+  },
+  {
+    id: "V09",
+    category: "video",
+    name: { "zh-CN": "视频裁剪与旋转", "en-US": "Crop & Rotate Video" },
+    summary: {
+      "zh-CN":
+        "在真实正立视频画面上直接拖动裁剪框，支持自由/1:1/16:9/9:16、左右旋转 90° 与水平/垂直翻转；以手机竖拍显示方向为坐标系，预览与导出 1:1 一致",
+      "en-US":
+        "Drag crop boxes directly on display-oriented video frames with Free, 1:1, 16:9, 9:16 ratios, 90° rotation, and horizontal/vertical flips",
+    },
+    keywords: [
+      "crop video",
+      "rotate video",
+      "flip video",
+      "9:16",
+      "16:9",
+      "1:1",
+      "视频裁剪",
+      "视频旋转",
+      "翻转视频",
+      "裁切画面",
+    ],
+    icon: "video-crop",
+    implementationStatus: "full",
+    component: VideoCropWorkspace,
   },
   {
     id: "V10",

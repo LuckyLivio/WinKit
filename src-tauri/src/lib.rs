@@ -19,11 +19,13 @@ pub mod jwt;
 pub mod media_compress;
 pub mod media_convert;
 pub mod media_core;
+pub mod media_crop;
 pub mod media_extract_audio;
 pub mod media_frames;
 pub mod media_gif;
 pub mod media_info;
 pub mod media_mute;
+pub mod media_resize;
 pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
@@ -120,6 +122,10 @@ use crate::media_core::{
     MediaPreviewRegistration, MediaPreviewRegistry, MediaToolsStatus, MEDIA_SETUP_PROGRESS_EVENT,
     MEDIA_TASK_PROGRESS_EVENT,
 };
+use crate::media_crop::{
+    crop_rotate_video_impl, extract_oriented_preview_frame_impl, CropRotateVideoRequest,
+    CropRotateVideoResult, OrientedPreviewFrame,
+};
 use crate::media_extract_audio::{
     extract_audio_batch_impl, preview_audio_track_impl, AudioTrackPreviewResult,
     ExtractAudioBatchRequest, ExtractAudioBatchResponse,
@@ -130,6 +136,9 @@ use crate::media_gif::{
 };
 use crate::media_info::{probe_media_info_impl, MediaProbeReport};
 use crate::media_mute::{mute_videos_batch_impl, MuteVideosBatchRequest, MuteVideosBatchResponse};
+use crate::media_resize::{
+    resize_videos_batch_impl, ResizeVideosBatchRequest, ResizeVideosBatchResponse,
+};
 use crate::media_trim::{
     analyze_trim_keyframes_impl, trim_video_file_impl, TrimKeyframeAnalysis,
     TrimKeyframeAnalysisRequest, TrimVideoRequest, TrimVideoResult,
@@ -2917,6 +2926,134 @@ async fn compress_videos_batch<R: Runtime>(
 }
 
 #[tauri::command]
+async fn resize_videos_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: ResizeVideosBatchRequest,
+) -> Result<ResizeVideosBatchResponse, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid video resize task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V08", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V08", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = resize_videos_batch_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V08".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V08", 0, None),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V08", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video resize worker failed."))?
+}
+
+#[tauri::command]
+async fn extract_oriented_preview_frame<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    source_path: String,
+    timestamp_sec: Option<f64>,
+) -> Result<OrientedPreviewFrame, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_oriented_preview_frame_impl(&root, &source_path, timestamp_sec)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Preview frame worker failed."))?
+}
+
+#[tauri::command]
+async fn crop_rotate_video<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    req: CropRotateVideoRequest,
+) -> Result<CropRotateVideoResult, AppError> {
+    let tid = req.task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid crop/rotate task ID."));
+    }
+    let guard = registry.register_checked(&tid, "V09", true)?;
+    let root = app_media_root(&app);
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "V09", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        let res = crop_rotate_video_impl(&root, &req, &cancel_flag, |ev| {
+            let _ = app.emit(MEDIA_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "V09".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: 0,
+                    total_bytes: None,
+                    percent: ev.percent,
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(out) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "V09", out.byte_size, Some(out.byte_size)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "V09", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Video crop/rotate worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -3060,6 +3197,9 @@ pub fn run() {
             convert_videos_batch,
             probe_video_encoders,
             compress_videos_batch,
+            resize_videos_batch,
+            extract_oriented_preview_frame,
+            crop_rotate_video,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
