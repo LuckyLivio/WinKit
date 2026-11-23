@@ -1618,6 +1618,8 @@ export interface AudioStreamInfo {
   channels: number | null;
   channelLayout: string | null;
   sampleRateHz: number | null;
+  sampleFmt?: string | null;
+  bitsPerSample?: number | null;
   bitrateBps: number | null;
   durationSec: number | null;
   isDefault: boolean;
@@ -2304,4 +2306,114 @@ export async function changeVideoSpeedBatch(
 export async function mergeVideos(req: MergeVideosRequest): Promise<MergeVideosResult> {
   assertFrontendNotShuttingDown();
   return invoke<MergeVideosResult>("merge_videos", { req });
+}
+
+// ---------- Phase 4B2 PR 1: A03 Trim Audio & A05 Convert Audio ----------
+
+export interface AudioWaveformPayload {
+  sourcePath: string;
+  fileName: string;
+  durationSec: number;
+  sampleRateHz: number | null;
+  channels: number | null;
+  codecName: string | null;
+  bitsPerSample: number | null;
+  analysisSampleRateHz: number;
+  bucketCount: number;
+  minPeaks: number[];
+  maxPeaks: number[];
+  auditionUrl: string;
+  auditionTranscoded: boolean;
+}
+
+export interface TrimAudioRequest {
+  taskId: string;
+  sourcePath: string;
+  outputPath: string;
+  startSec: number;
+  endSec: number;
+  fadeInEnabled: boolean;
+  fadeInSec: number;
+  fadeOutEnabled: boolean;
+  fadeOutSec: number;
+  allowOverwrite?: boolean;
+}
+
+export interface TrimAudioResult {
+  outputPath: string;
+  byteSize: number;
+  durationSec: number | null;
+  outputCodec: string | null;
+  sampleRateHz: number | null;
+  channels: number | null;
+  requestedStartSec: number;
+  requestedEndSec: number;
+  appliedFadeInSec: number;
+  appliedFadeOutSec: number;
+  elapsedMs: number;
+}
+
+export type AudioConvertFormat = "mp3" | "m4a" | "wav" | "flac" | "aiff";
+export type AudioBitDepthOption = "source" | "bits16" | "bits24" | "bits32_float";
+
+export interface ConvertAudioBatchRequest {
+  taskId: string;
+  sourcePaths: string[];
+  outputDir: string;
+  targetFormat: AudioConvertFormat;
+  bitrateKbps?: number | null;
+  sampleRateHz?: number | null;
+  bitDepth?: AudioBitDepthOption | null;
+}
+
+export type AudioConvertItemStatus = "converted" | "skipped" | "failed";
+
+export interface ConvertAudioItemResult {
+  sourcePath: string;
+  fileName: string;
+  status: AudioConvertItemStatus;
+  outputPath: string | null;
+  outputBytes: number | null;
+  outputCodec: string | null;
+  outputSampleRateHz: number | null;
+  outputChannels: number | null;
+  outputBitsPerSample: number | null;
+  outputDurationSec: number | null;
+  elapsedMs: number;
+  message: string | null;
+}
+
+export interface ConvertAudioBatchResponse {
+  taskId: string;
+  outputDir: string;
+  targetFormat: AudioConvertFormat;
+  cancelled: boolean;
+  convertedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  elapsedMs: number;
+  items: ConvertAudioItemResult[];
+}
+
+export async function extractAudioWaveform(
+  sourcePath: string,
+  buckets?: number | null,
+): Promise<AudioWaveformPayload> {
+  assertFrontendNotShuttingDown();
+  return invoke<AudioWaveformPayload>("extract_audio_waveform", {
+    sourcePath,
+    buckets: buckets ?? null,
+  });
+}
+
+export async function trimAudioFile(req: TrimAudioRequest): Promise<TrimAudioResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<TrimAudioResult>("trim_audio_file", { req });
+}
+
+export async function convertAudioBatch(
+  req: ConvertAudioBatchRequest,
+): Promise<ConvertAudioBatchResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<ConvertAudioBatchResponse>("convert_audio_batch", { req });
 }

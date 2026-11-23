@@ -218,7 +218,7 @@ fn save_config(media_root: &Path, cfg: &MediaToolsConfigFile) -> Result<(), AppE
     Ok(())
 }
 
-fn configure_hidden_command(cmd: &mut Command) {
+pub fn configure_hidden_command(cmd: &mut Command) {
     #[cfg(windows)]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1583,6 +1583,7 @@ pub fn guess_media_mime_type(path: &Path) -> &'static str {
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
         "flac" => "audio/flac",
+        "aif" | "aiff" => "audio/aiff",
         "ogg" | "opus" => "audio/ogg",
         "gif" => "image/gif",
         "png" => "image/png",
