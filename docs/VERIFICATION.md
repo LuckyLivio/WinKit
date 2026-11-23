@@ -1,5 +1,22 @@
 # WinKit 验证记录 (VERIFICATION.md)
 
+## v0.9.0 · 阶段 2C4–2C5（文件分类收官）
+
+- **测试运行环境**：Windows 11 x64（宿主显示缩放 `150%` / `144 DPI`）、Windows PowerShell `5.1.26100.9818`、Node.js `v24.11.1`、npm `11.6.2`、`rustc 1.98.1` (`x86_64-pc-windows-msvc`)、Windows `bsdtar 3.8.9`、`WebView2 Runtime 157.0.4341.46`（使用独立 `WEBVIEW2_USER_DATA_FOLDER` 隔离配置，未修改用户日常 `%LOCALAPPDATA%\com.luckylivio.winkit`）。
+
+| 验证范围                           | 结果及复核方式                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F04 跨工具编码与多格式实测         | 安装版实机创建含中文文件名、嵌套目录与 `0` 字节空文件的标准 ZIP、AES-256 加密 ZIP、ZipCrypto ZIP 与 TAR.GZ 并回解核对相对路径与 SHA-256；独立 `.NET System.IO.Compression.ZipFile` 解压验证中文 UTF-8 ZIP，独立 Windows `bsdtar --passphrase` 解密验证 AES-256 / ZipCrypto ZIP；WinKit 实测预览并解压 `bsdtar` 生成的 `.7z` / `.tar.xz` / `.tar.bz2` / `.iso`、单文件 `.gz` 及独立 BSD `sample_rar4.rar` / `sample_rar5.rar`。 |
+| F04 安全隔离、密码重试与取消清理   | 实测同名包（`from_a\pack.zip` 与 `from_b\pack.zip`）隔离解压至独立目录不混写；密码错误返回 `wrong_password` 并支持直接重试；中途取消自动清理暂存目录且原包 SHA-256 不变；拦截 Zip-Slip、驱动器/UNC 绝对路径、DOS 保留设备名、符号链接、超 `4 GiB` 实际写入上限及已有输出冲突保护；可选跳过 `.DS_Store` 与 `__MACOSX`。                                                                                                         |
+| F05 NTFS 归档、ADS 保真与防篡改    | 实机 NTFS 临时目录含 CDN 映射（`pbs.twimg.com → X (Twitter)`）、Referrer 回退（`github.com → GitHub`）、原域名回退（`cdn.example.org`）、无来源图片（默认保持原位）与目标同名冲突图片；移动前后逐字节比对图片正文与完整 `:Zone.Identifier` 备用数据流 SHA-256 100% 一致；预览后修改文件在执行前复核哈希并自动跳过；二次预览识别已归档项不再重复移动。                                                                          |
+| `v0.8.0 → v0.9.0` 覆盖升级与退出   | 隔离配置下安装公开 `v0.8.0` 并写入深色主题、英文界面与 `F03` 收藏 → 使用公开 `v0.9.0` 安装程序覆盖升级 → 核验版本 `0.9.0`、22 项入口、随包许可文件（`THIRD_PARTY_NOTICES.md`、`licenses/F01.txt`、`licenses/F04-unrar-rs.txt`）与全部偏好继承 → `WM_CLOSE` 正常退出且残留进程数为 `0`。                                                                                                                                        |
+| Windows CI 与公开交付物复核        | [Actions #45051271307](https://github.com/LuckyLivio/WinKit/actions/runs/45051271307)（提交 `8f5e50c3468a5df067b66d80130d6996044e7051`）通过全量检查并产出 `WinKit_0.9.0_x64-setup.exe`（`5,332,169` 字节，SHA-256 `130330a1e5c2b968e403fdc8c07c82ef779422d8c734f705197628d7c87ca66c`，Authenticode `NotSigned`）；已从公开直链回下复核一致并修正 Release 正文实值。                                                           |
+| 仍待人工确认项（不冒充自动化通过） | 1. 资源管理器跨进程物理鼠标拖拽多压缩包进入 F04 与目录进入 F05，以及点击“打开输出目录/打开目标文件夹”唤起资源管理器；2. F01 复制二维码后粘贴至 Windows 画图（Paint）并保存回读；3. 浏览器实际下载网页图片在 F05 归档后右键属性确认 `ZoneId` 保留。                                                                                                                                                                             |
+
+- 安装版 `v0.9.0` 测试样本截图（公开可访问）：
+  - [F04 压缩与解压预览工作区](./screenshots/v0.9.0-f04-archive.png)
+  - [F05 下载图片按来源归档预览工作区](./screenshots/v0.9.0-f05-organize.png)
+
 ## v0.8.0 · 阶段 2C3
 
 | 验证范围                     | 结果及复核方式                                                                                                                                                                                                                                                                                                                                                  |
