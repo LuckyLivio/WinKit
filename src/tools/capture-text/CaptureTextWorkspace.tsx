@@ -23,6 +23,7 @@ import {
   parseBackendError,
   pickSaveFilePath,
   saveLocalTextFile,
+  storePngAsset,
   subscribeCaptureProgress,
   subscribeOcrProgress,
   writeSystemClipboardText,
@@ -43,6 +44,7 @@ export function CaptureTextWorkspace() {
   const stateRef = useRef(state);
   stateRef.current = state;
   const seqRef = useRef(1);
+  const cancelRequestedTaskRef = useRef<string | null>(null);
 
   const showToast = useCallback((setter: (v: string | null) => void, msg: string) => {
     setter(msg);
@@ -104,9 +106,17 @@ export function CaptureTextWorkspace() {
   }, [updateCaptureTextSession]);
 
   const runOcrOnAsset = useCallback(
-    async (assetId: string, rect: CaptureRect) => {
+    async (
+      assetId: string,
+      rect: CaptureRect,
+      recovery?: { dataUrl: string; label: string } | null,
+    ) => {
       const cur = stateRef.current;
       const ocrTaskId = `t04-ocr-${Date.now()}-${seqRef.current++}`;
+      const regionLabel = zh
+        ? `屏幕区域 (${rect.width}×${rect.height})`
+        : `Screen (${rect.width}×${rect.height})`;
+
       updateCaptureTextSession((prev) => ({
         ...prev,
         phase: "recognizing",
@@ -118,9 +128,7 @@ export function CaptureTextWorkspace() {
           totalItems: 1,
           currentPage: 1,
           totalPages: 1,
-          label: zh
-            ? `屏幕区域 (${rect.width}×${rect.height})`
-            : `Screen (${rect.width}×${rect.height})`,
+          label: regionLabel,
           percent: 10,
           state: "running",
         },
@@ -128,15 +136,15 @@ export function CaptureTextWorkspace() {
         errorMessage: null,
       }));
 
-      try {
-        const batchRes = await ocrExtractBatch(
-          ocrTaskId,
+      const invokeSingleOcr = (taskId: string, targetAssetId: string) =>
+        ocrExtractBatch(
+          taskId,
           {
             items: [
               {
                 id: "t04-region",
                 path: null,
-                assetId,
+                assetId: targetAssetId,
                 name: `screen_${rect.width}x${rect.height}.png`,
                 pageRange: null,
               },
@@ -149,6 +157,57 @@ export function CaptureTextWorkspace() {
           },
           "T04",
         );
+
+      try {
+        let batchRes = await invokeSingleOcr(ocrTaskId, assetId);
+        let firstItem = batchRes.items[0];
+
+        // If the shared in-memory LRU cache (24 items / 192 MiB) evicted this capture while
+        // the user worked in other tools, re-ingest the held lossless PNG dataUrl in RAM
+        // without writing to disk and retry once.
+        if (
+          !batchRes.cancelled &&
+          firstItem?.status === "failed" &&
+          firstItem.errorCode === "ASSET_NOT_FOUND" &&
+          recovery?.dataUrl
+        ) {
+          if (cancelRequestedTaskRef.current === ocrTaskId) {
+            batchRes = { ...batchRes, cancelled: true };
+          } else {
+            const restored = await storePngAsset(
+              recovery.dataUrl,
+              recovery.label || "screenshot_region.png",
+            );
+            const retryTaskId = `t04-ocr-${Date.now()}-${seqRef.current++}`;
+            updateCaptureTextSession((prev) => ({
+              ...prev,
+              activeTaskId: retryTaskId,
+              lastCapture: prev.lastCapture
+                ? {
+                    ...prev.lastCapture,
+                    asset: restored,
+                  }
+                : prev.lastCapture,
+              ocrProgress: {
+                taskId: retryTaskId,
+                currentItem: 1,
+                totalItems: 1,
+                currentPage: 1,
+                totalPages: 1,
+                label: regionLabel,
+                percent: 10,
+                state: "running",
+              },
+            }));
+
+            if (cancelRequestedTaskRef.current === ocrTaskId) {
+              batchRes = { ...batchRes, cancelled: true };
+            } else {
+              batchRes = await invokeSingleOcr(retryTaskId, restored.assetId);
+              firstItem = batchRes.items[0];
+            }
+          }
+        }
 
         if (batchRes.cancelled) {
           updateCaptureTextSession((prev) => ({
@@ -163,7 +222,7 @@ export function CaptureTextWorkspace() {
           return;
         }
 
-        const item = batchRes.items[0];
+        const item = firstItem;
         if (!item || item.status === "failed") {
           updateCaptureTextSession((prev) => ({
             ...prev,
@@ -228,6 +287,10 @@ export function CaptureTextWorkspace() {
             errorMessage: formatLocalizedError(err, t),
           }));
         }
+      } finally {
+        if (cancelRequestedTaskRef.current === ocrTaskId) {
+          cancelRequestedTaskRef.current = null;
+        }
       }
     },
     [t, updateCaptureTextSession, zh],
@@ -268,7 +331,10 @@ export function CaptureTextWorkspace() {
         captureProgress: null,
       }));
 
-      await runOcrOnAsset(cap.asset.assetId, cap.rect);
+      await runOcrOnAsset(cap.asset.assetId, cap.rect, {
+        dataUrl: cap.asset.dataUrl,
+        label: cap.asset.label,
+      });
     } catch (err) {
       const parsed = parseBackendError(err);
       if (parsed.code === "TASK_CANCELLED") {
@@ -296,12 +362,16 @@ export function CaptureTextWorkspace() {
   const handleRerunCurrentCapture = useCallback(async () => {
     const cur = stateRef.current;
     if (cur.phase !== "idle" || !cur.lastCapture || cur.engineStatus?.ready === false) return;
-    await runOcrOnAsset(cur.lastCapture.asset.assetId, cur.lastCapture.rect);
+    await runOcrOnAsset(cur.lastCapture.asset.assetId, cur.lastCapture.rect, {
+      dataUrl: cur.lastCapture.asset.dataUrl,
+      label: cur.lastCapture.asset.label,
+    });
   }, [runOcrOnAsset]);
 
   const handleCancelActive = useCallback(async () => {
     const tid = stateRef.current.activeTaskId;
     if (!tid) return;
+    cancelRequestedTaskRef.current = tid;
     await cancelBackendTask(tid).catch(() => {});
   }, []);
 

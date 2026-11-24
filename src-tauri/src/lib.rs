@@ -5332,6 +5332,10 @@ async fn inspect_ocr_sources<R: Runtime>(
         .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "OCR source inspection failed."))
 }
 
+fn ocr_batch_task_is_interruptible(resolved_tool: &str) -> bool {
+    resolved_tool == "T04"
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn ocr_extract_batch<R: Runtime>(
@@ -5354,7 +5358,11 @@ async fn ocr_extract_batch<R: Runtime>(
         pdf.set_resource_dir(res_dir);
     }
     let tid = trimmed_id.to_string();
-    let guard = registry.register_checked(&tid, &resolved_tool, false)?;
+    let guard = registry.register_checked(
+        &tid,
+        &resolved_tool,
+        ocr_batch_task_is_interruptible(&resolved_tool),
+    )?;
     let cancel_flag = guard.cancel_flag();
     let ocr_session = ocr.inner().clone();
     let pdf_session = pdf.inner().clone();
@@ -5898,5 +5906,50 @@ mod tests {
         assert_ne!(final_cancel.percent, Some(100.0));
         assert_eq!(final_cancel.error_code.as_deref(), Some("TASK_CANCELLED"));
         assert!(final_cancel.error_message.is_some());
+    }
+
+    #[test]
+    fn t04_ocr_task_is_interruptible_on_shutdown_while_t03_preserves_existing_behavior() {
+        use super::ocr_batch_task_is_interruptible;
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        assert!(ocr_batch_task_is_interruptible("T04"));
+        assert!(!ocr_batch_task_is_interruptible("T03"));
+
+        // T04 registers as interruptible: shutdown drain immediately signals cancellation and drains cleanly.
+        let reg_t04 = TaskRegistry::default();
+        let guard_t04 = reg_t04
+            .register_checked("t04-ocr-1", "T04", ocr_batch_task_is_interruptible("T04"))
+            .expect("register T04");
+        let snap_t04 = reg_t04.snapshot();
+        assert_eq!(snap_t04.interruptible_count, 1);
+        assert_eq!(snap_t04.write_finishing_count, 0);
+
+        let flag_t04 = guard_t04.cancel_flag();
+        let worker = std::thread::spawn(move || {
+            while !flag_t04.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            drop(guard_t04);
+        });
+        let drain_t04 = reg_t04.begin_shutdown_and_drain(Duration::from_secs(2));
+        worker.join().expect("worker join");
+        assert!(drain_t04.ready_to_close);
+        assert!(drain_t04.remaining_tasks.is_empty());
+
+        // T03 preserves non-interruptible multi-page exit behavior.
+        let reg_t03 = TaskRegistry::default();
+        let guard_t03 = reg_t03
+            .register_checked("t03-ocr-1", "T03", ocr_batch_task_is_interruptible("T03"))
+            .expect("register T03");
+        let snap_t03 = reg_t03.snapshot();
+        assert_eq!(snap_t03.interruptible_count, 0);
+        assert_eq!(snap_t03.write_finishing_count, 1);
+        let flag_t03 = guard_t03.cancel_flag();
+        let drain_t03 = reg_t03.begin_shutdown_and_drain(Duration::from_millis(40));
+        assert!(!drain_t03.ready_to_close);
+        assert!(!flag_t03.load(Ordering::SeqCst));
+        drop(guard_t03);
     }
 }

@@ -19,6 +19,7 @@ vi.mock("../../lib/tauriBridge", async () => {
     writeSystemClipboardText: vi.fn(),
     pickSaveFilePath: vi.fn(),
     saveLocalTextFile: vi.fn(),
+    storePngAsset: vi.fn(),
     subscribeCaptureProgress: vi.fn(async () => () => {}),
     subscribeOcrProgress: vi.fn(async () => () => {}),
   };
@@ -292,5 +293,154 @@ describe("CaptureTextWorkspace (T04)", () => {
       const ta = screen.getByRole("textbox", { name: /屏幕取字识别结果/ }) as HTMLTextAreaElement;
       expect(ta.value).toBe("取消后重跑成功");
     });
+  });
+
+  it("re-runs OCR cleanly before and after shared in-memory asset cache eviction via storePngAsset", async () => {
+    const user = userEvent.setup();
+    const initialAsset: tauriBridge.ImageAssetPayload = {
+      assetId: "cap-evict-1",
+      label: "screenshot_region.png",
+      width: 640,
+      height: 200,
+      hasAlpha: true,
+      byteLength: 9100,
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+    };
+    const restoredAsset: tauriBridge.ImageAssetPayload = {
+      ...initialAsset,
+      assetId: "cap-restored-2",
+    };
+
+    vi.mocked(tauriBridge.captureScreenRegion).mockResolvedValueOnce({
+      asset: initialAsset,
+      mode: "region",
+      rect: { x: 120, y: 80, width: 640, height: 200 },
+      frameCount: 1,
+      stopReason: null,
+      isPartial: false,
+      note: null,
+    });
+
+    const makeSuccessBatch = (text: string): tauriBridge.OcrBatchResult => ({
+      engineName: "RapidOCR PP-OCRv4 mobile",
+      completedCount: 1,
+      failedCount: 0,
+      cancelled: false,
+      totalPages: 1,
+      totalLines: 1,
+      totalChars: text.length,
+      totalElapsedMs: 120,
+      items: [
+        {
+          sourceId: "t04-region",
+          sourcePath: null,
+          sourceName: "screen_640x200.png",
+          kind: "clipboard",
+          status: "completed",
+          combinedText: text,
+          totalLines: 1,
+          totalChars: text.length,
+          averageConfidence: 0.99,
+          elapsedMs: 120,
+          errorCode: null,
+          errorMessage: null,
+          pages: [
+            {
+              pageNumber: 1,
+              imageWidthPx: 640,
+              imageHeightPx: 200,
+              renderDpi: null,
+              sourceWidthPt: null,
+              sourceHeightPt: null,
+              text,
+              lineCount: 1,
+              charCount: text.length,
+              averageConfidence: 0.99,
+              elapsedMs: 120,
+              previewDataUrl: null,
+              warnings: [],
+              lines: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    const evictedBatch: tauriBridge.OcrBatchResult = {
+      engineName: "RapidOCR PP-OCRv4 mobile",
+      completedCount: 0,
+      failedCount: 1,
+      cancelled: false,
+      totalPages: 0,
+      totalLines: 0,
+      totalChars: 0,
+      totalElapsedMs: 2,
+      items: [
+        {
+          sourceId: "t04-region",
+          sourcePath: null,
+          sourceName: "screen_640x200.png",
+          kind: "clipboard",
+          status: "failed",
+          combinedText: "",
+          totalLines: 0,
+          totalChars: 0,
+          averageConfidence: 0,
+          elapsedMs: 2,
+          errorCode: "ASSET_NOT_FOUND",
+          errorMessage: "In-memory image session expired or missing.",
+          pages: [],
+        },
+      ],
+    };
+
+    vi.mocked(tauriBridge.storePngAsset).mockResolvedValueOnce(restoredAsset);
+    vi.mocked(tauriBridge.ocrExtractBatch)
+      .mockResolvedValueOnce(makeSuccessBatch("首次识别文本"))
+      .mockResolvedValueOnce(makeSuccessBatch("淘汰前重跑成功"))
+      .mockResolvedValueOnce(evictedBatch)
+      .mockResolvedValueOnce(makeSuccessBatch("缓存淘汰后恢复成功"))
+      .mockResolvedValueOnce(makeSuccessBatch("使用新缓存ID再次重跑"));
+
+    renderWorkspace("zh-CN");
+    await user.click(screen.getByRole("button", { name: /框选屏幕区域取字/ }));
+    await waitFor(() => {
+      const ta = screen.getByRole("textbox", { name: /屏幕取字识别结果/ }) as HTMLTextAreaElement;
+      expect(ta.value).toBe("首次识别文本");
+    });
+
+    // 1. Re-run BEFORE cache eviction: directly reuses cap-evict-1, never calls storePngAsset
+    await user.click(screen.getByRole("button", { name: /重新识别/ }));
+    await waitFor(() => {
+      const ta = screen.getByRole("textbox", { name: /屏幕取字识别结果/ }) as HTMLTextAreaElement;
+      expect(ta.value).toBe("淘汰前重跑成功");
+    });
+    expect(tauriBridge.storePngAsset).not.toHaveBeenCalled();
+
+    // 2. Re-run AFTER cache eviction (ASSET_NOT_FOUND): re-ingests preview PNG in RAM and succeeds
+    await user.click(screen.getByRole("button", { name: /重新识别/ }));
+    await waitFor(() => {
+      const ta = screen.getByRole("textbox", { name: /屏幕取字识别结果/ }) as HTMLTextAreaElement;
+      expect(ta.value).toBe("缓存淘汰后恢复成功");
+    });
+    expect(tauriBridge.storePngAsset).toHaveBeenCalledTimes(1);
+    expect(tauriBridge.storePngAsset).toHaveBeenCalledWith(
+      initialAsset.dataUrl,
+      initialAsset.label,
+    );
+    expect(vi.mocked(tauriBridge.ocrExtractBatch).mock.calls[3]?.[1].items[0]?.assetId).toBe(
+      "cap-restored-2",
+    );
+
+    // 3. Subsequent re-run uses the refreshed assetId directly without re-calling storePngAsset
+    await user.click(screen.getByRole("button", { name: /重新识别/ }));
+    await waitFor(() => {
+      const ta = screen.getByRole("textbox", { name: /屏幕取字识别结果/ }) as HTMLTextAreaElement;
+      expect(ta.value).toBe("使用新缓存ID再次重跑");
+    });
+    expect(tauriBridge.storePngAsset).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(tauriBridge.ocrExtractBatch).mock.calls[4]?.[1].items[0]?.assetId).toBe(
+      "cap-restored-2",
+    );
   });
 });
