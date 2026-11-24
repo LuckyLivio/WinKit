@@ -378,6 +378,32 @@ mod qpdf_ffi {
 
 pub use qpdf_ffi::execute_qpdf_job_in_process;
 
+fn execute_qpdf_job_with_retry(
+    resource_dir: Option<&Path>,
+    job_json: &str,
+    on_progress: Option<&dyn Fn(u8)>,
+) -> Result<QpdfJobOutput, AppError> {
+    let mut attempt = 0u32;
+    loop {
+        let res = execute_qpdf_job_in_process(resource_dir, job_json, on_progress);
+        let transient_lock = match &res {
+            Ok(out) if out.exit_code == QPDF_EXIT_ERROR => {
+                let lower = out.error.to_ascii_lowercase();
+                lower.contains("permission denied")
+                    || lower.contains("access is denied")
+                    || lower.contains("sharing violation")
+            }
+            _ => false,
+        };
+        if transient_lock && attempt < 5 {
+            attempt += 1;
+            std::thread::sleep(Duration::from_millis(50 * attempt as u64));
+            continue;
+        }
+        return res;
+    }
+}
+
 /// Entrypoint executed when `winkit.exe` is started with `--qpdf-worker`.
 ///
 /// Reads a single length-prefixed UTF-8 QPDFJob JSON payload from stdin, runs `qpdf30.dll` via
@@ -409,7 +435,7 @@ pub fn run_qpdf_worker_stdio(resource_dir: Option<&Path>) -> i32 {
             let progress_emitter = |pct: u8| {
                 let _ = write_worker_line(&QpdfWorkerLine::Progress { percent: pct });
             };
-            execute_qpdf_job_in_process(resource_dir, json_str, Some(&progress_emitter))
+            execute_qpdf_job_with_retry(resource_dir, json_str, Some(&progress_emitter))
         }
         Err(_) => Err(AppError::invalid_param(
             "QPDF worker payload was not valid UTF-8.",
@@ -479,7 +505,7 @@ pub fn run_qpdf_job(
 
     if !should_use_subprocess_worker() {
         let res = match std::str::from_utf8(&json_bytes) {
-            Ok(s) => execute_qpdf_job_in_process(resource_dir, s, on_progress),
+            Ok(s) => execute_qpdf_job_with_retry(resource_dir, s, on_progress),
             Err(_) => Err(AppError::invalid_param(
                 "QPDF job JSON was not valid UTF-8.",
             )),

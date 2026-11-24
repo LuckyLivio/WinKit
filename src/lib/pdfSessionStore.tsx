@@ -1,13 +1,19 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import type {
+  CompressPdfResult,
   CropPdfResult,
   DecryptPdfResult,
   DeletePdfPagesResult,
   EncryptPdfResult,
   ExtractPdfPagesResult,
   ImagesToPdfResult,
+  MarkdownMarginPreset,
+  MarkdownPaperSize,
+  MarkdownTheme,
+  MarkdownToPdfResult,
   MergePdfsResult,
   OrganizePdfResult,
+  PdfCompressMode,
   PdfCropScope,
   PdfCropUnitsMode,
   PdfDocumentInspection,
@@ -302,6 +308,38 @@ export interface PdfDecryptSessionState {
   errorMessage: string | null;
 }
 
+export interface PdfCompressSessionState {
+  sourcePath: string | null;
+  inspection: PdfDocumentInspection | null;
+  inspectLoading: boolean;
+  mode: PdfCompressMode;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: CompressPdfResult | null;
+  errorMessage: string | null;
+}
+
+export interface PdfMarkdownSessionState {
+  sourceFilePath: string | null;
+  sourceDir: string | null;
+  markdown: string;
+  theme: MarkdownTheme;
+  paperSize: MarkdownPaperSize;
+  marginPreset: MarkdownMarginPreset;
+  headerText: string;
+  footerText: string;
+  showPageNumbers: boolean;
+  includeBookmarks: boolean;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: MarkdownToPdfResult | null;
+  errorMessage: string | null;
+}
+
 export interface PdfSessionRoot {
   reader: PdfReaderSessionState;
   merge: PdfMergeSessionState;
@@ -316,6 +354,8 @@ export interface PdfSessionRoot {
   pdfWatermark: PdfWatermarkSessionState;
   encrypt: PdfEncryptSessionState;
   decrypt: PdfDecryptSessionState;
+  compress: PdfCompressSessionState;
+  markdown: PdfMarkdownSessionState;
 }
 
 const INITIAL_PDF_SESSION: PdfSessionRoot = {
@@ -523,10 +563,52 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     errorCode: null,
     errorMessage: null,
   },
+  compress: {
+    sourcePath: null,
+    inspection: null,
+    inspectLoading: false,
+    mode: "balanced",
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  markdown: {
+    sourceFilePath: null,
+    sourceDir: null,
+    markdown: "",
+    theme: "github",
+    paperSize: "a4",
+    marginPreset: "normal",
+    headerText: "",
+    footerText: "",
+    showPageNumbers: true,
+    includeBookmarks: true,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
 
 export type PdfTargetToolId =
-  "P06" | "P07" | "P08" | "P09" | "P10" | "P11" | "P13" | "P15" | "P16" | "P17" | "I13";
+  | "P06"
+  | "P07"
+  | "P08"
+  | "P09"
+  | "P10"
+  | "P11"
+  | "P13"
+  | "P14"
+  | "P15"
+  | "P16"
+  | "P17"
+  | "P23"
+  | "I13";
 
 export interface PdfSessionContextValue {
   pdfSession: PdfSessionRoot;
@@ -551,6 +633,12 @@ export interface PdfSessionContextValue {
   ) => void;
   updateEncryptSession: (updater: (prev: PdfEncryptSessionState) => PdfEncryptSessionState) => void;
   updateDecryptSession: (updater: (prev: PdfDecryptSessionState) => PdfDecryptSessionState) => void;
+  updateCompressSession: (
+    updater: (prev: PdfCompressSessionState) => PdfCompressSessionState,
+  ) => void;
+  updateMarkdownSession: (
+    updater: (prev: PdfMarkdownSessionState) => PdfMarkdownSessionState,
+  ) => void;
   openInPdfReader: (path: string) => void;
   sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
   pendingReaderPath: string | null;
@@ -668,6 +756,20 @@ export function PdfSessionProvider({
     [],
   );
 
+  const updateCompressSession = useCallback(
+    (updater: (prev: PdfCompressSessionState) => PdfCompressSessionState) => {
+      setPdfSession((prev) => ({ ...prev, compress: updater(prev.compress) }));
+    },
+    [],
+  );
+
+  const updateMarkdownSession = useCallback(
+    (updater: (prev: PdfMarkdownSessionState) => PdfMarkdownSessionState) => {
+      setPdfSession((prev) => ({ ...prev, markdown: updater(prev.markdown) }));
+    },
+    [],
+  );
+
   const openInPdfReader = useCallback(
     (path: string) => {
       setPendingReaderPath(path);
@@ -709,6 +811,8 @@ export function PdfSessionProvider({
         updatePdfWatermarkSession,
         updateEncryptSession,
         updateDecryptSession,
+        updateCompressSession,
+        updateMarkdownSession,
         openInPdfReader,
         sendPdfToTool,
         pendingReaderPath,

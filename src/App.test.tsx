@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 64 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
+  it("registers all 66 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -156,10 +156,22 @@ describe("WinKit desktop workbench shell", () => {
       "P11",
       "P12",
       "P13",
+      "P14",
       "P15",
       "P16",
       "P17",
+      "P23",
     ]);
+    for (const query of ["PDF压缩", "compress pdf", "减小体积"]) {
+      expect(filterTools(REGISTERED_TOOLS, { query, category: "all" }).map((t) => t.id)).toContain(
+        "P14",
+      );
+    }
+    for (const query of ["Markdown转PDF", "markdown to pdf", "md转pdf"]) {
+      expect(filterTools(REGISTERED_TOOLS, { query, category: "all" }).map((t) => t.id)).toContain(
+        "P23",
+      );
+    }
     for (const query of ["PDF加密", "encrypt pdf", "添加密码"]) {
       expect(filterTools(REGISTERED_TOOLS, { query, category: "all" }).map((t) => t.id)).toContain(
         "P15",
@@ -195,11 +207,14 @@ describe("WinKit desktop workbench shell", () => {
         filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
       ).toEqual(["P17"]);
     }
-    for (const query of ["PDF 合并", "merge pdf", "bookmarks"]) {
+    for (const query of ["PDF 合并", "merge pdf"]) {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),
       ).toEqual(["P07"]);
     }
+    expect(
+      filterTools(REGISTERED_TOOLS, { query: "bookmarks", category: "pdf" }).map((tool) => tool.id),
+    ).toEqual(expect.arrayContaining(["P07", "P23"]));
     for (const query of ["PDF 拆分", "split pdf", "分割pdf"]) {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),

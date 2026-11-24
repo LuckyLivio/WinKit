@@ -1,0 +1,128 @@
+.pdf-md-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+}
+
+.pdf-md-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface-card, var(--bg-elevated));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+}
+
+.pdf-md-toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.pdf-md-options-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  background: var(--surface-card, var(--bg-elevated));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.pdf-md-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.pdf-md-opt input[type="text"] {
+  width: 150px;
+}
+
+.pdf-md-split {
+  flex: 1;
+  min-height: 300px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 840px) {
+  .pdf-md-split {
+    grid-template-columns: 1fr;
+    min-height: 480px;
+  }
+}
+
+.pdf-md-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-card, var(--bg-elevated));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.pdf-md-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pdf-md-pane-meta {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.pdf-md-textarea {
+  flex: 1;
+  min-height: 240px;
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 12px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.6;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.pdf-md-preview-frame {
+  flex: 1;
+  min-height: 240px;
+  width: 100%;
+  border: none;
+  background: #ffffff;
+}
+
+.pdf-md-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface-card, var(--bg-elevated));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+}

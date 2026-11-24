@@ -764,6 +764,14 @@ export function PdfReaderView() {
             <button
               type="button"
               className="btn"
+              onClick={() => sendPdfToTool(info.path, "P14")}
+              title="P14"
+            >
+              <span>P14</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
               onClick={() => sendPdfToTool(info.path, info.isEncrypted ? "P16" : "P15")}
               title={info.isEncrypted ? "P16" : "P15"}
             >

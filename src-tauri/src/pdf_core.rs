@@ -26,8 +26,15 @@ use std::collections::{HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static ATOMIC_TMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn is_transient_win_lock(err: &std::io::Error) -> bool {
+    matches!(err.raw_os_error(), Some(5 | 32 | 33))
+}
 
 pub const PDF_TASK_PROGRESS_EVENT: &str = "winkit://pdf-progress";
 
@@ -651,11 +658,12 @@ impl AtomicPdfOutput {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let pid = std::process::id();
+        let seq = ATOMIC_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let base_name = output_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "output.pdf".to_string());
-        let tmp_path = parent.join(format!(".{base_name}.winkit-{pid}-{stamp}.tmp"));
+        let tmp_path = parent.join(format!(".{base_name}.winkit-{pid}-{stamp}-{seq}.tmp"));
 
         Ok(Self {
             final_path: output_path,
@@ -734,25 +742,43 @@ impl AtomicPdfOutput {
             .map_err(|e| AppError::from_io(e, "Temporary PDF output was not produced"))?
             .len();
 
-        if !self.overwrite {
-            match fs::hard_link(&self.tmp_path, &self.final_path) {
-                Ok(()) => {
-                    let _ = fs::remove_file(&self.tmp_path);
-                }
-                Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                    return Err(AppError::target_exists());
-                }
-                Err(_) => {
-                    if self.final_path.exists() {
+        let mut attempt = 0u32;
+        loop {
+            let res: Result<(), std::io::Error> = if !self.overwrite {
+                match fs::hard_link(&self.tmp_path, &self.final_path) {
+                    Ok(()) => {
+                        let _ = fs::remove_file(&self.tmp_path);
+                        Ok(())
+                    }
+                    Err(err) if err.kind() == ErrorKind::AlreadyExists => {
                         return Err(AppError::target_exists());
                     }
-                    fs::rename(&self.tmp_path, &self.final_path)
-                        .map_err(|e| AppError::from_io(e, "Unable to finalize output PDF file"))?;
+                    Err(_) => {
+                        if self.final_path.exists() {
+                            return Err(AppError::target_exists());
+                        }
+                        fs::rename(&self.tmp_path, &self.final_path)
+                    }
+                }
+            } else {
+                fs::rename(&self.tmp_path, &self.final_path)
+            };
+
+            match res {
+                Ok(()) => break,
+                Err(err) if is_transient_win_lock(&err) && attempt < 5 => {
+                    attempt += 1;
+                    std::thread::sleep(Duration::from_millis(40 * attempt as u64));
+                }
+                Err(err) => {
+                    let msg = if self.overwrite {
+                        "Unable to replace output PDF file"
+                    } else {
+                        "Unable to finalize output PDF file"
+                    };
+                    return Err(AppError::from_io(err, msg));
                 }
             }
-        } else {
-            fs::rename(&self.tmp_path, &self.final_path)
-                .map_err(|e| AppError::from_io(e, "Unable to replace output PDF file"))?;
         }
 
         self.committed = true;

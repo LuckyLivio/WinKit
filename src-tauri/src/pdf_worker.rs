@@ -375,6 +375,38 @@ pub(crate) mod job_guard {
             }
         }
 
+        /// Attach a child process tree (such as headless Edge) to a Job Object that only enforces
+        /// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so its own helper child processes can spawn while
+        /// ensuring every process in the tree terminates atomically on cancellation or drop.
+        pub fn attach_tree_kill_on_close(child: &Child) -> Option<Self> {
+            unsafe {
+                let job = CreateJobObjectW(None, None).ok()?;
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION) as *const _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+                .is_err()
+                {
+                    let _ = CloseHandle(job);
+                    return None;
+                }
+                let proc_handle = HANDLE(child.as_raw_handle());
+                if AssignProcessToJobObject(job, proc_handle).is_err() {
+                    let _ = CloseHandle(job);
+                    return None;
+                }
+                Some(Self {
+                    killer: SharedJobKiller {
+                        raw: Arc::new(Mutex::new(job.0 as usize)),
+                    },
+                })
+            }
+        }
+
         pub fn killer(&self) -> SharedJobKiller {
             self.killer.clone()
         }

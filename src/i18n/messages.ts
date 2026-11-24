@@ -136,6 +136,7 @@ export interface Messages {
     PDF_QPDF_INVALID: string;
     PDF_ENCRYPT_VERIFY_FAILED: string;
     PDF_DECRYPT_VERIFY_FAILED: string;
+    PDF_MARKDOWN_ENGINE_MISSING: string;
     PDF_WORKER_TIMEOUT: string;
     PDF_WORKER_CRASHED: string;
     PDF_WORKER_ERROR: string;
@@ -1136,6 +1137,8 @@ export const MESSAGES: Record<Locale, Messages> = {
       PDF_ENCRYPT_VERIFY_FAILED: "加密结果独立校验未通过，未写入最终输出文件，请重试。",
       PDF_DECRYPT_VERIFY_FAILED:
         "解密结果独立校验未通过（输出仍需要密码或无法读取），未写入最终文件。",
+      PDF_MARKDOWN_ENGINE_MISSING:
+        "未在标准系统路径找到 Windows 内置 Microsoft Edge 渲染组件，无法离线生成矢量 PDF。",
       PDF_WORKER_TIMEOUT:
         "隔离 PDF 处理进程超时并已终止，主界面未受影响，请检查文件是否过大或损坏。",
       PDF_WORKER_CRASHED: "隔离 PDF 处理子进程异常中断（文件可能损坏或结构异常），主界面未受影响。",
@@ -2275,6 +2278,8 @@ export const MESSAGES: Record<Locale, Messages> = {
         "Independent post-encryption verification failed. No final output file was written.",
       PDF_DECRYPT_VERIFY_FAILED:
         "Independent post-decryption verification failed (output could not be opened without a password). No final output file was written.",
+      PDF_MARKDOWN_ENGINE_MISSING:
+        "Microsoft Edge (msedge.exe) was not found in standard Windows directories, so offline vector PDF printing cannot run.",
       PDF_WORKER_TIMEOUT:
         "The isolated PDF worker timed out and was terminated safely. The main window remains unaffected.",
       PDF_WORKER_CRASHED:
