@@ -37,6 +37,7 @@ pub mod media_subtitles;
 pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
+pub mod pdf_annotate;
 pub mod pdf_core;
 pub mod pdf_export_images;
 pub mod pdf_ops;
@@ -191,6 +192,13 @@ use crate::organize_downloads::{
     OrganizeExecuteResponse, OrganizePreviewRequest, OrganizePreviewResponse,
 };
 use crate::password_gen::{generate_secrets_with_os_rng, SecretGenRequest, SecretGenResponse};
+use crate::pdf_annotate::{
+    crop_pdf_impl, delete_signature_template_impl, detect_pdf_white_margins_impl,
+    list_signature_templates_impl, resolve_signature_templates_dir, save_signature_template_impl,
+    sign_pdf_impl, watermark_pdf_impl, CropPdfRequest, CropPdfResult, DetectWhiteMarginsRequest,
+    DetectedWhiteMargins, SaveSignatureTemplateRequest, SignPdfRequest, SignPdfResult,
+    SignatureTemplateItem, SignatureTemplatesListResponse, WatermarkPdfRequest, WatermarkPdfResult,
+};
 use crate::pdf_core::{
     PdfDocumentInspection, PdfRenderRequest, PdfSessionManager, RenderedPdfPagePayload,
     PDF_TASK_PROGRESS_EVENT,
@@ -4663,6 +4671,266 @@ async fn pdf_to_images(
 }
 
 #[tauri::command]
+async fn list_signature_templates(
+    app: AppHandle,
+) -> Result<SignatureTemplatesListResponse, AppError> {
+    let app_dir = app.path().app_local_data_dir().ok();
+    let dir = resolve_signature_templates_dir(app_dir.as_deref());
+    tauri::async_runtime::spawn_blocking(move || list_signature_templates_impl(&dir))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Signature templates worker failed."))?
+}
+
+#[tauri::command]
+async fn save_signature_template(
+    app: AppHandle,
+    request: SaveSignatureTemplateRequest,
+) -> Result<SignatureTemplateItem, AppError> {
+    let app_dir = app.path().app_local_data_dir().ok();
+    let dir = resolve_signature_templates_dir(app_dir.as_deref());
+    tauri::async_runtime::spawn_blocking(move || save_signature_template_impl(&dir, &request))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Signature template save failed."))?
+}
+
+#[tauri::command]
+async fn delete_signature_template(app: AppHandle, id: String) -> Result<(), AppError> {
+    let app_dir = app.path().app_local_data_dir().ok();
+    let dir = resolve_signature_templates_dir(app_dir.as_deref());
+    tauri::async_runtime::spawn_blocking(move || delete_signature_template_impl(&dir, &id))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Signature template delete failed."))?
+}
+
+#[tauri::command]
+async fn sign_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: SignPdfRequest,
+) -> Result<SignPdfResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-sign"));
+    let guard = registry.register_checked(&tid, "P06", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P06".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = sign_pdf_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P06".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P06",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P06", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF sign worker failed."))?
+}
+
+#[tauri::command]
+async fn detect_pdf_white_margins(
+    app: AppHandle,
+    pdf: State<'_, PdfSessionManager>,
+    request: DetectWhiteMarginsRequest,
+) -> Result<DetectedWhiteMargins, AppError> {
+    let mgr = pdf.inner().clone();
+    if let Ok(res_dir) = app.path().resource_dir() {
+        mgr.set_resource_dir(res_dir);
+    }
+    tauri::async_runtime::spawn_blocking(move || detect_pdf_white_margins_impl(&mgr, &request))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF white-margin worker failed."))?
+}
+
+#[tauri::command]
+async fn crop_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: CropPdfRequest,
+) -> Result<CropPdfResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-crop"));
+    let guard = registry.register_checked(&tid, "P13", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P13".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = crop_pdf_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P13".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P13",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P13", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF crop worker failed."))?
+}
+
+#[tauri::command]
+async fn watermark_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    request: WatermarkPdfRequest,
+) -> Result<WatermarkPdfResult, AppError> {
+    let tid = request
+        .task_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| next_internal_task_id("pdf-watermark"));
+    let guard = registry.register_checked(&tid, "I13", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mut req = request;
+    req.task_id = Some(tid.clone());
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "I13".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = watermark_pdf_impl(&req, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "I13".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "I13",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "I13", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF watermark worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -4886,6 +5154,13 @@ pub fn run() {
             images_to_pdf,
             preview_pdf_to_images_plan,
             pdf_to_images,
+            list_signature_templates,
+            save_signature_template,
+            delete_signature_template,
+            sign_pdf,
+            detect_pdf_white_margins,
+            crop_pdf,
+            watermark_pdf,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

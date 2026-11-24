@@ -735,6 +735,30 @@ export function PdfReaderView() {
             <button
               type="button"
               className="btn"
+              onClick={() => sendPdfToTool(info.path, "P06")}
+              title="P06"
+            >
+              <span>P06</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => sendPdfToTool(info.path, "P13")}
+              title="P13"
+            >
+              <span>P13</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => sendPdfToTool(info.path, "I13")}
+              title="I13"
+            >
+              <span>I13</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
               onClick={() => sendPdfToTool(info.path, "P08")}
               title={pm.reader.sendToSplit}
             >

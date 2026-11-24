@@ -1,10 +1,13 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import type {
+  CropPdfResult,
   DeletePdfPagesResult,
   ExtractPdfPagesResult,
   ImagesToPdfResult,
   MergePdfsResult,
   OrganizePdfResult,
+  PdfCropScope,
+  PdfCropUnitsMode,
   PdfDocumentInspection,
   PdfExportImageFormat,
   PdfExportPageScope,
@@ -16,8 +19,11 @@ import type {
   PdfTaskProgressPayload,
   PdfToImagesPlanPreview,
   PdfToImagesResult,
+  PdfWatermarkScope,
+  SignPdfResult,
   SplitPdfPlanPreview,
   SplitPdfResult,
+  WatermarkPdfResult,
 } from "./tauriBridge";
 import type { PdfPageGridItem } from "../tools/pdf-shared/PdfPageGrid";
 
@@ -180,6 +186,85 @@ export interface PdfToImagesSessionState {
   errorMessage: string | null;
 }
 
+export interface SessionSignatureStamp {
+  id: string;
+  label: string;
+  pngDataUrl: string;
+  widthPx: number;
+  heightPx: number;
+}
+
+export interface PdfSignPlacedBox {
+  id: string;
+  pageNumber: number;
+  stampDataUrl: string;
+  aspectRatio: number;
+  xNorm: number;
+  yNorm: number;
+  widthNorm: number;
+  heightNorm: number;
+  rotationDeg: number;
+  opacity: number;
+}
+
+export interface PdfSignSessionState {
+  sourcePath: string | null;
+  inspection: PdfDocumentInspection | null;
+  inspectLoading: boolean;
+  currentPage: number;
+  zoomScale: number;
+  sessionStamps: SessionSignatureStamp[];
+  activeStampId: string | null;
+  placements: PdfSignPlacedBox[];
+  selectedPlacementId: string | null;
+  undoStack: PdfSignPlacedBox[][];
+  redoStack: PdfSignPlacedBox[][];
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: SignPdfResult | null;
+  errorMessage: string | null;
+}
+
+export interface PdfCropSessionState {
+  sourcePath: string | null;
+  inspection: PdfDocumentInspection | null;
+  inspectLoading: boolean;
+  currentPage: number;
+  scope: PdfCropScope;
+  pageRange: string;
+  mode: PdfCropUnitsMode;
+  unitDisplay: "pt" | "mm";
+  leftNorm: number;
+  topNorm: number;
+  widthNorm: number;
+  heightNorm: number;
+  autoDetectNotice: string | null;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: CropPdfResult | null;
+  errorMessage: string | null;
+}
+
+export interface PdfWatermarkSessionState {
+  sourcePath: string | null;
+  inspection: PdfDocumentInspection | null;
+  inspectLoading: boolean;
+  currentPage: number;
+  scope: PdfWatermarkScope;
+  pageRange: string;
+  singleAngleDeg: number;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: WatermarkPdfResult | null;
+  errorMessage: string | null;
+}
+
 export interface PdfSessionRoot {
   reader: PdfReaderSessionState;
   merge: PdfMergeSessionState;
@@ -189,6 +274,9 @@ export interface PdfSessionRoot {
   extract: PdfExtractSessionState;
   imagesToPdf: PdfImagesToPdfSessionState;
   pdfToImages: PdfToImagesSessionState;
+  sign: PdfSignSessionState;
+  crop: PdfCropSessionState;
+  pdfWatermark: PdfWatermarkSessionState;
 }
 
 const INITIAL_PDF_SESSION: PdfSessionRoot = {
@@ -313,9 +401,64 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  sign: {
+    sourcePath: null,
+    inspection: null,
+    inspectLoading: false,
+    currentPage: 1,
+    zoomScale: 1,
+    sessionStamps: [],
+    activeStampId: null,
+    placements: [],
+    selectedPlacementId: null,
+    undoStack: [],
+    redoStack: [],
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  crop: {
+    sourcePath: null,
+    inspection: null,
+    inspectLoading: false,
+    currentPage: 1,
+    scope: "all",
+    pageRange: "",
+    mode: "margins_pt",
+    unitDisplay: "mm",
+    leftNorm: 0.05,
+    topNorm: 0.05,
+    widthNorm: 0.9,
+    heightNorm: 0.9,
+    autoDetectNotice: null,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  pdfWatermark: {
+    sourcePath: null,
+    inspection: null,
+    inspectLoading: false,
+    currentPage: 1,
+    scope: "all",
+    pageRange: "",
+    singleAngleDeg: 0,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
 };
 
-export type PdfTargetToolId = "P07" | "P08" | "P09" | "P10" | "P11" | "P17";
+export type PdfTargetToolId = "P06" | "P07" | "P08" | "P09" | "P10" | "P11" | "P13" | "P17" | "I13";
 
 export interface PdfSessionContextValue {
   pdfSession: PdfSessionRoot;
@@ -332,6 +475,11 @@ export interface PdfSessionContextValue {
   ) => void;
   updatePdfToImagesSession: (
     updater: (prev: PdfToImagesSessionState) => PdfToImagesSessionState,
+  ) => void;
+  updateSignSession: (updater: (prev: PdfSignSessionState) => PdfSignSessionState) => void;
+  updateCropSession: (updater: (prev: PdfCropSessionState) => PdfCropSessionState) => void;
+  updatePdfWatermarkSession: (
+    updater: (prev: PdfWatermarkSessionState) => PdfWatermarkSessionState,
   ) => void;
   openInPdfReader: (path: string) => void;
   sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
@@ -415,6 +563,27 @@ export function PdfSessionProvider({
     [],
   );
 
+  const updateSignSession = useCallback(
+    (updater: (prev: PdfSignSessionState) => PdfSignSessionState) => {
+      setPdfSession((prev) => ({ ...prev, sign: updater(prev.sign) }));
+    },
+    [],
+  );
+
+  const updateCropSession = useCallback(
+    (updater: (prev: PdfCropSessionState) => PdfCropSessionState) => {
+      setPdfSession((prev) => ({ ...prev, crop: updater(prev.crop) }));
+    },
+    [],
+  );
+
+  const updatePdfWatermarkSession = useCallback(
+    (updater: (prev: PdfWatermarkSessionState) => PdfWatermarkSessionState) => {
+      setPdfSession((prev) => ({ ...prev, pdfWatermark: updater(prev.pdfWatermark) }));
+    },
+    [],
+  );
+
   const openInPdfReader = useCallback(
     (path: string) => {
       setPendingReaderPath(path);
@@ -451,6 +620,9 @@ export function PdfSessionProvider({
         updateExtractSession,
         updateImagesToPdfSession,
         updatePdfToImagesSession,
+        updateSignSession,
+        updateCropSession,
+        updatePdfWatermarkSession,
         openInPdfReader,
         sendPdfToTool,
         pendingReaderPath,
@@ -470,4 +642,8 @@ export function usePdfSession(): PdfSessionContextValue {
     throw new Error("usePdfSession must be used inside PdfSessionProvider");
   }
   return ctx;
+}
+
+export function useOptionalPdfSession(): PdfSessionContextValue | null {
+  return useContext(PdfSessionContext);
 }

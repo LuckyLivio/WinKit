@@ -565,7 +565,7 @@ export interface ImageAnnotateSessionState {
 }
 
 export interface ImageWatermarkSessionState {
-  mode: "single" | "batch" | "video";
+  mode: "single" | "batch" | "video" | "pdf";
   assetId: string | null;
   sourcePath: string | null;
   sourceFileName: string | null;

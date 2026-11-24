@@ -3550,3 +3550,177 @@ export async function pdfToImages(request: PdfToImagesRequest): Promise<PdfToIma
   assertFrontendNotShuttingDown();
   return invoke<PdfToImagesResult>("pdf_to_images", { request });
 }
+
+// ---------- Phase 5B PR 1: P06 Sign PDF, P13 Crop PDF, I13 PDF Watermark ----------
+
+export interface PdfSignaturePlacement {
+  pageNumber: number;
+  xNorm: number;
+  yNorm: number;
+  widthNorm: number;
+  heightNorm: number;
+  rotationDeg: number;
+  opacity: number;
+  stampPngDataUrl?: string | null;
+}
+
+export interface SignPdfRequest {
+  taskId?: string;
+  path: string;
+  outputPath: string;
+  overwrite?: boolean;
+  signaturePngDataUrl?: string | null;
+  placements: PdfSignaturePlacement[];
+}
+
+export interface SignPdfResult {
+  outputPath: string;
+  byteLength: number;
+  totalPages: number;
+  signedPages: number[];
+  placementCount: number;
+  signatureInvalidated: boolean;
+  warnings: string[];
+}
+
+export interface SignatureTemplateItem {
+  id: string;
+  name: string;
+  createdAtMs: number;
+  widthPx: number;
+  heightPx: number;
+  pngDataUrl: string;
+}
+
+export interface SignatureTemplatesListResponse {
+  storageDir: string;
+  items: SignatureTemplateItem[];
+}
+
+export interface SaveSignatureTemplateRequest {
+  name: string;
+  pngDataUrl: string;
+}
+
+export interface DetectWhiteMarginsRequest {
+  path: string;
+  pageNumber: number;
+  paddingPt?: number;
+}
+
+export interface DetectedWhiteMargins {
+  pageNumber: number;
+  isBlank: boolean;
+  pageWidthPt: number;
+  pageHeightPt: number;
+  leftPt: number;
+  rightPt: number;
+  topPt: number;
+  bottomPt: number;
+  leftNorm: number;
+  topNorm: number;
+  widthNorm: number;
+  heightNorm: number;
+}
+
+export type PdfCropScope = "current" | "all" | "range";
+export type PdfCropUnitsMode = "margins_pt" | "normalized_box";
+
+export interface CropPdfRequest {
+  taskId?: string;
+  path: string;
+  outputPath: string;
+  overwrite?: boolean;
+  scope: PdfCropScope;
+  currentPage?: number;
+  pageRange?: string;
+  mode: PdfCropUnitsMode;
+  leftPt?: number;
+  rightPt?: number;
+  topPt?: number;
+  bottomPt?: number;
+  leftNorm?: number;
+  topNorm?: number;
+  widthNorm?: number;
+  heightNorm?: number;
+}
+
+export interface CroppedPageDimSummary {
+  pageNumber: number;
+  oldWidthPt: number;
+  oldHeightPt: number;
+  newWidthPt: number;
+  newHeightPt: number;
+}
+
+export interface CropPdfResult {
+  outputPath: string;
+  byteLength: number;
+  totalPages: number;
+  croppedPageCount: number;
+  samplePages: CroppedPageDimSummary[];
+  signatureInvalidated: boolean;
+  warnings: string[];
+}
+
+export type PdfWatermarkScope = "all" | "current" | "odd" | "even" | "range";
+
+export interface WatermarkPdfRequest {
+  taskId?: string;
+  path: string;
+  outputPath: string;
+  overwrite?: boolean;
+  scope: PdfWatermarkScope;
+  currentPage?: number;
+  pageRange?: string;
+  style: WatermarkStyleConfig;
+  singleAngleDeg?: number;
+}
+
+export interface WatermarkPdfResult {
+  outputPath: string;
+  byteLength: number;
+  totalPages: number;
+  watermarkedPageCount: number;
+  signatureInvalidated: boolean;
+  warnings: string[];
+}
+
+export async function listSignatureTemplates(): Promise<SignatureTemplatesListResponse> {
+  assertFrontendNotShuttingDown();
+  return invoke<SignatureTemplatesListResponse>("list_signature_templates");
+}
+
+export async function saveSignatureTemplate(
+  request: SaveSignatureTemplateRequest,
+): Promise<SignatureTemplateItem> {
+  assertFrontendNotShuttingDown();
+  return invoke<SignatureTemplateItem>("save_signature_template", { request });
+}
+
+export async function deleteSignatureTemplate(id: string): Promise<void> {
+  assertFrontendNotShuttingDown();
+  return invoke<void>("delete_signature_template", { id });
+}
+
+export async function signPdf(request: SignPdfRequest): Promise<SignPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<SignPdfResult>("sign_pdf", { request });
+}
+
+export async function detectPdfWhiteMargins(
+  request: DetectWhiteMarginsRequest,
+): Promise<DetectedWhiteMargins> {
+  assertFrontendNotShuttingDown();
+  return invoke<DetectedWhiteMargins>("detect_pdf_white_margins", { request });
+}
+
+export async function cropPdf(request: CropPdfRequest): Promise<CropPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<CropPdfResult>("crop_pdf", { request });
+}
+
+export async function watermarkPdf(request: WatermarkPdfRequest): Promise<WatermarkPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<WatermarkPdfResult>("watermark_pdf", { request });
+}
