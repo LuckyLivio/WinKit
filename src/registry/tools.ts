@@ -70,6 +70,7 @@ import { PdfMarkdownWorkspace } from "../tools/pdf-markdown/PdfMarkdownWorkspace
 import { PdfSearchableWorkspace } from "../tools/pdf-searchable/PdfSearchableWorkspace";
 import { ExtractTextWorkspace } from "../tools/extract-text/ExtractTextWorkspace";
 import { CaptureTextWorkspace } from "../tools/capture-text/CaptureTextWorkspace";
+import { TranscribeMediaWorkspace } from "../tools/transcribe-media/TranscribeMediaWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -86,6 +87,7 @@ export type ToolIconName =
   | "compass"
   | "scan-text"
   | "capture-text"
+  | "transcribe-media"
   | "text-quote"
   | "lock-keyhole"
   | "table-2"
@@ -602,6 +604,41 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "table-2",
     implementationStatus: "full",
     component: CsvJsonWorkspace,
+  },
+  {
+    id: "T01",
+    category: "text",
+    name: {
+      "zh-CN": "离线音视频转写",
+      "en-US": "Transcribe Audio / Video",
+    },
+    summary: {
+      "zh-CN":
+        "使用用户按需下载并校验的 SenseVoiceSmall INT8 + Silero VAD v5 本地离线识别音频与视频人声，支持时间戳校对与 TXT / SRT 导出",
+      "en-US":
+        "Offline speech-to-text for local audio and video using user-downloaded SenseVoiceSmall INT8 + Silero VAD v5 with timestamp proofreading and TXT / SRT export",
+    },
+    keywords: [
+      "transcribe",
+      "transcription",
+      "asr",
+      "speech to text",
+      "stt",
+      "subtitle",
+      "srt",
+      "voice",
+      "sensevoice",
+      "whisper",
+      "转写",
+      "语音转文字",
+      "音频转文字",
+      "视频转文字",
+      "离线转写",
+      "字幕生成",
+    ],
+    icon: "transcribe-media",
+    implementationStatus: "full",
+    component: TranscribeMediaWorkspace,
   },
   {
     id: "T03",

@@ -24,10 +24,14 @@ import {
   muteVideosBatch,
   replaceVideoAudio,
   resizeVideosBatch,
+  subscribeAsrProgress,
   subscribeMediaTaskProgress,
+  transcribeMedia,
   trimAudioFile,
   trimVideoFile,
   watermarkVideo,
+  type AsrLanguage,
+  type AsrProgressPayload,
   type AudioBitDepthOption,
   type AudioConvertFormat,
   type AudioDenoiseLevel,
@@ -83,6 +87,11 @@ import {
   type ResizeVideosBatchRequest,
   type ResizeVideosBatchResponse,
   type ShortAudioBehavior,
+  type TranscribeMediaInspectResult,
+  type TranscribeMediaRequest,
+  type TranscribeMediaResult,
+  type TranscriptExportFormat,
+  type TranscriptSegment,
   type TrimAudioRequest,
   type TrimAudioResult,
   type TrimKeyframeAnalysis,
@@ -428,6 +437,23 @@ export interface VideoWatermarkSessionState {
   errorMessage: string | null;
 }
 
+export interface TranscribeMediaSessionState {
+  sourcePath: string | null;
+  inspect: TranscribeMediaInspectResult | null;
+  previewUrl: string | null;
+  language: AsrLanguage;
+  useItn: boolean;
+  includeTxtTimestamps: boolean;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: AsrProgressPayload | null;
+  lastResult: TranscribeMediaResult | null;
+  segments: TranscriptSegment[];
+  lastExportedPath: string | null;
+  lastExportedFormat: TranscriptExportFormat | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
@@ -447,6 +473,7 @@ export interface MediaSessionRoot {
   videoReplaceAudio: VideoReplaceAudioSessionState;
   videoSubtitles: VideoSubtitlesSessionState;
   videoWatermark: VideoWatermarkSessionState;
+  transcribeMedia: TranscribeMediaSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -737,6 +764,22 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  transcribeMedia: {
+    sourcePath: null,
+    inspect: null,
+    previewUrl: null,
+    language: "auto",
+    useItn: true,
+    includeTxtTimestamps: false,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    segments: [],
+    lastExportedPath: null,
+    lastExportedFormat: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -868,6 +911,14 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<WatermarkVideoResult | null>;
   cancelVideoWatermarkTask: () => Promise<void>;
+  updateTranscribeMediaSession: (
+    updater: (prev: TranscribeMediaSessionState) => TranscribeMediaSessionState,
+  ) => void;
+  startTranscribeMediaTask: (
+    req: TranscribeMediaRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<TranscribeMediaResult | null>;
+  cancelTranscribeMediaTask: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -907,8 +958,24 @@ export function MediaSessionProvider({
   const activeVideoReplaceAudioTaskRef = useRef<string | null>(null);
   const activeVideoSubtitlesTaskRef = useRef<string | null>(null);
   const activeVideoWatermarkTaskRef = useRef<string | null>(null);
+  const activeTranscribeTaskRef = useRef<string | null>(null);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
+
+  useEffect(() => {
+    return bindDisposableListener(
+      () =>
+        subscribeAsrProgress((payload) => {
+          if (payload.taskId === activeTranscribeTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              transcribeMedia: { ...prev.transcribeMedia, liveProgress: payload },
+            }));
+          }
+        }),
+      "winkit://asr-progress",
+    );
+  }, []);
 
   useEffect(() => {
     return bindDisposableListener(
@@ -2308,6 +2375,82 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateTranscribeMediaSession = useCallback(
+    (updater: (prev: TranscribeMediaSessionState) => TranscribeMediaSessionState) => {
+      setMediaSession((prev) => ({ ...prev, transcribeMedia: updater(prev.transcribeMedia) }));
+    },
+    [],
+  );
+
+  const startTranscribeMediaTask = useCallback(
+    async (
+      req: TranscribeMediaRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<TranscribeMediaResult | null> => {
+      if (activeTranscribeTaskRef.current) return null;
+      const taskId = `t01-asr-${Date.now()}-${taskSeqRef.current++}`;
+      activeTranscribeTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        transcribeMedia: {
+          ...prev.transcribeMedia,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            phase: "decoding",
+            currentSegment: 0,
+            totalSegments: 0,
+            percent: 0,
+            detail: "",
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const result = await transcribeMedia(taskId, req);
+        if (activeTranscribeTaskRef.current !== taskId) return null;
+        activeTranscribeTaskRef.current = null;
+        setMediaSession((prev) => ({
+          ...prev,
+          transcribeMedia: {
+            ...prev.transcribeMedia,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            lastResult: result,
+            segments: result.segments.map((s) => ({ ...s })),
+            lastExportedPath: null,
+            lastExportedFormat: null,
+            errorMessage: null,
+          },
+        }));
+        return result;
+      } catch (err) {
+        if (activeTranscribeTaskRef.current === taskId) {
+          activeTranscribeTaskRef.current = null;
+        }
+        setMediaSession((prev) => ({
+          ...prev,
+          transcribeMedia: {
+            ...prev.transcribeMedia,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelTranscribeMediaTask = useCallback(async () => {
+    const tid = activeTranscribeTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -2384,6 +2527,9 @@ export function MediaSessionProvider({
         updateVideoWatermarkSession,
         startVideoWatermarkTask,
         cancelVideoWatermarkTask,
+        updateTranscribeMediaSession,
+        startTranscribeMediaTask,
+        cancelTranscribeMediaTask,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,

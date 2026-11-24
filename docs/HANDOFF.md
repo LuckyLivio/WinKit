@@ -1,18 +1,22 @@
 # WinKit 阶段交接说明
 
-## 阶段 6（进行中：T03、T04 已合入，P04 独立 PR 待审核）
+## 阶段 6（进行中：T03、T04、P04 已合入，T01 独立 PR 待审核）
 
-`src/registry/tools.ts` 当前已收录 **69 个**真实可用工具入口（新增 `T03`「图片与扫描件文字提取」、`T04`「屏幕区域取字」与 `P04`「扫描版 PDF 转可搜索」；另含侧栏共用能力 `C08`「PDF 快速预览」）。
+`src/registry/tools.ts` 当前已收录 **70 个**真实可用工具入口（阶段 6 新增 `T03`「图片与扫描件文字提取」、`T04`「屏幕区域取字」、`P04`「扫描版 PDF 转可搜索」与 `T01`「离线音视频转写」；另含侧栏共用能力 `C08`「PDF 快速预览」）。
 
 - **PR #37（已合入 `main`：`626b1db`）｜`T03` 图片与扫描件文字提取 + 离线 RapidOCR 基础设施**：
   - 经同组中英混排截图与扫描件实测选定 **RapidOCR `PP-OCRv4 mobile`（`Apache-2.0`）+ 微软官方签名 `onnxruntime.dll 1.23.2`（`MIT`，Authenticode `Valid`）**，通过 `scripts/ensure-ocr-runtime.mjs` 校验拉取不入源码库，纯 Rust 动态加载 ONNX Runtime C ABI v17 运行于独立 `--ocr-worker`（Windows Job Object 2 GiB 限额、单进程与取消/退出即时回收）。
   - 输出可供 `T04` 与 `P04` 复用的结构化 `OcrPageResult`（每行含 `quadPx`/`quadNorm`/`bboxPx`/`bboxNorm`/`angleDeg`/`rotated180` 及 CTC 词级 `spans`，每页含像素尺寸、请求 DPI 与 PDF 页面点尺寸）；支持队列全源文件 `forbiddenSourcePaths` 防覆盖导出、手工校对内容保留与显式重新识别，并在 Windows CI 上以随仓样张 `src-tauri/tests/fixtures/ocr_bilingual_sample.png` 实际执行 RapidOCR 与 PDFium 200 DPI 渲染扫描 PDF 集成测试。
 - **PR #38（已合入 `main`：`68477d2`）｜`T04` 屏幕区域取字**：
   - 复用 `I01` 屏幕框选（补强 `PerMonitorV2DpiGuard`、`SetWindowPos`、`WM_DPICHANGED` 忽略、窗口原点偏移补偿的 `map_virtual_selection_to_capture_rect` 以及按鼠标所在屏居中的 `compute_instruction_pill_origin`）、`ImageAssetStore` 内存零落盘传递（含共享 24 项 LRU 淘汰后经 `storePngAsset` 自动恢复「重新识别」）、`T03` `--ocr-worker`（`T04` 独立注册为可中断任务支持推理期间确认退出即时回收 worker，同时保留 `T03` 既有行为）与原生剪贴板。
-- **阶段 6 PR 3（PR #39，`feat/phase-6-pr3-p04-searchable-pdf`）｜`P04` 扫描版 PDF 转可搜索 + `ocr_core` 旋转阅读方向与安全收尾**：
+- **PR #39（已合入 `main`：`87ec96e`）｜`P04` 扫描版 PDF 转可搜索 + `ocr_core` 旋转阅读方向与安全收尾**：
   - 修正 `src-tauri/src/ocr_core.rs` 竖排条在 `rotate270` 后的词元回映射方向，并增补真实阅读方向四边形 `reading_quad_px`（基线 `read_BL→read_BR` + 上行 `read_BL→read_TL`，覆盖 0°/90° CW/180°/270° CW 四方向）同时保留 `T03`/`T04` 既有 `quad_px`/`bbox_px` 预览语义。
   - 在 `pdf_pdfium.rs` 新增 `FPDF_DeviceToPage` 精确仿射设备→页面变换及逐页文字层检测 `inspect_pages_text_status_with_pdfium`；在 `pdf_searchable.rs` 中以单 `TJ` 文本对象按行写入不可见 Unicode 文字层（修复 PDFium 在 180° 倒置扫描页上拆分重排相邻 Span 的选区问题），并在 `doc.save()` 写完 `.tmp` 之后、`commit_existing_tmp()` 之前二次检查取消标记保护已有目标文件。
-  - 在 `src/tools/pdf-searchable/PdfSearchableWorkspace.tsx` 中将覆盖确认绑定至完整转换请求（输入/目标/参数变更即失效）并加入单调加载令牌防止快速切档或加载中清空后的迟到响应回写；通过 `C08` 检索高亮、Google Chrome 原生 PDF 查看器四方向旋转页实测拖选复制与独立 `pypdf` 复核。
+  - 在 `src/tools/pdf-searchable/PdfSearchableWorkspace.tsx` 中将覆盖确认绑定至完整转换请求（输入/目标/参数变更即失效）并加入单调加载令牌防止快速切档或加载中清空后的迟到响应回写；通过 `C08` 检索高亮、Google Chrome 原生 PDF 查看器四方向旋转页实测拖选复制、独立 `pypdf` 复核及 `main` CI（[Actions #45373889738](https://github.com/LuckyLivio/WinKit/actions/runs/45373889738)）NSIS 安装包与随包资源核验。
+- **阶段 6 PR 4（`feat/phase-6-pr4-t01-transcribe`）｜`T01` 离线音视频转写**：
+  - 经 Windows x64 CPU 4 线程同语料（中英混排、~15 dB 粉红/棕噪背景、3.5–8.0 s 长停顿及真实人声）对比实测 `whisper.cpp b5907 (ggml-small-q5_1 + Silero VAD)` 与 `SenseVoiceSmall INT8 (2024-07-17) + Silero VAD v5`，选定复用 WinKit 已随包 `onnxruntime.dll 1.23.2`（MIT）的纯 Rust **SenseVoiceSmall INT8 + Silero VAD v5** 方案（零额外安装包 DLL 增量、中文 CER `0.00%`、英文 WER `8.75%`、时间偏差 MAE `110 ms`、纯 Rust 发布版 RTF `0.013–0.016`、`0` 静音幻觉，详见 `docs/VERIFICATION.md`）。
+  - **`src-tauri/src/asr_models.rs` + `asr_core.rs` + `asr_worker.rs`**：用户主动触发一次性 HTTPS 下载固定版本并校验全部字节长度与 SHA-256（`157.66 MiB` 下载 / `230.66 MiB` 解压），原样保存 `LICENSE-sensevoice.txt`（FunASR v1.1）与 `LICENSE-silero-vad.txt`（MIT），也支持校验指定本地自定义模型目录；纯 Rust 实现 PCM/float WAV 免 FFmpeg 直读、512 点 FFT + 80 维 Kaldi FBank + LFR (7/6) + ONNX 元数据 CMVN + Silero VAD v5 流式语音端点检测与长段能量谷切分 + SenseVoiceSmall 贪心 CTC 解码与标点子分段；其余音视频容器（MP3/M4A/FLAC/OGG/MP4/MKV/MOV 等）复用共享 `media_core` FFmpeg/ffprobe 并按音轨 `start_time` 对齐原媒体时间轴；所有推理隔离运行于 `winkit.exe --asr-worker`（Windows Job Object 2 GiB 内存上限、单进程、流式进度看门狗与取消/关窗即时回收）。
+  - **`src/tools/transcribe-media/` + `src/lib/mediaSessionStore.tsx`**：提供模型与 FFmpeg 状态栏、音视频内嵌播放联动试听、分段时间戳/正文在线校对、字幕顺序/重叠实时校验与一键修正、绑定完整导出请求的覆盖确认、源音视频文件强制防覆盖保护、TXT/SRT 复制与导出，并预留接收 `A02` 录音（`consumePendingHandoff("T01")`）与向 `V02` 移交导出 `.srt`（`handoffMediaFileToTool("V02", srtPath)`）的干净解耦接口。
 
 ## v0.18.0 · 阶段 5B（进阶 PDF 处理与文档水印）
 

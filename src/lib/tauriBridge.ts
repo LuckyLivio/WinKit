@@ -4188,3 +4188,183 @@ export async function makePdfSearchable(
   assertFrontendNotShuttingDown();
   return invoke<MakePdfSearchableResult>("make_pdf_searchable", { taskId, request });
 }
+
+// ============================================================================
+// Phase 6 PR 4: T01 Offline Audio / Video Transcription (SenseVoiceSmall + Silero VAD v5)
+// ============================================================================
+
+export type AsrLanguage = "auto" | "zh" | "en" | "yue" | "ja" | "ko";
+export type AsrModelMode = "managed" | "custom";
+export type AsrModelSource = "managed" | "custom" | "missing";
+export type TranscriptExportFormat = "txt" | "txt_timestamped" | "srt";
+
+export interface ManagedAsrModelSpec {
+  modelId: string;
+  displayName: string;
+  version: string;
+  sourceName: string;
+  releaseUrl: string;
+  sensevoiceArchiveUrl: string;
+  sensevoiceArchiveBytes: number;
+  sensevoiceArchiveSha256: string;
+  sileroVadUrl: string;
+  sileroVadBytes: number;
+  sileroVadSha256: string;
+  totalDownloadBytes: number;
+  estimatedInstalledBytes: number;
+  licenseSummary: string;
+}
+
+export interface AsrModelStatus {
+  ready: boolean;
+  runtimeReady: boolean;
+  source: AsrModelSource;
+  mode: AsrModelMode;
+  customDir: string | null;
+  installDir: string;
+  activeModelDir: string | null;
+  installedBytes: number | null;
+  licensePath: string | null;
+  error: string | null;
+  spec: ManagedAsrModelSpec;
+}
+
+export interface AsrSetupProgressPayload {
+  taskId: string;
+  phase: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number | null;
+  message: string;
+}
+
+export interface TranscriptSegment {
+  id: number;
+  startSec: number;
+  endSec: number;
+  text: string;
+  language?: string | null;
+}
+
+export interface TranscribeMediaInspectResult {
+  path: string;
+  fileName: string;
+  byteLength: number;
+  isWavNative: boolean;
+  requiresFfmpeg: boolean;
+  hasAudio: boolean;
+  hasVideo: boolean;
+  durationSec: number | null;
+  audioStartTimeSec: number;
+  audioCodec: string | null;
+  sampleRate: number | null;
+  channels: number | null;
+  containerFormat: string | null;
+}
+
+export interface TranscribeMediaRequest {
+  inputPath: string;
+  language: AsrLanguage;
+  useItn: boolean;
+}
+
+export interface TranscribeMediaResult {
+  inputPath: string;
+  fileName: string;
+  durationSec: number;
+  timelineOffsetSec: number;
+  decodedWithFfmpeg: boolean;
+  engineName: string;
+  segments: TranscriptSegment[];
+  fullText: string;
+  detectedLanguages: string[];
+  speechDurationSec: number;
+  elapsedMs: number;
+  rtf: number;
+  warnings: string[];
+}
+
+export interface AsrProgressPayload {
+  taskId: string;
+  phase: string;
+  currentSegment: number;
+  totalSegments: number;
+  percent: number;
+  detail: string;
+}
+
+export interface ExportTranscriptRequest {
+  outputPath: string;
+  format: TranscriptExportFormat;
+  segments: TranscriptSegment[];
+  forbiddenSourcePaths?: string[];
+  overwrite: boolean;
+}
+
+export interface ExportTranscriptResult {
+  outputPath: string;
+  byteSize: number;
+  segmentCount: number;
+  format: TranscriptExportFormat;
+}
+
+export async function getAsrModelStatus(): Promise<AsrModelStatus> {
+  return invoke<AsrModelStatus>("get_asr_model_status");
+}
+
+export async function setAsrModelCustomDir(dir: string | null): Promise<AsrModelStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<AsrModelStatus>("set_asr_model_custom_dir", { dir });
+}
+
+export async function removeManagedAsrModel(): Promise<AsrModelStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<AsrModelStatus>("remove_managed_asr_model");
+}
+
+export async function installManagedAsrModel(taskId: string): Promise<AsrModelStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<AsrModelStatus>("install_managed_asr_model", { taskId });
+}
+
+export async function subscribeAsrSetupProgress(
+  handler: (payload: AsrSetupProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<AsrSetupProgressPayload>("winkit://asr-setup-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function inspectTranscribeMedia(path: string): Promise<TranscribeMediaInspectResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<TranscribeMediaInspectResult>("inspect_transcribe_media", { path });
+}
+
+export async function transcribeMedia(
+  taskId: string,
+  request: TranscribeMediaRequest,
+): Promise<TranscribeMediaResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<TranscribeMediaResult>("transcribe_media", { taskId, request });
+}
+
+export async function subscribeAsrProgress(
+  handler: (payload: AsrProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<AsrProgressPayload>("winkit://asr-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function exportTranscriptFile(
+  request: ExportTranscriptRequest,
+): Promise<ExportTranscriptResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<ExportTranscriptResult>("export_transcript_file", { request });
+}
