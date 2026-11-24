@@ -14,8 +14,8 @@ use crate::fs_guard::{
     paths_refer_to_same_location, validate_existing_input_file, validate_user_path,
 };
 use crate::pdf_pdfium::{
-    PdfOutlineItem, PdfPageGeometry, PdfPageTextPayload, PdfRenderMeta, PdfSearchResult,
-    MAX_PDF_FILE_BYTES, MAX_PDF_PAGES, MAX_PREVIEW_SIDE_PX,
+    PdfOutlineItem, PdfPageGeometry, PdfPageTextPayload, PdfPageTextSummary, PdfRenderMeta,
+    PdfSearchResult, MAX_PDF_FILE_BYTES, MAX_PDF_PAGES, MAX_PREVIEW_SIDE_PX,
 };
 use crate::pdf_worker::{PdfWorkerClient, PdfWorkerRequest, PdfWorkerResponse};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -402,6 +402,20 @@ impl PdfSessionManager {
             _ => Err(AppError::new(
                 "PDF_WORKER_ERROR",
                 "Unexpected PDF worker response for document search.",
+            )),
+        }
+    }
+
+    pub fn inspect_pages_text(&self, path_raw: &str) -> Result<Vec<PdfPageTextSummary>, AppError> {
+        let (canonical, _) = validate_existing_input_file(path_raw)?;
+        let (resp, _) = self.worker.send(PdfWorkerRequest::InspectPagesText {
+            path: canonical.to_string_lossy().into_owned(),
+        })?;
+        match resp {
+            PdfWorkerResponse::PagesText { pages } => Ok(pages),
+            _ => Err(AppError::new(
+                "PDF_WORKER_ERROR",
+                "Unexpected PDF worker response for per-page text inspection.",
             )),
         }
     }
@@ -851,6 +865,7 @@ mod tests {
                 page_height_pt: 842.0,
                 rotation: 0,
                 capped: false,
+                device_to_page: None,
             };
             cache.insert(key, meta, vec![0u8; 512 * 1024]);
         }

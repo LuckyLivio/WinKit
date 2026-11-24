@@ -66,6 +66,9 @@ pub struct OcrSpan {
     pub text: String,
     pub bbox_px: OcrBoundingBox,
     pub bbox_norm: OcrBoundingBox,
+    /// Four corners ordered clockwise `[TL, TR, BR, BL]` in image pixel coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quad_px: Option<[OcrPoint; 4]>,
     pub char_start: usize,
     pub char_end: usize,
 }
@@ -1234,12 +1237,16 @@ fn build_token_spans(
         }
 
         let sub_quad = if vertical_rot {
-            // Vertical strip was rotated 90° CCW before rec: horizontal axis u maps along P3 -> P0.
+            // `imageops::rotate270` maps source `(x, y)` -> destination `(dx = y, dy = w - 1 - x)`,
+            // so the recognition horizontal axis `u ∈ [0, 1]` runs top-to-bottom along `P0 -> P3`
+            // (and `P1 -> P2`). When `rotated_180` was applied after `rotate270`, `u0..u1` has
+            // already been reversed via `(1 - u1)..(1 - u0)`, placing earlier tokens near `P3..P2`
+            // and later tokens near `P0..P1`.
             [
-                lerp_pt(quad[3], quad[0], u1),
-                lerp_pt(quad[2], quad[1], u1),
-                lerp_pt(quad[2], quad[1], u0),
-                lerp_pt(quad[3], quad[0], u0),
+                lerp_pt(quad[0], quad[3], u0),
+                lerp_pt(quad[1], quad[2], u0),
+                lerp_pt(quad[1], quad[2], u1),
+                lerp_pt(quad[0], quad[3], u1),
             ]
         } else {
             [
@@ -1256,6 +1263,7 @@ fn build_token_spans(
             text: span_text,
             bbox_px,
             bbox_norm,
+            quad_px: Some(sub_quad),
             char_start: start,
             char_end: end,
         });
@@ -1561,6 +1569,91 @@ mod tests {
             v_spans[0].bbox_norm.y >= 0.0
                 && v_spans[0].bbox_norm.y + v_spans[0].bbox_norm.height <= 1.0001
         );
+    }
+
+    #[test]
+    fn vertical_strip_two_token_spans_map_exact_positions_with_and_without_180_flip() {
+        // First verify `image::imageops::rotate270` empirically on a 40x400 vertical strip:
+        // a marker near the TOP of the strip (y = 60) must move to the LEFT (dx = 60) after rotate270,
+        // and to the RIGHT (dx = 339) after rotate180(rotate270).
+        let mut strip = RgbImage::from_pixel(40, 400, image::Rgb([255, 255, 255]));
+        strip.put_pixel(20, 60, image::Rgb([10, 20, 30]));
+        strip.put_pixel(20, 340, image::Rgb([200, 10, 10]));
+
+        let rot270 = image::imageops::rotate270(&strip);
+        assert_eq!(rot270.dimensions(), (400, 40));
+        assert_eq!(*rot270.get_pixel(60, 19), image::Rgb([10, 20, 30]));
+        assert_eq!(*rot270.get_pixel(340, 19), image::Rgb([200, 10, 10]));
+
+        let rot270_180 = image::imageops::rotate180(&rot270);
+        assert_eq!(*rot270_180.get_pixel(339, 20), image::Rgb([10, 20, 30]));
+        assert_eq!(*rot270_180.get_pixel(59, 20), image::Rgb([200, 10, 10]));
+
+        // Now verify `build_token_spans` for two separated tokens on the same vertical strip
+        // [P0=(100, 20), P1=(140, 20), P2=(140, 420), P3=(100, 420)] (height = 400).
+        // Token 1 ("TOP") occupies timesteps 1..=2 out of 10 (u in [0.1, 0.3]);
+        // Token 2 ("BOT") occupies timesteps 7..=8 out of 10 (u in [0.7, 0.9]).
+        let vert_quad = [
+            OcrPoint { x: 100.0, y: 20.0 },
+            OcrPoint { x: 140.0, y: 20.0 },
+            OcrPoint { x: 140.0, y: 420.0 },
+            OcrPoint { x: 100.0, y: 420.0 },
+        ];
+        let steps = vec![
+            DecodedCharStep {
+                char_start: 0,
+                char_end: 3,
+                t_start: 1,
+                t_end: 2,
+            },
+            DecodedCharStep {
+                char_start: 4,
+                char_end: 7,
+                t_start: 7,
+                t_end: 8,
+            },
+        ];
+
+        // Case 1: without 180-deg orientation correction -> earlier token near TOP (P0..P1), later near BOTTOM (P3..P2).
+        let spans_normal =
+            build_token_spans("TOP BOT", &steps, 10, &vert_quad, 300, 500, false, true);
+        assert_eq!(spans_normal.len(), 2);
+        let s_top = &spans_normal[0];
+        let s_bot = &spans_normal[1];
+        assert_eq!(s_top.text, "TOP");
+        assert_eq!(s_bot.text, "BOT");
+        assert!(
+            (s_top.bbox_px.y - 60.0).abs() < 0.1 && (s_top.bbox_px.height - 80.0).abs() < 0.1,
+            "Expected TOP near y=60..140, got {:?}",
+            s_top.bbox_px
+        );
+        assert!(
+            (s_bot.bbox_px.y - 300.0).abs() < 0.1 && (s_bot.bbox_px.height - 80.0).abs() < 0.1,
+            "Expected BOT near y=300..380, got {:?}",
+            s_bot.bbox_px
+        );
+        assert!(s_top.bbox_px.y + s_top.bbox_px.height < s_bot.bbox_px.y);
+
+        // Case 2: with 180-deg orientation correction -> earlier rec token came from BOTTOM (u_orig in [0.7, 0.9]),
+        // later rec token came from TOP (u_orig in [0.1, 0.3]).
+        let spans_flipped =
+            build_token_spans("TOP BOT", &steps, 10, &vert_quad, 300, 500, true, true);
+        assert_eq!(spans_flipped.len(), 2);
+        let f_first = &spans_flipped[0];
+        let f_second = &spans_flipped[1];
+        assert_eq!(f_first.text, "TOP");
+        assert_eq!(f_second.text, "BOT");
+        assert!(
+            (f_first.bbox_px.y - 300.0).abs() < 0.1 && (f_first.bbox_px.height - 80.0).abs() < 0.1,
+            "Expected first token after 180-flip near bottom y=300..380, got {:?}",
+            f_first.bbox_px
+        );
+        assert!(
+            (f_second.bbox_px.y - 60.0).abs() < 0.1 && (f_second.bbox_px.height - 80.0).abs() < 0.1,
+            "Expected second token after 180-flip near top y=60..140, got {:?}",
+            f_second.bbox_px
+        );
+        assert!(f_second.bbox_px.y + f_second.bbox_px.height < f_first.bbox_px.y);
     }
 
     #[test]

@@ -19,6 +19,7 @@ import {
   FileMinus2,
   FileOutput,
   FilePenLine,
+  FileSearch,
   FileText,
   Film,
   Fingerprint,
@@ -196,5 +197,7 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Minimize2 size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "pdf-markdown":
       return <FileText size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-searchable":
+      return <FileSearch size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

@@ -9,6 +9,7 @@ import type {
   EncryptPdfResult,
   ExtractPdfPagesResult,
   ImagesToPdfResult,
+  MakePdfSearchableResult,
   MarkdownMarginPreset,
   MarkdownPaperSize,
   MarkdownTheme,
@@ -30,6 +31,7 @@ import type {
   PdfPageOrientation,
   PdfPageSizePreset,
   PdfPrintPermission,
+  PdfSearchableInspectResult,
   PdfSearchResult,
   PdfSecurityStatus,
   PdfSplitMode,
@@ -401,6 +403,26 @@ export interface CaptureTextSessionState {
   errorMessage: string | null;
 }
 
+export interface PdfSearchableSessionState {
+  engineStatus: OcrEngineStatus | null;
+  sourcePath: string | null;
+  inspectResult: PdfSearchableInspectResult | null;
+  inspectLoading: boolean;
+  encryptedError: boolean;
+  scope: "all" | "range";
+  pageRange: string;
+  skipExistingTextPages: boolean;
+  ocrDpi: 150 | 200 | 300;
+  maxSideLen: 1280 | 1600;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: MakePdfSearchableResult | null;
+  notice: string | null;
+  errorMessage: string | null;
+}
+
 export interface PdfSessionRoot {
   reader: PdfReaderSessionState;
   merge: PdfMergeSessionState;
@@ -419,6 +441,7 @@ export interface PdfSessionRoot {
   markdown: PdfMarkdownSessionState;
   extractText: OcrExtractSessionState;
   captureText: CaptureTextSessionState;
+  searchablePdf: PdfSearchableSessionState;
 }
 
 const INITIAL_PDF_SESSION: PdfSessionRoot = {
@@ -693,9 +716,29 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     notice: null,
     errorMessage: null,
   },
+  searchablePdf: {
+    engineStatus: null,
+    sourcePath: null,
+    inspectResult: null,
+    inspectLoading: false,
+    encryptedError: false,
+    scope: "all",
+    pageRange: "",
+    skipExistingTextPages: true,
+    ocrDpi: 200,
+    maxSideLen: 1280,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    notice: null,
+    errorMessage: null,
+  },
 };
 
 export type PdfTargetToolId =
+  | "P04"
   | "P06"
   | "P07"
   | "P08"
@@ -745,6 +788,9 @@ export interface PdfSessionContextValue {
   ) => void;
   updateCaptureTextSession: (
     updater: (prev: CaptureTextSessionState) => CaptureTextSessionState,
+  ) => void;
+  updateSearchablePdfSession: (
+    updater: (prev: PdfSearchableSessionState) => PdfSearchableSessionState,
   ) => void;
   openInPdfReader: (path: string) => void;
   sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
@@ -891,6 +937,13 @@ export function PdfSessionProvider({
     [],
   );
 
+  const updateSearchablePdfSession = useCallback(
+    (updater: (prev: PdfSearchableSessionState) => PdfSearchableSessionState) => {
+      setPdfSession((prev) => ({ ...prev, searchablePdf: updater(prev.searchablePdf) }));
+    },
+    [],
+  );
+
   const openInPdfReader = useCallback(
     (path: string) => {
       setPendingReaderPath(path);
@@ -936,6 +989,7 @@ export function PdfSessionProvider({
         updateMarkdownSession,
         updateExtractTextSession,
         updateCaptureTextSession,
+        updateSearchablePdfSession,
         openInPdfReader,
         sendPdfToTool,
         pendingReaderPath,

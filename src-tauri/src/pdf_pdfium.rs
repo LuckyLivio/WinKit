@@ -123,6 +123,59 @@ pub struct PdfSearchResult {
     pub matches: Vec<PdfSearchMatch>,
 }
 
+/// Exact affine mapping from PDFium rendered device pixels `(dx, dy)` in `[0, width_px] × [0, height_px]`
+/// into raw PDF page user-space coordinates `(page_x, page_y)`, computed directly via `FPDF_DeviceToPage`
+/// using the exact same viewport and rotation passed to `FPDF_RenderPageBitmap`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfDeviceToPageTransform {
+    pub origin_x: f64,
+    pub origin_y: f64,
+    pub dx_per_px_x: f64,
+    pub dx_per_px_y: f64,
+    pub dy_per_px_x: f64,
+    pub dy_per_px_y: f64,
+}
+
+impl PdfDeviceToPageTransform {
+    pub fn from_corners(
+        width_px: u32,
+        height_px: u32,
+        origin: (f64, f64),
+        top_right: (f64, f64),
+        bottom_left: (f64, f64),
+    ) -> Self {
+        let w = (width_px.max(1)) as f64;
+        let h = (height_px.max(1)) as f64;
+        Self {
+            origin_x: origin.0,
+            origin_y: origin.1,
+            dx_per_px_x: (top_right.0 - origin.0) / w,
+            dx_per_px_y: (top_right.1 - origin.1) / w,
+            dy_per_px_x: (bottom_left.0 - origin.0) / h,
+            dy_per_px_y: (bottom_left.1 - origin.1) / h,
+        }
+    }
+
+    pub fn map_device_point(&self, dx: f64, dy: f64) -> (f64, f64) {
+        (
+            self.origin_x + dx * self.dx_per_px_x + dy * self.dy_per_px_x,
+            self.origin_y + dx * self.dx_per_px_y + dy * self.dy_per_px_y,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfPageTextSummary {
+    pub page_number: usize,
+    pub width_pt: f32,
+    pub height_pt: f32,
+    pub rotation: u16,
+    pub meaningful_char_count: usize,
+    pub has_text_layer: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PdfRenderMeta {
@@ -133,6 +186,8 @@ pub struct PdfRenderMeta {
     pub page_height_pt: f32,
     pub rotation: u16,
     pub capped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_to_page: Option<PdfDeviceToPageTransform>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -394,6 +449,18 @@ mod win_impl {
             *mut c_int,
             *mut c_int,
         ) -> c_int,
+        FPDF_DeviceToPage: unsafe extern "C" fn(
+            FpdfPage,
+            c_int,
+            c_int,
+            c_int,
+            c_int,
+            c_int,
+            c_int,
+            c_int,
+            *mut c_double,
+            *mut c_double,
+        ) -> c_int,
         FPDFText_LoadPage: unsafe extern "C" fn(FpdfPage) -> FpdfTextPage,
         FPDFText_ClosePage: unsafe extern "C" fn(FpdfTextPage),
         FPDFText_CountChars: unsafe extern "C" fn(FpdfTextPage) -> c_int,
@@ -490,6 +557,7 @@ mod win_impl {
                     FPDFBitmap_Destroy: load_sym(module, b"FPDFBitmap_Destroy\0")?,
                     FPDF_RenderPageBitmap: load_sym(module, b"FPDF_RenderPageBitmap\0")?,
                     FPDF_PageToDevice: load_sym(module, b"FPDF_PageToDevice\0")?,
+                    FPDF_DeviceToPage: load_sym(module, b"FPDF_DeviceToPage\0")?,
                     FPDFText_LoadPage: load_sym(module, b"FPDFText_LoadPage\0")?,
                     FPDFText_ClosePage: load_sym(module, b"FPDFText_ClosePage\0")?,
                     FPDFText_CountChars: load_sym(module, b"FPDFText_CountChars\0")?,
@@ -1072,9 +1140,79 @@ mod win_impl {
                     pdfium_rotate,
                     FPDF_ANNOT,
                 );
+            }
+
+            // Compute exact affine device-to-page transform using the identical viewport/rotation
+            // passed to `FPDF_RenderPageBitmap` before closing `page`.
+            let mut ox = 0.0f64;
+            let mut oy = 0.0f64;
+            let mut xx = 0.0f64;
+            let mut xy = 0.0f64;
+            let mut yx = 0.0f64;
+            let mut yy = 0.0f64;
+            let d2p_ok = unsafe {
+                let ok_o = (api.FPDF_DeviceToPage)(
+                    page,
+                    0,
+                    0,
+                    width_px as c_int,
+                    height_px as c_int,
+                    pdfium_rotate,
+                    0,
+                    0,
+                    &mut ox,
+                    &mut oy,
+                );
+                let ok_x = (api.FPDF_DeviceToPage)(
+                    page,
+                    0,
+                    0,
+                    width_px as c_int,
+                    height_px as c_int,
+                    pdfium_rotate,
+                    width_px as c_int,
+                    0,
+                    &mut xx,
+                    &mut xy,
+                );
+                let ok_y = (api.FPDF_DeviceToPage)(
+                    page,
+                    0,
+                    0,
+                    width_px as c_int,
+                    height_px as c_int,
+                    pdfium_rotate,
+                    0,
+                    height_px as c_int,
+                    &mut yx,
+                    &mut yy,
+                );
+                ok_o != 0 && ok_x != 0 && ok_y != 0
+            };
+
+            unsafe {
                 (api.FPDFBitmap_Destroy)(bitmap);
                 (api.FPDF_ClosePage)(page);
             }
+
+            let device_to_page = if d2p_ok
+                && ox.is_finite()
+                && oy.is_finite()
+                && xx.is_finite()
+                && xy.is_finite()
+                && yx.is_finite()
+                && yy.is_finite()
+            {
+                Some(PdfDeviceToPageTransform::from_corners(
+                    width_px,
+                    height_px,
+                    (ox, oy),
+                    (xx, xy),
+                    (yx, yy),
+                ))
+            } else {
+                None
+            };
 
             // Convert BGRA -> RGBA in place (force opaque alpha on white paper backdrop)
             for px in bgra.as_chunks_mut::<4>().0 {
@@ -1090,6 +1228,7 @@ mod win_impl {
                 page_height_pt: sz.height,
                 rotation: (inherent_rot + norm_extra) % 360,
                 capped,
+                device_to_page,
             };
             Ok((meta, bgra))
         })
@@ -1464,13 +1603,107 @@ mod win_impl {
             })
         })
     }
+
+    /// Evaluates every page in a single PDFium session to determine per-page selectable Unicode text presence
+    /// so `P04` can accurately skip pages that already contain searchable text.
+    pub fn inspect_pages_text_status_with_pdfium(
+        resource_dir: Option<&Path>,
+        path: &Path,
+    ) -> Result<Vec<PdfPageTextSummary>, AppError> {
+        with_pdfium(resource_dir, |api| {
+            let loaded = open_pdf_doc(api, path)?;
+            let page_count = unsafe { (api.FPDF_GetPageCount)(loaded.doc) }.max(0) as usize;
+            let mut out = Vec::with_capacity(page_count);
+
+            for idx in 0..page_count {
+                let mut sz = FsSizeF {
+                    width: 595.0,
+                    height: 842.0,
+                };
+                let ok =
+                    unsafe { (api.FPDF_GetPageSizeByIndexF)(loaded.doc, idx as c_int, &mut sz) };
+                let (w, h) = if ok != 0
+                    && sz.width.is_finite()
+                    && sz.height.is_finite()
+                    && sz.width > 0.0
+                    && sz.height > 0.0
+                {
+                    (sz.width, sz.height)
+                } else {
+                    (595.0, 842.0)
+                };
+
+                let page = unsafe { (api.FPDF_LoadPage)(loaded.doc, idx as c_int) };
+                let mut rotation = 0u16;
+                let mut meaningful_char_count = 0usize;
+
+                if !page.is_null() {
+                    rotation = match unsafe { (api.FPDFPage_GetRotation)(page) } {
+                        1 => 90,
+                        2 => 180,
+                        3 => 270,
+                        _ => 0,
+                    };
+                    let text_page = unsafe { (api.FPDFText_LoadPage)(page) };
+                    if !text_page.is_null() {
+                        let raw_count = unsafe { (api.FPDFText_CountChars)(text_page) };
+                        if raw_count > 0 {
+                            let fetch = (raw_count as usize).min(200_000);
+                            let mut buf = vec![0u16; fetch + 1];
+                            let got = unsafe {
+                                (api.FPDFText_GetText)(
+                                    text_page,
+                                    0,
+                                    fetch as c_int,
+                                    buf.as_mut_ptr(),
+                                )
+                            };
+                            if got > 1 {
+                                let s = String::from_utf16_lossy(
+                                    &buf[..(got as usize).saturating_sub(1)],
+                                );
+                                meaningful_char_count = s
+                                    .chars()
+                                    .filter(|c| !c.is_whitespace() && !c.is_control())
+                                    .count();
+                            }
+                        }
+                        unsafe { (api.FPDFText_ClosePage)(text_page) };
+                    }
+                    unsafe { (api.FPDF_ClosePage)(page) };
+                }
+
+                out.push(PdfPageTextSummary {
+                    page_number: idx + 1,
+                    width_pt: w,
+                    height_pt: h,
+                    rotation,
+                    meaningful_char_count,
+                    has_text_layer: meaningful_char_count > 0,
+                });
+            }
+
+            Ok(out)
+        })
+    }
 }
 
 #[cfg(windows)]
 pub use win_impl::{
-    extract_page_text_with_pdfium, inspect_with_pdfium, render_page_png_with_pdfium,
-    render_page_rgba_with_pdfium, search_document_with_pdfium,
+    extract_page_text_with_pdfium, inspect_pages_text_status_with_pdfium, inspect_with_pdfium,
+    render_page_png_with_pdfium, render_page_rgba_with_pdfium, search_document_with_pdfium,
 };
+
+#[cfg(not(windows))]
+pub fn inspect_pages_text_status_with_pdfium(
+    _resource_dir: Option<&Path>,
+    _path: &Path,
+) -> Result<Vec<PdfPageTextSummary>, AppError> {
+    Err(AppError::new(
+        "PDF_ENGINE_MISSING",
+        "Bundled Windows PDFium engine is only available on Windows.",
+    ))
+}
 
 #[cfg(not(windows))]
 pub fn inspect_with_pdfium(

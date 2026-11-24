@@ -49,6 +49,7 @@ pub mod pdf_markdown;
 pub mod pdf_ops;
 pub mod pdf_pdfium;
 pub mod pdf_qpdf;
+pub mod pdf_searchable;
 pub mod pdf_worker;
 mod qr;
 pub mod screen_capture;
@@ -235,6 +236,10 @@ use crate::pdf_ops::{
     SplitPdfPlanPreview, SplitPdfPlanRequest, SplitPdfRequest, SplitPdfResult,
 };
 use crate::pdf_pdfium::{PdfPageTextPayload, PdfSearchResult};
+use crate::pdf_searchable::{
+    inspect_searchable_pdf_pages_impl, make_pdf_searchable_impl, MakePdfSearchableRequest,
+    MakePdfSearchableResult, PdfSearchableInspectResult,
+};
 use crate::screen_capture::{
     capture_monitor_impl, capture_region_impl, capture_scroll_impl, capture_window_impl,
     list_capture_monitors_impl, list_capture_windows_impl, pick_screen_region_rect_impl,
@@ -5445,6 +5450,106 @@ async fn ocr_extract_batch<R: Runtime>(
 }
 
 #[tauri::command]
+async fn inspect_searchable_pdf_pages<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    path: String,
+) -> Result<PdfSearchableInspectResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    if let Ok(res_dir) = app.path().resource_dir() {
+        pdf.set_resource_dir(res_dir);
+    }
+    let pdf_session = pdf.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        inspect_searchable_pdf_pages_impl(&pdf_session, &path)
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Searchable PDF page inspection worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn make_pdf_searchable<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    ocr: State<'_, OcrSessionManager>,
+    task_id: String,
+    request: MakePdfSearchableRequest,
+) -> Result<MakePdfSearchableResult, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty() {
+        return Err(AppError::invalid_param("Task ID must not be empty."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        pdf.set_resource_dir(res_dir.clone());
+        ocr.set_resource_dir(res_dir);
+    }
+    let tid = trimmed_id.to_string();
+    let guard = registry.register_checked(&tid, "P04", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let pdf_session = pdf.inner().clone();
+    let ocr_session = ocr.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "P04", None),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = make_pdf_searchable_impl(
+            &tid,
+            &pdf_session,
+            &ocr_session,
+            &request,
+            &cancel_flag,
+            |ev| {
+                let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload {
+                        task_id: tid.clone(),
+                        tool_id: "P04".into(),
+                        state: crate::tasks::TaskLifecycleState::Running,
+                        processed_bytes: ev.current as u64,
+                        total_bytes: Some(ev.total as u64),
+                        percent: Some(ev.percent),
+                        error_code: None,
+                        error_message: None,
+                    },
+                );
+            },
+        );
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P04",
+                        done.selected_pages as u64,
+                        Some(done.selected_pages as u64),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P04", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Searchable PDF OCR worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -5690,6 +5795,8 @@ pub fn run() {
             get_ocr_engine_status,
             inspect_ocr_sources,
             ocr_extract_batch,
+            inspect_searchable_pdf_pages,
+            make_pdf_searchable,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
