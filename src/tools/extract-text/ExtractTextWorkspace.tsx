@@ -12,6 +12,7 @@ import {
   FilePlus2,
   FileText,
   Play,
+  RotateCw,
   ScanText,
   Square,
   Trash2,
@@ -288,91 +289,113 @@ export function ExtractTextWorkspace() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handlePasteClipboard]);
 
-  const handleStartOcr = useCallback(async () => {
-    const cur = stateRef.current;
-    const runnable = cur.queue.filter((item) => !item.inspectError);
-    if (runnable.length === 0 || cur.taskStatus === "running") return;
+  const handleRunOcr = useCallback(
+    async (mode: "pending" | "rerun-active") => {
+      const cur = stateRef.current;
+      if (cur.taskStatus === "running") return;
 
-    const taskId = `t03-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    updateExtractTextSession((prev) => ({
-      ...prev,
-      taskStatus: "running",
-      activeTaskId: taskId,
-      progress: {
-        taskId,
-        currentItem: 1,
-        totalItems: runnable.length,
-        currentPage: 1,
-        totalPages: 1,
-        label: runnable[0]?.fileName ?? "",
-        percent: 0,
-        state: "running",
-      },
-      lastCancelled: false,
-      errorMessage: null,
-    }));
+      const activeCandidate =
+        cur.queue.find((q) => q.id === cur.activeItemId) ?? cur.queue[0] ?? null;
 
-    try {
-      const batchRes = await ocrExtractBatch(taskId, {
-        items: runnable.map((item) => ({
-          id: item.id,
-          path: item.path,
-          assetId: item.assetId,
-          name: item.fileName,
-          pageRange: item.kind === "pdf" && item.pageRange.trim() ? item.pageRange.trim() : null,
-        })),
-        pdfDpi: cur.pdfDpi,
-        options: {
-          maxSideLen: cur.maxSideLen,
-          includePreview: true,
+      const targets =
+        mode === "rerun-active"
+          ? activeCandidate && !activeCandidate.inspectError
+            ? [activeCandidate]
+            : []
+          : cur.queue.filter(
+              (item) => !item.inspectError && cur.resultsByItemId[item.id]?.status !== "completed",
+            );
+
+      if (targets.length === 0) return;
+
+      const taskId = `t03-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      updateExtractTextSession((prev) => ({
+        ...prev,
+        taskStatus: "running",
+        activeTaskId: taskId,
+        progress: {
+          taskId,
+          currentItem: 1,
+          totalItems: targets.length,
+          currentPage: 1,
+          totalPages: 1,
+          label: targets[0]?.fileName ?? "",
+          percent: 0,
+          state: "running",
         },
-      });
+        lastCancelled: false,
+        errorMessage: null,
+      }));
 
-      updateExtractTextSession((prev) => {
-        const nextResults = { ...prev.resultsByItemId };
-        const nextEdits = { ...prev.editedTexts };
-        for (const itemRes of batchRes.items) {
-          nextResults[itemRes.sourceId] = itemRes;
-          for (const page of itemRes.pages) {
-            delete nextEdits[makeEditKey(itemRes.sourceId, page.pageNumber)];
+      try {
+        const batchRes = await ocrExtractBatch(taskId, {
+          items: targets.map((item) => ({
+            id: item.id,
+            path: item.path,
+            assetId: item.assetId,
+            name: item.fileName,
+            pageRange: item.kind === "pdf" && item.pageRange.trim() ? item.pageRange.trim() : null,
+          })),
+          pdfDpi: cur.pdfDpi,
+          options: {
+            maxSideLen: cur.maxSideLen,
+            includePreview: true,
+          },
+        });
+
+        updateExtractTextSession((prev) => {
+          const nextResults = { ...prev.resultsByItemId };
+          const nextEdits = { ...prev.editedTexts };
+          for (const itemRes of batchRes.items) {
+            nextResults[itemRes.sourceId] = itemRes;
+            if (mode === "rerun-active") {
+              for (const key of Object.keys(nextEdits)) {
+                if (key.startsWith(`${itemRes.sourceId}::`)) {
+                  delete nextEdits[key];
+                }
+              }
+            }
           }
-        }
-        const firstDone = batchRes.items.find((it) => it.pages.length > 0);
-        const nextActiveId =
-          prev.activeItemId && nextResults[prev.activeItemId]?.pages.length
-            ? prev.activeItemId
-            : (firstDone?.sourceId ?? prev.activeItemId);
-        const activePages = nextActiveId ? nextResults[nextActiveId]?.pages : undefined;
-        const nextPageNum = activePages?.[0]?.pageNumber ?? 1;
+          const firstDone = batchRes.items.find((it) => it.pages.length > 0);
+          const nextActiveId =
+            prev.activeItemId && nextResults[prev.activeItemId]?.pages.length
+              ? prev.activeItemId
+              : (firstDone?.sourceId ?? prev.activeItemId);
+          const activePages = nextActiveId ? nextResults[nextActiveId]?.pages : undefined;
+          const nextPageNum = activePages?.some((p) => p.pageNumber === prev.activePageNumber)
+            ? prev.activePageNumber
+            : (activePages?.[0]?.pageNumber ?? 1);
 
-        return {
+          return {
+            ...prev,
+            resultsByItemId: nextResults,
+            editedTexts: nextEdits,
+            activeItemId: nextActiveId,
+            activePageNumber: nextPageNum,
+            selectedLineIndex: null,
+            taskStatus: "idle",
+            activeTaskId: null,
+            progress: null,
+            lastCancelled: batchRes.cancelled,
+            errorMessage:
+              batchRes.failedCount > 0 && batchRes.completedCount === 0
+                ? (batchRes.items.find((it) => it.errorMessage)?.errorMessage ??
+                  (zh ? "离线识别失败。" : "Offline OCR failed."))
+                : null,
+          };
+        });
+      } catch (err) {
+        updateExtractTextSession((prev) => ({
           ...prev,
-          resultsByItemId: nextResults,
-          editedTexts: nextEdits,
-          activeItemId: nextActiveId,
-          activePageNumber: nextPageNum,
-          selectedLineIndex: null,
           taskStatus: "idle",
           activeTaskId: null,
           progress: null,
-          lastCancelled: batchRes.cancelled,
-          errorMessage:
-            batchRes.failedCount > 0 && batchRes.completedCount === 0
-              ? (batchRes.items.find((it) => it.errorMessage)?.errorMessage ??
-                (zh ? "离线识别失败。" : "Offline OCR failed."))
-              : null,
-        };
-      });
-    } catch (err) {
-      updateExtractTextSession((prev) => ({
-        ...prev,
-        taskStatus: "idle",
-        activeTaskId: null,
-        progress: null,
-        errorMessage: formatLocalizedError(err, t),
-      }));
-    }
-  }, [t, updateExtractTextSession, zh]);
+          errorMessage: formatLocalizedError(err, t),
+        }));
+      }
+    },
+    [t, updateExtractTextSession, zh],
+  );
 
   const handleCancelOcr = useCallback(async () => {
     const tid = stateRef.current.activeTaskId;
@@ -386,12 +409,19 @@ export function ExtractTextWorkspace() {
         const nextQueue = prev.queue.filter((q) => q.id !== id);
         const nextResults = { ...prev.resultsByItemId };
         delete nextResults[id];
+        const nextEdits = { ...prev.editedTexts };
+        for (const key of Object.keys(nextEdits)) {
+          if (key.startsWith(`${id}::`)) {
+            delete nextEdits[key];
+          }
+        }
         const nextActiveId =
           prev.activeItemId === id ? (nextQueue[0]?.id ?? null) : prev.activeItemId;
         return {
           ...prev,
           queue: nextQueue,
           resultsByItemId: nextResults,
+          editedTexts: nextEdits,
           activeItemId: nextActiveId,
           activePageNumber: 1,
           selectedLineIndex: null,
@@ -475,6 +505,21 @@ export function ExtractTextWorkspace() {
     [showToast, t, updateExtractTextSession],
   );
 
+  const forbiddenSourcePaths = useMemo(() => {
+    const seen = new Set<string>();
+    const paths: string[] = [];
+    for (const q of state.queue) {
+      const p = q.path?.trim();
+      if (!p) continue;
+      const key = p.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        paths.push(p);
+      }
+    }
+    return paths;
+  }, [state.queue]);
+
   const handleExportTxt = useCallback(async () => {
     const content = combinedAllText || activeText;
     if (!content) return;
@@ -489,6 +534,7 @@ export function ExtractTextWorkspace() {
       await saveLocalTextFile({
         outputPath: outPath,
         sourcePath: activeEntry?.path ?? null,
+        forbiddenSourcePaths,
         content,
         overwrite: true,
         toolId: "T03",
@@ -500,7 +546,16 @@ export function ExtractTextWorkspace() {
         errorMessage: formatLocalizedError(err, t),
       }));
     }
-  }, [activeEntry, activeText, combinedAllText, showToast, t, updateExtractTextSession, zh]);
+  }, [
+    activeEntry,
+    activeText,
+    combinedAllText,
+    forbiddenSourcePaths,
+    showToast,
+    t,
+    updateExtractTextSession,
+    zh,
+  ]);
 
   const handleExportJson = useCallback(async () => {
     const items = state.queue
@@ -515,12 +570,29 @@ export function ExtractTextWorkspace() {
     });
     if (!outPath) return;
     try {
-      const sanitizedItems = items.map((item) => ({
-        ...item,
-        pages: item.pages.map((p) =>
-          Object.fromEntries(Object.entries(p).filter(([k]) => k !== "previewDataUrl")),
-        ),
-      }));
+      const sanitizedItems = items.map((item) => {
+        const pages = item.pages.map((p) => {
+          const edited = state.editedTexts[makeEditKey(item.sourceId, p.pageNumber)];
+          const base = Object.fromEntries(
+            Object.entries(p).filter(([k]) => k !== "previewDataUrl"),
+          );
+          if (edited !== undefined && edited !== p.text) {
+            return { ...base, text: edited, rawText: p.text };
+          }
+          return base;
+        });
+        const combinedText =
+          pages.length <= 1
+            ? String(pages[0]?.text ?? item.combinedText)
+            : pages
+                .map((p) => `--- Page ${String(p.pageNumber)} ---\n${String(p.text ?? "")}`)
+                .join("\n\n");
+        return {
+          ...item,
+          combinedText,
+          pages,
+        };
+      });
       const payload = {
         schema: "winkit.ocr.v1",
         engine: state.engineStatus?.engineName ?? "RapidOCR PP-OCRv4 mobile (ONNX Runtime CPU)",
@@ -529,6 +601,7 @@ export function ExtractTextWorkspace() {
       await saveLocalTextFile({
         outputPath: outPath,
         sourcePath: activeEntry?.path ?? null,
+        forbiddenSourcePaths,
         content: JSON.stringify(payload, null, 2),
         overwrite: true,
         toolId: "T03",
@@ -542,7 +615,9 @@ export function ExtractTextWorkspace() {
     }
   }, [
     activeEntry,
+    forbiddenSourcePaths,
     showToast,
+    state.editedTexts,
     state.engineStatus,
     state.queue,
     state.resultsByItemId,
@@ -553,6 +628,20 @@ export function ExtractTextWorkspace() {
 
   const previewUrl = activePage?.previewDataUrl ?? activeEntry?.thumbnailDataUrl ?? null;
   const isRunning = state.taskStatus === "running";
+  const pendingRunnableCount = useMemo(
+    () =>
+      state.queue.filter(
+        (q) => !q.inspectError && state.resultsByItemId[q.id]?.status !== "completed",
+      ).length,
+    [state.queue, state.resultsByItemId],
+  );
+  const canRerunActive = Boolean(
+    !isRunning &&
+    activeEntry &&
+    !activeEntry.inspectError &&
+    activeResult &&
+    state.engineStatus?.ready !== false,
+  );
   const hasAnyResult = Object.values(state.resultsByItemId).some((r) => r.pages.length > 0);
   const activePageIdx = activeResult
     ? activeResult.pages.findIndex((p) => p.pageNumber === activePage?.pageNumber)
@@ -582,18 +671,47 @@ export function ExtractTextWorkspace() {
             <span>{zh ? "粘贴剪贴板图片" : "Paste Image"}</span>
           </button>
           {!isRunning ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={
-                state.queue.filter((q) => !q.inspectError).length === 0 ||
-                state.engineStatus?.ready === false
-              }
-              onClick={() => void handleStartOcr()}
-            >
-              <Play size={15} strokeWidth={1.75} aria-hidden="true" />
-              <span>{zh ? "开始离线识别" : "Extract Text"}</span>
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={pendingRunnableCount === 0 || state.engineStatus?.ready === false}
+                title={
+                  pendingRunnableCount === 0 && hasAnyResult
+                    ? zh
+                      ? "队列中已全部识别；如需覆盖手工校对内容请点击「重新识别当前项」"
+                      : "All queued items are recognized; click Re-run Current to explicitly overwrite manual edits"
+                    : undefined
+                }
+                onClick={() => void handleRunOcr("pending")}
+              >
+                <Play size={15} strokeWidth={1.75} aria-hidden="true" />
+                <span>
+                  {hasAnyResult && pendingRunnableCount > 0
+                    ? zh
+                      ? `开始离线识别 (${pendingRunnableCount} 待处理)`
+                      : `Extract Text (${pendingRunnableCount} pending)`
+                    : zh
+                      ? "开始离线识别"
+                      : "Extract Text"}
+                </span>
+              </button>
+              {canRerunActive && (
+                <button
+                  type="button"
+                  className="btn"
+                  title={
+                    zh
+                      ? "仅重新识别当前选中文件，并覆盖当前文件的手工校对文本"
+                      : "Explicitly re-run OCR on the active item and replace its manual edits"
+                  }
+                  onClick={() => void handleRunOcr("rerun-active")}
+                >
+                  <RotateCw size={14} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{zh ? "重新识别当前项" : "Re-run Current"}</span>
+                </button>
+              )}
+            </>
           ) : (
             <button type="button" className="btn btn-danger" onClick={() => void handleCancelOcr()}>
               <Square size={14} strokeWidth={1.75} aria-hidden="true" />

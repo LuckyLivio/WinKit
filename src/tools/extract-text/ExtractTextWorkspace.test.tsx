@@ -322,4 +322,379 @@ describe("ExtractTextWorkspace (T03)", () => {
       expect(screen.getByText(/OCR cancelled as requested/)).toBeInTheDocument();
     });
   });
+
+  it("protects all queued source files (A and B) during TXT and JSON export via forbiddenSourcePaths", async () => {
+    const user = userEvent.setup();
+    const pathA = "C:\\scans\\a.png";
+    const pathB = "C:\\scans\\b.png";
+    const pathSafe = "C:\\scans\\export_out.txt";
+
+    vi.mocked(tauriBridge.pickMultipleFiles).mockResolvedValue([pathA, pathB]);
+    vi.mocked(tauriBridge.inspectOcrSources).mockResolvedValue([
+      {
+        path: pathA,
+        fileName: "a.png",
+        kind: "image",
+        byteLength: 1024,
+        widthPx: 800,
+        heightPx: 400,
+        pageCount: 1,
+        isLikelyScanned: false,
+        previewDataUrl: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+      {
+        path: pathB,
+        fileName: "b.png",
+        kind: "image",
+        byteLength: 2048,
+        widthPx: 800,
+        heightPx: 400,
+        pageCount: 1,
+        isLikelyScanned: false,
+        previewDataUrl: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+    ]);
+    vi.mocked(tauriBridge.ocrExtractBatch).mockImplementationOnce(async (_tid, req) => ({
+      engineName: "RapidOCR PP-OCRv4 mobile",
+      completedCount: req.items.length,
+      failedCount: 0,
+      cancelled: false,
+      totalPages: req.items.length,
+      totalLines: req.items.length,
+      totalChars: 12,
+      totalElapsedMs: 120,
+      items: req.items.map((it) => ({
+        sourceId: it.id,
+        sourcePath: it.path ?? null,
+        sourceName: it.name ?? "",
+        kind: "image",
+        status: "completed",
+        combinedText: `Text from ${it.name}`,
+        totalLines: 1,
+        totalChars: 12,
+        averageConfidence: 0.99,
+        elapsedMs: 60,
+        errorCode: null,
+        errorMessage: null,
+        pages: [
+          {
+            pageNumber: 1,
+            imageWidthPx: 800,
+            imageHeightPx: 400,
+            renderDpi: null,
+            sourceWidthPt: null,
+            sourceHeightPt: null,
+            text: `Text from ${it.name}`,
+            lineCount: 1,
+            charCount: 12,
+            averageConfidence: 0.99,
+            elapsedMs: 60,
+            previewDataUrl: null,
+            warnings: [],
+            lines: [],
+          },
+        ],
+      })),
+    }));
+
+    // Simulate backend multi-source guard: reject if outputPath matches any forbidden source path
+    vi.mocked(tauriBridge.saveLocalTextFile).mockImplementation(async (params) => {
+      const blocked = (params.forbiddenSourcePaths ?? []).some(
+        (p) => p.toLowerCase() === params.outputPath.toLowerCase(),
+      );
+      if (blocked) {
+        throw { code: "SAME_INPUT_AND_OUTPUT", message: "Output path matches an input source." };
+      }
+      return { path: params.outputPath, byteLength: params.content.length };
+    });
+
+    renderWorkspace("zh-CN");
+    await user.click(screen.getByRole("button", { name: /选择图片 \/ PDF/ }));
+    await waitFor(() => {
+      expect(screen.getAllByText("a.png").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("b.png").length).toBeGreaterThanOrEqual(1);
+    });
+
+    await user.click(screen.getByRole("button", { name: /开始离线识别/ }));
+    await waitFor(() => {
+      const ta = screen.getByRole("textbox", { name: /离线识别文本结果/ }) as HTMLTextAreaElement;
+      expect(ta.value).toBe("Text from a.png");
+    });
+
+    // Active entry is A; attempt TXT export to B -> rejected and passes both A & B in forbiddenSourcePaths
+    vi.mocked(tauriBridge.pickSaveFilePath).mockResolvedValueOnce(pathB);
+    await user.click(screen.getByRole("button", { name: /\.txt/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(tauriBridge.saveLocalTextFile).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        outputPath: pathB,
+        sourcePath: pathA,
+        forbiddenSourcePaths: [pathA, pathB],
+        toolId: "T03",
+      }),
+    );
+
+    // Attempt JSON export to B -> also rejected with both A & B protected
+    vi.mocked(tauriBridge.pickSaveFilePath).mockResolvedValueOnce(pathB);
+    await user.click(screen.getByRole("button", { name: /JSON/ }));
+    await waitFor(() => {
+      expect(tauriBridge.saveLocalTextFile).toHaveBeenCalledTimes(2);
+    });
+    expect(tauriBridge.saveLocalTextFile).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        outputPath: pathB,
+        sourcePath: pathA,
+        forbiddenSourcePaths: [pathA, pathB],
+        toolId: "T03",
+      }),
+    );
+
+    // Normal TXT export to a distinct safe path C succeeds
+    vi.mocked(tauriBridge.pickSaveFilePath).mockResolvedValueOnce(pathSafe);
+    await user.click(screen.getByRole("button", { name: /\.txt/ }));
+    await waitFor(() => {
+      expect(screen.getByText(/已导出 \.txt/)).toBeInTheDocument();
+    });
+  });
+
+  it("preserves manual proofread edits on A when recognizing newly added B, and replaces only on explicit re-run", async () => {
+    const user = userEvent.setup();
+    const pathA = "C:\\scans\\docA.png";
+    const pathB = "C:\\scans\\docB.png";
+
+    vi.mocked(tauriBridge.writeSystemClipboardText).mockResolvedValue();
+    vi.mocked(tauriBridge.saveLocalTextFile).mockResolvedValue({
+      path: "C:\\scans\\merged_ocr.txt",
+      byteLength: 64,
+    });
+
+    // Step 1: Add A and run OCR
+    vi.mocked(tauriBridge.pickMultipleFiles).mockResolvedValueOnce([pathA]);
+    vi.mocked(tauriBridge.inspectOcrSources).mockResolvedValueOnce([
+      {
+        path: pathA,
+        fileName: "docA.png",
+        kind: "image",
+        byteLength: 1000,
+        widthPx: 600,
+        heightPx: 300,
+        pageCount: 1,
+        isLikelyScanned: false,
+        previewDataUrl: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+    ]);
+    vi.mocked(tauriBridge.ocrExtractBatch).mockImplementationOnce(async (_tid, req) => {
+      const a = req.items[0]!;
+      return {
+        engineName: "RapidOCR PP-OCRv4 mobile",
+        completedCount: 1,
+        failedCount: 0,
+        cancelled: false,
+        totalPages: 1,
+        totalLines: 1,
+        totalChars: 8,
+        totalElapsedMs: 80,
+        items: [
+          {
+            sourceId: a.id,
+            sourcePath: a.path ?? null,
+            sourceName: "docA.png",
+            kind: "image",
+            status: "completed",
+            combinedText: "RAW_A_OCR",
+            totalLines: 1,
+            totalChars: 9,
+            averageConfidence: 0.98,
+            elapsedMs: 80,
+            errorCode: null,
+            errorMessage: null,
+            pages: [
+              {
+                pageNumber: 1,
+                imageWidthPx: 600,
+                imageHeightPx: 300,
+                renderDpi: null,
+                sourceWidthPt: null,
+                sourceHeightPt: null,
+                text: "RAW_A_OCR",
+                lineCount: 1,
+                charCount: 9,
+                averageConfidence: 0.98,
+                elapsedMs: 80,
+                previewDataUrl: null,
+                warnings: [],
+                lines: [],
+              },
+            ],
+          },
+        ],
+      };
+    });
+
+    renderWorkspace("zh-CN");
+    await user.click(screen.getByRole("button", { name: /选择图片 \/ PDF/ }));
+    await waitFor(() => expect(screen.getAllByText("docA.png").length).toBeGreaterThanOrEqual(1));
+
+    await user.click(screen.getByRole("button", { name: /开始离线识别/ }));
+    const ta = (await screen.findByRole("textbox", {
+      name: /离线识别文本结果/,
+    })) as HTMLTextAreaElement;
+    await waitFor(() => expect(ta.value).toBe("RAW_A_OCR"));
+
+    // Step 2: Manually proofread A
+    await user.clear(ta);
+    await user.type(ta, "PROOFREAD_A_FINAL");
+    expect(ta.value).toBe("PROOFREAD_A_FINAL");
+
+    // Step 3: Add B and click "开始离线识别" -> ONLY B is sent, A's proofread text stays intact!
+    vi.mocked(tauriBridge.pickMultipleFiles).mockResolvedValueOnce([pathB]);
+    vi.mocked(tauriBridge.inspectOcrSources).mockResolvedValueOnce([
+      {
+        path: pathB,
+        fileName: "docB.png",
+        kind: "image",
+        byteLength: 1000,
+        widthPx: 600,
+        heightPx: 300,
+        pageCount: 1,
+        isLikelyScanned: false,
+        previewDataUrl: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+    ]);
+    vi.mocked(tauriBridge.ocrExtractBatch).mockImplementationOnce(async (_tid, req) => {
+      // Crucial invariant: only pending item B is re-recognized; A is NOT re-run
+      expect(req.items.map((it) => it.name)).toEqual(["docB.png"]);
+      const b = req.items[0]!;
+      return {
+        engineName: "RapidOCR PP-OCRv4 mobile",
+        completedCount: 1,
+        failedCount: 0,
+        cancelled: false,
+        totalPages: 1,
+        totalLines: 1,
+        totalChars: 9,
+        totalElapsedMs: 75,
+        items: [
+          {
+            sourceId: b.id,
+            sourcePath: b.path ?? null,
+            sourceName: "docB.png",
+            kind: "image",
+            status: "completed",
+            combinedText: "RAW_B_OCR",
+            totalLines: 1,
+            totalChars: 9,
+            averageConfidence: 0.97,
+            elapsedMs: 75,
+            errorCode: null,
+            errorMessage: null,
+            pages: [
+              {
+                pageNumber: 1,
+                imageWidthPx: 600,
+                imageHeightPx: 300,
+                renderDpi: null,
+                sourceWidthPt: null,
+                sourceHeightPt: null,
+                text: "RAW_B_OCR",
+                lineCount: 1,
+                charCount: 9,
+                averageConfidence: 0.97,
+                elapsedMs: 75,
+                previewDataUrl: null,
+                warnings: [],
+                lines: [],
+              },
+            ],
+          },
+        ],
+      };
+    });
+
+    await user.click(screen.getByRole("button", { name: /选择图片 \/ PDF/ }));
+    await waitFor(() => expect(screen.getAllByText("docB.png").length).toBeGreaterThanOrEqual(1));
+
+    await user.click(screen.getByRole("button", { name: /开始离线识别/ }));
+    await waitFor(() => {
+      expect(tauriBridge.ocrExtractBatch).toHaveBeenCalledTimes(2);
+    });
+
+    // A is still active and keeps its manual proofread text
+    expect(ta.value).toBe("PROOFREAD_A_FINAL");
+
+    // Copy active page copies A's proofread text
+    await user.click(screen.getByRole("button", { name: /复制当前页/ }));
+    expect(tauriBridge.writeSystemClipboardText).toHaveBeenCalledWith("PROOFREAD_A_FINAL");
+
+    // TXT export includes both A's proofread text AND B's recognized text
+    vi.mocked(tauriBridge.pickSaveFilePath).mockResolvedValueOnce("C:\\scans\\merged_ocr.txt");
+    await user.click(screen.getByRole("button", { name: /\.txt/ }));
+    await waitFor(() => expect(tauriBridge.saveLocalTextFile).toHaveBeenCalledTimes(1));
+    const txtCall = vi.mocked(tauriBridge.saveLocalTextFile).mock.calls[0]![0];
+    expect(txtCall.content).toContain("PROOFREAD_A_FINAL");
+    expect(txtCall.content).toContain("RAW_B_OCR");
+
+    // Step 4: Explicit "重新识别当前项" on A replaces A's manual edit with fresh OCR output
+    vi.mocked(tauriBridge.ocrExtractBatch).mockImplementationOnce(async (_tid, req) => {
+      expect(req.items.map((it) => it.name)).toEqual(["docA.png"]);
+      const a = req.items[0]!;
+      return {
+        engineName: "RapidOCR PP-OCRv4 mobile",
+        completedCount: 1,
+        failedCount: 0,
+        cancelled: false,
+        totalPages: 1,
+        totalLines: 1,
+        totalChars: 11,
+        totalElapsedMs: 70,
+        items: [
+          {
+            sourceId: a.id,
+            sourcePath: a.path ?? null,
+            sourceName: "docA.png",
+            kind: "image",
+            status: "completed",
+            combinedText: "FRESH_A_OCR",
+            totalLines: 1,
+            totalChars: 11,
+            averageConfidence: 0.99,
+            elapsedMs: 70,
+            errorCode: null,
+            errorMessage: null,
+            pages: [
+              {
+                pageNumber: 1,
+                imageWidthPx: 600,
+                imageHeightPx: 300,
+                renderDpi: null,
+                sourceWidthPt: null,
+                sourceHeightPt: null,
+                text: "FRESH_A_OCR",
+                lineCount: 1,
+                charCount: 11,
+                averageConfidence: 0.99,
+                elapsedMs: 70,
+                previewDataUrl: null,
+                warnings: [],
+                lines: [],
+              },
+            ],
+          },
+        ],
+      };
+    });
+
+    await user.click(screen.getByRole("button", { name: /重新识别当前项/ }));
+    await waitFor(() => expect(ta.value).toBe("FRESH_A_OCR"));
+  });
 });

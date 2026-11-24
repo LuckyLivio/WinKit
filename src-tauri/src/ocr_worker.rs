@@ -1243,9 +1243,11 @@ mod tests {
         std::fs::write(&empty, b"").expect("write empty");
 
         let status = check_ocr_engine_status(None);
-        if !status.ready {
-            return;
-        }
+        assert!(
+            status.ready,
+            "Required RapidOCR runtime/models missing: {:?}",
+            status.error
+        );
         let mut eng: Option<RapidOcrEngine> = None;
 
         let r_missing = dispatch_ocr_request(
@@ -1311,64 +1313,200 @@ mod tests {
     }
 
     #[test]
-    fn ocr_worker_preserves_pdf_dpi_point_metadata_and_preview_toggle() {
+    fn scanned_pdf_rendered_via_pdfium_flows_through_real_rapidocr_with_valid_coordinates() {
+        use crate::pdf_ops::{
+            images_to_pdf_impl, ImagesToPdfRequest, PdfPageOrientation, PdfPageSizePreset,
+        };
+
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("ocr_bilingual_sample.png");
+        assert!(
+            fixture.is_file(),
+            "Required bilingual OCR fixture missing at {}",
+            fixture.display()
+        );
         let status = check_ocr_engine_status(None);
-        if !status.ready {
-            return;
-        }
-        let sample = Path::new(
-            r"C:\Temp\WinKitDemo\phase6_t03\bench_samples\01_screenshot_bilingual_ui.png",
+        assert!(
+            status.ready,
+            "Required RapidOCR runtime/models missing: {:?}",
+            status.error
         );
-        if !sample.exists() {
-            return;
-        }
-        let rgba = image::open(sample).expect("open sample").to_rgba8();
-        let (w, h) = rgba.dimensions();
-        let mut eng: Option<RapidOcrEngine> = None;
 
-        let resp = dispatch_ocr_request(
-            &mut eng,
-            None,
-            OcrWorkerRequest::RecognizeRgbaBuffer {
-                width: w,
-                height: h,
-                page_number: 2,
-                render_dpi: Some(200.0),
-                source_width_pt: Some(595.28),
-                source_height_pt: Some(841.89),
-                options: OcrRecognizeOptions {
-                    max_side_len: 1280,
-                    include_preview: false,
-                },
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf_path = dir.path().join("scanned_bilingual_ci.pdf");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let pdf_build = images_to_pdf_impl(
+            &ImagesToPdfRequest {
+                task_id: None,
+                image_paths: vec![fixture.to_string_lossy().into_owned()],
+                output_path: pdf_path.to_string_lossy().into_owned(),
+                overwrite: Some(true),
+                page_size: PdfPageSizePreset::Original,
+                orientation: PdfPageOrientation::Auto,
+                margin_pt: 0.0,
+                background_hex: "#FFFFFF".to_string(),
+                jpeg_quality: None,
+                lossless_png_images: Some(true),
+                assumed_dpi: Some(150.0),
             },
-            rgba.as_raw(),
-        );
+            &cancel,
+            |_| {},
+        )
+        .expect("build scanned test PDF");
+        assert_eq!(pdf_build.page_count, 1);
 
-        match resp {
-            OcrWorkerResponse::Page(page) => {
-                assert_eq!(page.page_number, 2);
-                assert_eq!(page.image_width_px, w);
-                assert_eq!(page.image_height_px, h);
-                assert_eq!(page.render_dpi, Some(200.0));
-                assert_eq!(page.source_width_pt, Some(595.28));
-                assert_eq!(page.source_height_pt, Some(841.89));
-                assert!(page.preview_data_url.is_none());
-                assert!(
-                    page.line_count >= 10,
-                    "expected >=10 lines, got {}",
-                    page.line_count
-                );
-                for line in &page.lines {
-                    assert!(!line.spans.is_empty());
-                    for pt in &line.quad_norm {
-                        assert!((0.0..=1.0).contains(&pt.x) && (0.0..=1.0).contains(&pt.y));
-                    }
-                    for sp in &line.spans {
-                        assert!(sp.bbox_norm.width >= 0.0 && sp.char_start < sp.char_end);
-                    }
-                }
-            }
-            other => panic!("expected OcrWorkerResponse::Page, got {other:?}"),
+        let ocr_mgr = OcrSessionManager::default();
+        let pdf_mgr = PdfSessionManager::default();
+        let assets = ImageAssetStore::default();
+
+        // Real PDFium inspect (fails explicitly if PDFium DLL is missing)
+        let inspected = pdf_mgr
+            .inspect_document(&pdf_path.to_string_lossy())
+            .expect("PDFium inspect_document must succeed (run `npm run ensure-pdfium`)");
+        assert_eq!(inspected.page_count, 1);
+        assert!(inspected.is_likely_scanned);
+        let expected_w_pt = inspected.pages[0].width_pt;
+        let expected_h_pt = inspected.pages[0].height_pt;
+        assert!(expected_w_pt > 100.0 && expected_h_pt > 50.0);
+
+        // Full production PDFium 200 DPI RGBA render -> RapidOCR batch pipeline
+        let req = OcrBatchRequest {
+            items: vec![OcrSourceInput {
+                id: "pdf-ci-1".to_string(),
+                path: Some(pdf_path.to_string_lossy().into_owned()),
+                asset_id: None,
+                name: Some("scanned_bilingual_ci.pdf".to_string()),
+                page_range: None,
+            }],
+            pdf_dpi: 200.0,
+            options: OcrRecognizeOptions {
+                max_side_len: 1280,
+                include_preview: false,
+            },
+        };
+        let batch = ocr_extract_batch_impl(
+            "t-pdf-ci",
+            &ocr_mgr,
+            &pdf_mgr,
+            &assets,
+            &req,
+            &cancel,
+            |_| {},
+        )
+        .expect("scanned PDF OCR batch");
+
+        assert!(!batch.cancelled);
+        assert_eq!(batch.completed_count, 1);
+        assert_eq!(batch.failed_count, 0);
+        assert_eq!(batch.items.len(), 1);
+        let item = &batch.items[0];
+        assert_eq!(item.status, "completed");
+        assert_eq!(item.pages.len(), 1);
+
+        let page = &item.pages[0];
+        assert_eq!(page.page_number, 1);
+        assert_eq!(page.render_dpi, Some(200.0));
+        assert!(page.image_width_px >= 900 && page.image_height_px >= 300);
+        let sw_pt = page.source_width_pt.expect("source_width_pt populated");
+        let sh_pt = page.source_height_pt.expect("source_height_pt populated");
+        assert!((sw_pt - expected_w_pt).abs() < 0.5);
+        assert!((sh_pt - expected_h_pt).abs() < 0.5);
+        assert!(page.preview_data_url.is_none());
+        assert!(page.line_count >= 3, "got text:\n{}", page.text);
+        for kw in ["WinKit", "离线文字识别", "SHA-256"] {
+            assert!(
+                page.text.contains(kw),
+                "expected PDFium->RapidOCR output to contain {kw:?}, got:\n{}",
+                page.text
+            );
         }
+        for line in &page.lines {
+            assert!(!line.spans.is_empty());
+            for pt in &line.quad_norm {
+                assert!((0.0..=1.0).contains(&pt.x) && (0.0..=1.0).contains(&pt.y));
+            }
+            assert!(line.bbox_norm.width > 0.0 && line.bbox_norm.height > 0.0);
+            assert!(line.bbox_norm.x >= 0.0 && line.bbox_norm.x + line.bbox_norm.width <= 1.0001);
+            assert!(line.bbox_norm.y >= 0.0 && line.bbox_norm.y + line.bbox_norm.height <= 1.0001);
+            for sp in &line.spans {
+                assert!(sp.char_start < sp.char_end);
+                assert!(sp.bbox_norm.width > 0.0 && sp.bbox_norm.height > 0.0);
+                assert!(sp.bbox_norm.x >= 0.0 && sp.bbox_norm.x + sp.bbox_norm.width <= 1.0001);
+                assert!(sp.bbox_norm.y >= 0.0 && sp.bbox_norm.y + sp.bbox_norm.height <= 1.0001);
+            }
+        }
+    }
+
+    #[test]
+    fn t03_batch_export_guard_rejects_overwriting_non_active_queue_source_file() {
+        use crate::tasks::TaskRegistry;
+        use crate::{execute_save_text_multi_source_with_guard, prepare_save_text_task};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_a = dir.path().join("a.png");
+        let src_b = dir.path().join("b.png");
+        let out_c = dir.path().join("result_ocr.txt");
+        let orig_b = b"ORIGINAL_SOURCE_B_BYTES_MUST_NOT_CHANGE";
+        std::fs::write(&src_a, b"SRC_A").expect("write a");
+        std::fs::write(&src_b, orig_b).expect("write b");
+
+        let registry = TaskRegistry::default();
+        let src_a_str = src_a.to_string_lossy().into_owned();
+        let src_b_str = src_b.to_string_lossy().into_owned();
+        let out_c_str = out_c.to_string_lossy().into_owned();
+        let forbidden = vec![src_a_str.clone(), src_b_str.clone()];
+
+        // Active entry is A, attempt TXT export to B -> rejected cleanly and B remains intact
+        let g1 = prepare_save_text_task(&registry, Some("T03")).expect("guard 1");
+        let err_txt = execute_save_text_multi_source_with_guard(
+            g1,
+            &src_b_str,
+            Some(&src_a_str),
+            None,
+            &forbidden,
+            "OCR TXT OVERWRITE ATTEMPT",
+            true,
+            |_| {},
+        )
+        .expect_err("TXT export must reject overwriting non-active queue source B");
+        assert_eq!(err_txt.code, "SAME_INPUT_AND_OUTPUT");
+        assert_eq!(std::fs::read(&src_b).expect("read b"), orig_b);
+
+        // Attempt JSON export to B -> also rejected and B remains intact
+        let g2 = prepare_save_text_task(&registry, Some("T03")).expect("guard 2");
+        let err_json = execute_save_text_multi_source_with_guard(
+            g2,
+            &src_b_str,
+            Some(&src_a_str),
+            None,
+            &forbidden,
+            "{\"schema\":\"winkit.ocr.v1\"}",
+            true,
+            |_| {},
+        )
+        .expect_err("JSON export must reject overwriting non-active queue source B");
+        assert_eq!(err_json.code, "SAME_INPUT_AND_OUTPUT");
+        assert_eq!(std::fs::read(&src_b).expect("read b"), orig_b);
+
+        // Normal export to a distinct file C must succeed cleanly
+        let g3 = prepare_save_text_task(&registry, Some("T03")).expect("guard 3");
+        let saved = execute_save_text_multi_source_with_guard(
+            g3,
+            &out_c_str,
+            Some(&src_a_str),
+            None,
+            &forbidden,
+            "SAFE OCR EXPORT CONTENT",
+            true,
+            |_| {},
+        )
+        .expect("normal export to C must succeed");
+        assert_eq!(saved.byte_length, 23);
+        assert_eq!(
+            std::fs::read_to_string(&out_c).expect("read c"),
+            "SAFE OCR EXPORT CONTENT"
+        );
     }
 }

@@ -1214,13 +1214,23 @@ fn build_token_spans(
             continue;
         }
 
-        let mut u0 = (t_min as f32 / denom).clamp(0.0, 1.0);
-        let mut u1 = (((t_max + 1) as f32) / denom).clamp(u0 + 0.005, 1.0);
+        let raw_u0 = (t_min as f32 / denom).clamp(0.0, 1.0);
+        let raw_u1 = (((t_max + 1) as f32) / denom).clamp(raw_u0, 1.0);
+        // Ensure a minimal non-degenerate span width without ever violating clamp's min <= max
+        // invariant (e.g. when the final CTC timestep puts `raw_u0` near `1.0`).
+        let min_step = (1.0 / denom).min(0.005);
+        let (mut u0, mut u1) = if raw_u1 - raw_u0 < min_step {
+            let expanded_u1 = (raw_u0 + min_step).min(1.0);
+            let adjusted_u0 = (expanded_u1 - min_step).max(0.0);
+            (adjusted_u0, expanded_u1)
+        } else {
+            (raw_u0, raw_u1)
+        };
         if rotated_180 {
-            let n0 = 1.0 - u1;
-            let n1 = 1.0 - u0;
-            u0 = n0.clamp(0.0, 1.0);
-            u1 = n1.clamp(u0, 1.0);
+            let n0 = (1.0 - u1).clamp(0.0, 1.0);
+            let n1 = (1.0 - u0).clamp(n0, 1.0);
+            u0 = n0;
+            u1 = n1;
         }
 
         let sub_quad = if vertical_rot {
@@ -1450,47 +1460,170 @@ mod tests {
     }
 
     #[test]
-    fn real_rapidocr_end_to_end_recognizes_bilingual_image_with_spans() {
-        let status = check_ocr_engine_status(None);
-        if !status.ready {
-            // Only skip if developer hasn't run ensure-ocr-runtime yet; CI always runs it first!
-            return;
+    fn token_spans_last_timestep_never_panics_and_preserves_bounds_and_rotation() {
+        let horiz_quad = [
+            OcrPoint { x: 100.0, y: 50.0 },
+            OcrPoint { x: 900.0, y: 50.0 },
+            OcrPoint { x: 900.0, y: 90.0 },
+            OcrPoint { x: 100.0, y: 90.0 },
+        ];
+        // Test total_steps where the last CTC timestep puts raw_u0 > 0.995 (e.g. 249/250 = 0.996
+        // and 999/1000 = 0.999) plus a degenerate t_min == total_steps case.
+        for &(total_steps, t_min, t_max) in &[
+            (250usize, 249usize, 249usize),
+            (1000, 999, 999),
+            (1000, 1000, 1000),
+            (1, 0, 0),
+        ] {
+            let char_steps = vec![
+                DecodedCharStep {
+                    char_start: 0,
+                    char_end: 2,
+                    t_start: 0,
+                    t_end: 0,
+                },
+                DecodedCharStep {
+                    char_start: 2,
+                    char_end: 3,
+                    t_start: t_min,
+                    t_end: t_max,
+                },
+            ];
+            let spans = build_token_spans(
+                "AB末",
+                &char_steps,
+                total_steps,
+                &horiz_quad,
+                1000,
+                200,
+                false,
+                false,
+            );
+            assert_eq!(spans.len(), 2);
+            let tail = &spans[1];
+            assert_eq!(tail.text, "末");
+            assert!(
+                tail.bbox_norm.x >= 0.0 && tail.bbox_norm.x <= 1.0,
+                "tail.x out of range: {:?}",
+                tail.bbox_norm
+            );
+            assert!(
+                tail.bbox_norm.width > 0.0 && tail.bbox_norm.x + tail.bbox_norm.width <= 1.0001,
+                "tail width invalid: {:?}",
+                tail.bbox_norm
+            );
+            assert!(
+                tail.bbox_norm.height > 0.0 && tail.bbox_norm.y + tail.bbox_norm.height <= 1.0001
+            );
+
+            // Verify rotated_180 mirrors the tail span cleanly to the left end of the quad
+            let spans_rot = build_token_spans(
+                "AB末",
+                &char_steps,
+                total_steps,
+                &horiz_quad,
+                1000,
+                200,
+                true,
+                false,
+            );
+            assert_eq!(spans_rot.len(), 2);
+            let rot_tail = &spans_rot[1];
+            assert!(rot_tail.bbox_norm.x >= 0.0 && rot_tail.bbox_norm.width > 0.0);
+            assert!(rot_tail.bbox_norm.x + rot_tail.bbox_norm.width <= 1.0001);
+            if total_steps >= 10 {
+                assert!(
+                    rot_tail.bbox_px.x < tail.bbox_px.x,
+                    "180-deg rotation should mirror tail span from right ({}) to left ({})",
+                    tail.bbox_px.x,
+                    rot_tail.bbox_px.x
+                );
+            }
         }
-        let engine = RapidOcrEngine::load(None).expect("load RapidOCR engine");
+
+        // Verify vertical rotated strip at last timestep
+        let vert_quad = [
+            OcrPoint { x: 40.0, y: 20.0 },
+            OcrPoint { x: 80.0, y: 20.0 },
+            OcrPoint { x: 80.0, y: 420.0 },
+            OcrPoint { x: 40.0, y: 420.0 },
+        ];
+        let v_steps = vec![DecodedCharStep {
+            char_start: 0,
+            char_end: 1,
+            t_start: 999,
+            t_end: 999,
+        }];
+        let v_spans = build_token_spans("竖", &v_steps, 1000, &vert_quad, 200, 500, false, true);
+        assert_eq!(v_spans.len(), 1);
+        assert!(v_spans[0].bbox_norm.height > 0.0);
+        assert!(
+            v_spans[0].bbox_norm.y >= 0.0
+                && v_spans[0].bbox_norm.y + v_spans[0].bbox_norm.height <= 1.0001
+        );
+    }
+
+    #[test]
+    fn real_rapidocr_end_to_end_recognizes_bilingual_fixture_with_spans() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("ocr_bilingual_sample.png");
+        assert!(
+            fixture.is_file(),
+            "Required bilingual OCR fixture missing at {}",
+            fixture.display()
+        );
+
+        let engine = RapidOcrEngine::load(None).expect(
+            "Required RapidOCR runtime/models missing; run `npm run ensure-ocr-runtime` before cargo test",
+        );
         assert!(engine.runtime_version().starts_with("1."));
 
-        // If our benchmark sample exists on disk locally, test directly on it too; otherwise test
-        // a deterministic synthetic high-contrast RGB bitmap with text-like structure check.
-        let bench_path = Path::new(
-            r"C:\Temp\WinKitDemo\phase6_t03\bench_samples\01_screenshot_bilingual_ui.png",
+        let res = engine
+            .recognize_image_file(&fixture, &OcrRecognizeOptions::default())
+            .expect("ocr bilingual fixture");
+        assert!(
+            res.line_count >= 3,
+            "expected >=3 recognized lines, got {} (text={:?})",
+            res.line_count,
+            res.text
         );
-        if bench_path.is_file() {
-            let res = engine
-                .recognize_image_file(bench_path, &OcrRecognizeOptions::default())
-                .expect("ocr bench sample");
+        for kw in ["WinKit", "离线文字识别", "SHA-256", "2026-11-24", "PDF"] {
             assert!(
-                res.line_count >= 10,
-                "expected >=10 lines, got {}",
-                res.line_count
-            );
-            assert!(
-                res.text.contains("WinKit") && res.text.contains("SHA-256"),
-                "unexpected text: {}",
+                res.text.contains(kw),
+                "expected bilingual OCR output to contain {kw:?}, got:\n{}",
                 res.text
             );
-            assert!(res.lines.iter().all(|l| !l.spans.is_empty()));
-            assert!(res
-                .lines
-                .iter()
-                .all(|l| l.bbox_norm.width > 0.0 && l.bbox_norm.height > 0.0));
-        } else {
-            // Blank white image returns clean empty result with 0 lines and no crash
-            let blank = RgbImage::from_pixel(320, 120, image::Rgb([255, 255, 255]));
-            let res = engine
-                .recognize_rgb(&blank, 1, None, None, None, &OcrRecognizeOptions::default())
-                .expect("ocr blank");
-            assert_eq!(res.line_count, 0);
-            assert_eq!(res.text, "");
         }
+        assert!(res.lines.iter().all(|l| !l.spans.is_empty()));
+        for line in &res.lines {
+            assert!(line.bbox_norm.width > 0.0 && line.bbox_norm.height > 0.0);
+            assert!(line.bbox_norm.x >= 0.0 && line.bbox_norm.x + line.bbox_norm.width <= 1.0001);
+            assert!(line.bbox_norm.y >= 0.0 && line.bbox_norm.y + line.bbox_norm.height <= 1.0001);
+            for pt in &line.quad_norm {
+                assert!((0.0..=1.0).contains(&pt.x) && (0.0..=1.0).contains(&pt.y));
+            }
+            for sp in &line.spans {
+                assert!(sp.char_start < sp.char_end);
+                assert!(sp.bbox_norm.width > 0.0 && sp.bbox_norm.height > 0.0);
+                assert!(sp.bbox_norm.x >= 0.0 && sp.bbox_norm.x + sp.bbox_norm.width <= 1.0001);
+                assert!(sp.bbox_norm.y >= 0.0 && sp.bbox_norm.y + sp.bbox_norm.height <= 1.0001);
+            }
+        }
+    }
+
+    #[test]
+    fn blank_white_image_returns_empty_result_without_error() {
+        let engine = RapidOcrEngine::load(None).expect(
+            "Required RapidOCR runtime/models missing; run `npm run ensure-ocr-runtime` before cargo test",
+        );
+        let blank = RgbImage::from_pixel(320, 120, image::Rgb([255, 255, 255]));
+        let res = engine
+            .recognize_rgb(&blank, 1, None, None, None, &OcrRecognizeOptions::default())
+            .expect("ocr blank");
+        assert_eq!(res.line_count, 0);
+        assert!(res.lines.is_empty());
+        assert_eq!(res.text, "");
     }
 }
