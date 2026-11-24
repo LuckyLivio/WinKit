@@ -3929,3 +3929,180 @@ export async function exportMarkdownToPdf(
   assertFrontendNotShuttingDown();
   return invoke<MarkdownToPdfResult>("export_markdown_to_pdf", { taskId, request });
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6: Reusable Offline OCR Engine (T03, shared with future T04 & P04)
+// ---------------------------------------------------------------------------
+
+export interface OcrPoint {
+  x: number;
+  y: number;
+}
+
+export interface OcrNormPoint {
+  x: number;
+  y: number;
+}
+
+export interface OcrBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface OcrSpan {
+  text: string;
+  bboxPx: OcrBoundingBox;
+  bboxNorm: OcrBoundingBox;
+  charStart: number;
+  charEnd: number;
+}
+
+export interface OcrTextLine {
+  index: number;
+  rowIndex: number;
+  text: string;
+  confidence: number;
+  quadPx: [OcrPoint, OcrPoint, OcrPoint, OcrPoint];
+  quadNorm: [OcrNormPoint, OcrNormPoint, OcrNormPoint, OcrNormPoint];
+  bboxPx: OcrBoundingBox;
+  bboxNorm: OcrBoundingBox;
+  angleDeg: number;
+  rotated180: boolean;
+  spans: OcrSpan[];
+}
+
+export interface OcrPageResult {
+  pageNumber: number;
+  imageWidthPx: number;
+  imageHeightPx: number;
+  renderDpi: number | null;
+  sourceWidthPt: number | null;
+  sourceHeightPt: number | null;
+  text: string;
+  lines: OcrTextLine[];
+  lineCount: number;
+  charCount: number;
+  averageConfidence: number;
+  elapsedMs: number;
+  previewDataUrl: string | null;
+  warnings: string[];
+}
+
+export interface OcrEngineStatus {
+  ready: boolean;
+  engineName: string;
+  runtimeVersion: string | null;
+  ocrDir: string | null;
+  error: string | null;
+}
+
+export interface OcrRecognizeOptions {
+  maxSideLen?: number;
+  includePreview?: boolean;
+}
+
+export interface OcrProgressPayload {
+  taskId: string;
+  currentItem: number;
+  totalItems: number;
+  currentPage: number;
+  totalPages: number;
+  label: string;
+  percent: number;
+  state: string;
+}
+
+export interface OcrInspectSourceItem {
+  path: string;
+  fileName: string;
+  kind: "image" | "pdf";
+  byteLength: number;
+  widthPx: number | null;
+  heightPx: number | null;
+  pageCount: number;
+  isLikelyScanned: boolean;
+  previewDataUrl: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface OcrSourceInput {
+  id: string;
+  path?: string | null;
+  assetId?: string | null;
+  name?: string | null;
+  pageRange?: string | null;
+}
+
+export interface OcrBatchRequest {
+  items: OcrSourceInput[];
+  pdfDpi?: number;
+  options?: OcrRecognizeOptions;
+}
+
+export interface OcrBatchItemResult {
+  sourceId: string;
+  sourcePath: string | null;
+  sourceName: string;
+  kind: "image" | "pdf" | "clipboard";
+  status: "completed" | "failed" | "cancelled";
+  pages: OcrPageResult[];
+  combinedText: string;
+  totalLines: number;
+  totalChars: number;
+  averageConfidence: number;
+  elapsedMs: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface OcrBatchResult {
+  engineName: string;
+  items: OcrBatchItemResult[];
+  completedCount: number;
+  failedCount: number;
+  cancelled: boolean;
+  totalPages: number;
+  totalLines: number;
+  totalChars: number;
+  totalElapsedMs: number;
+}
+
+export async function getOcrEngineStatus(): Promise<OcrEngineStatus> {
+  if (!isTauriDesktop()) {
+    return {
+      ready: false,
+      engineName: "RapidOCR PP-OCRv4 mobile (ONNX Runtime CPU)",
+      runtimeVersion: null,
+      ocrDir: null,
+      error: "Offline OCR requires the Windows desktop runtime.",
+    };
+  }
+  return invoke<OcrEngineStatus>("get_ocr_engine_status");
+}
+
+export async function inspectOcrSources(paths: string[]): Promise<OcrInspectSourceItem[]> {
+  assertFrontendNotShuttingDown();
+  return invoke<OcrInspectSourceItem[]>("inspect_ocr_sources", { paths });
+}
+
+export async function ocrExtractBatch(
+  taskId: string,
+  request: OcrBatchRequest,
+): Promise<OcrBatchResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<OcrBatchResult>("ocr_extract_batch", { taskId, request });
+}
+
+export async function subscribeOcrProgress(
+  handler: (payload: OcrProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<OcrProgressPayload>("winkit://ocr-progress", (event) => {
+    handler(event.payload);
+  });
+}

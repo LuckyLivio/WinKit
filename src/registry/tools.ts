@@ -67,6 +67,7 @@ import { PdfEncryptWorkspace } from "../tools/pdf-encrypt/PdfEncryptWorkspace";
 import { PdfDecryptWorkspace } from "../tools/pdf-decrypt/PdfDecryptWorkspace";
 import { PdfCompressWorkspace } from "../tools/pdf-compress/PdfCompressWorkspace";
 import { PdfMarkdownWorkspace } from "../tools/pdf-markdown/PdfMarkdownWorkspace";
+import { ExtractTextWorkspace } from "../tools/extract-text/ExtractTextWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -597,6 +598,37 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "table-2",
     implementationStatus: "full",
     component: CsvJsonWorkspace,
+  },
+  {
+    id: "T03",
+    category: "text",
+    name: {
+      "zh-CN": "图片与扫描件文字提取",
+      "en-US": "Extract Text (OCR)",
+    },
+    summary: {
+      "zh-CN":
+        "基于本地离线 RapidOCR（PP-OCRv4）从截图、照片与扫描版 PDF 批量提取中英文文字与精确位置坐标",
+      "en-US":
+        "Extract bilingual text and bounding-box coordinates offline from screenshots, photos, and scanned PDFs via local RapidOCR (PP-OCRv4)",
+    },
+    keywords: [
+      "ocr",
+      "extract text",
+      "text recognition",
+      "scan",
+      "scanned pdf",
+      "screenshot",
+      "rapidocr",
+      "文字识别",
+      "识图",
+      "图片提字",
+      "扫描件",
+      "提取文字",
+    ],
+    icon: "scan-text",
+    implementationStatus: "full",
+    component: ExtractTextWorkspace,
   },
   {
     id: "T08",

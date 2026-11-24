@@ -35,6 +35,9 @@ pub mod media_resize;
 pub mod media_speed;
 pub mod media_subtitles;
 pub mod media_trim;
+pub mod ocr_core;
+pub mod ocr_ort;
+pub mod ocr_worker;
 pub mod organize_downloads;
 pub mod password_gen;
 pub mod pdf_annotate;
@@ -190,6 +193,10 @@ use crate::media_subtitles::{
 use crate::media_trim::{
     analyze_trim_keyframes_impl, trim_video_file_impl, TrimKeyframeAnalysis,
     TrimKeyframeAnalysisRequest, TrimVideoRequest, TrimVideoResult,
+};
+use crate::ocr_core::{OcrBatchResult, OcrEngineStatus, OcrInspectSourceItem, OCR_PROGRESS_EVENT};
+use crate::ocr_worker::{
+    inspect_ocr_sources_impl, ocr_extract_batch_impl, OcrBatchRequest, OcrSessionManager,
 };
 use crate::organize_downloads::{
     execute_organize_downloads_impl, preview_organize_downloads_impl, OrganizeExecuteRequest,
@@ -5294,6 +5301,138 @@ async fn export_markdown_to_pdf(
 }
 
 #[tauri::command]
+async fn get_ocr_engine_status<R: Runtime>(
+    app: AppHandle<R>,
+    ocr: State<'_, OcrSessionManager>,
+) -> Result<OcrEngineStatus, AppError> {
+    if let Ok(res_dir) = app.path().resource_dir() {
+        ocr.set_resource_dir(res_dir);
+    }
+    let session = ocr.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || session.status())
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "OCR status check failed."))
+}
+
+#[tauri::command]
+async fn inspect_ocr_sources<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    paths: Vec<String>,
+) -> Result<Vec<OcrInspectSourceItem>, AppError> {
+    registry.ensure_not_shutting_down()?;
+    if let Ok(res_dir) = app.path().resource_dir() {
+        pdf.set_resource_dir(res_dir);
+    }
+    let pdf_session = pdf.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || inspect_ocr_sources_impl(&pdf_session, &paths))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "OCR source inspection failed."))
+}
+
+#[tauri::command]
+async fn ocr_extract_batch<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    ocr: State<'_, OcrSessionManager>,
+    pdf: State<'_, PdfSessionManager>,
+    asset_store: State<'_, ImageAssetStore>,
+    task_id: String,
+    request: OcrBatchRequest,
+) -> Result<OcrBatchResult, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty() {
+        return Err(AppError::invalid_param("Task ID must not be empty."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        ocr.set_resource_dir(res_dir.clone());
+        pdf.set_resource_dir(res_dir);
+    }
+    let tid = trimmed_id.to_string();
+    let guard = registry.register_checked(&tid, "T03", false)?;
+    let cancel_flag = guard.cancel_flag();
+    let ocr_session = ocr.inner().clone();
+    let pdf_session = pdf.inner().clone();
+    let store = asset_store.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "T03".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: Some(request.items.len() as u64),
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = ocr_extract_batch_impl(
+            &tid,
+            &ocr_session,
+            &pdf_session,
+            &store,
+            &request,
+            &cancel_flag,
+            |ev| {
+                let _ = app.emit(OCR_PROGRESS_EVENT, &ev);
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload {
+                        task_id: tid.clone(),
+                        tool_id: "T03".into(),
+                        state: crate::tasks::TaskLifecycleState::Running,
+                        processed_bytes: ev.current_item as u64,
+                        total_bytes: Some(ev.total_items as u64),
+                        percent: Some(ev.percent),
+                        error_code: None,
+                        error_message: None,
+                    },
+                );
+            },
+        );
+        match &res {
+            Ok(done) if done.cancelled => {
+                let err = AppError::cancelled();
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(
+                        &tid,
+                        "T03",
+                        done.completed_count as u64,
+                        Some(request.items.len() as u64),
+                        &err,
+                    ),
+                );
+            }
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "T03",
+                        done.completed_count as u64,
+                        Some(request.items.len() as u64),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "T03", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "OCR extraction worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -5314,12 +5453,14 @@ fn request_window_close(
     recorder: State<'_, AudioRecorderManager>,
     screen_recorder: State<'_, ScreenRecorderManager>,
     pdf: State<'_, PdfSessionManager>,
+    ocr: State<'_, OcrSessionManager>,
 ) -> CloseRequestDecision {
     let decision = registry.evaluate_close_request();
     if decision.immediate_close_allowed {
         recorder.cleanup_on_exit();
         screen_recorder.cleanup_on_exit();
         pdf.cleanup_on_exit();
+        ocr.cleanup_on_exit();
     }
     decision
 }
@@ -5330,12 +5471,14 @@ async fn begin_graceful_shutdown(
     recorder: State<'_, AudioRecorderManager>,
     screen_recorder: State<'_, ScreenRecorderManager>,
     pdf: State<'_, PdfSessionManager>,
+    ocr: State<'_, OcrSessionManager>,
     timeout_ms: Option<u64>,
 ) -> Result<ShutdownDrainResult, AppError> {
     let reg = registry.inner().clone();
     let mgr = recorder.inner().clone();
     let scr = screen_recorder.inner().clone();
     let pdf_mgr = pdf.inner().clone();
+    let ocr_mgr = ocr.inner().clone();
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(8_000).clamp(100, 30_000));
     tauri::async_runtime::spawn_blocking(move || {
         let res = reg.begin_shutdown_and_drain(timeout);
@@ -5343,6 +5486,7 @@ async fn begin_graceful_shutdown(
             mgr.cleanup_on_exit();
             scr.cleanup_on_exit();
             pdf_mgr.cleanup_on_exit();
+            ocr_mgr.cleanup_on_exit();
         }
         res
     })
@@ -5368,6 +5512,7 @@ pub fn run() {
         .manage(AudioRecorderManager::new())
         .manage(ScreenRecorderManager::new())
         .manage(PdfSessionManager::default())
+        .manage(OcrSessionManager::default())
         .register_uri_scheme_protocol("winkitmedia", move |_ctx, request| {
             handle_winkit_media_protocol(&preview_registry_for_proto, request)
         })
@@ -5530,6 +5675,9 @@ pub fn run() {
             compress_pdf,
             render_markdown_preview,
             export_markdown_to_pdf,
+            get_ocr_engine_status,
+            inspect_ocr_sources,
+            ocr_extract_batch,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
