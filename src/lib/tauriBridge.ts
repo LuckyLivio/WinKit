@@ -3957,6 +3957,8 @@ export interface OcrSpan {
   text: string;
   bboxPx: OcrBoundingBox;
   bboxNorm: OcrBoundingBox;
+  quadPx?: [OcrPoint, OcrPoint, OcrPoint, OcrPoint];
+  readingQuadPx?: [OcrPoint, OcrPoint, OcrPoint, OcrPoint];
   charStart: number;
   charEnd: number;
 }
@@ -3972,6 +3974,8 @@ export interface OcrTextLine {
   bboxNorm: OcrBoundingBox;
   angleDeg: number;
   rotated180: boolean;
+  verticalRotated?: boolean;
+  readingQuadPx?: [OcrPoint, OcrPoint, OcrPoint, OcrPoint];
   spans: OcrSpan[];
 }
 

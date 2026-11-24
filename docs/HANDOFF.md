@@ -9,10 +9,10 @@
   - 输出可供 `T04` 与 `P04` 复用的结构化 `OcrPageResult`（每行含 `quadPx`/`quadNorm`/`bboxPx`/`bboxNorm`/`angleDeg`/`rotated180` 及 CTC 词级 `spans`，每页含像素尺寸、请求 DPI 与 PDF 页面点尺寸）；支持队列全源文件 `forbiddenSourcePaths` 防覆盖导出、手工校对内容保留与显式重新识别，并在 Windows CI 上以随仓样张 `src-tauri/tests/fixtures/ocr_bilingual_sample.png` 实际执行 RapidOCR 与 PDFium 200 DPI 渲染扫描 PDF 集成测试。
 - **PR #38（已合入 `main`：`68477d2`）｜`T04` 屏幕区域取字**：
   - 复用 `I01` 屏幕框选（补强 `PerMonitorV2DpiGuard`、`SetWindowPos`、`WM_DPICHANGED` 忽略、窗口原点偏移补偿的 `map_virtual_selection_to_capture_rect` 以及按鼠标所在屏居中的 `compute_instruction_pill_origin`）、`ImageAssetStore` 内存零落盘传递（含共享 24 项 LRU 淘汰后经 `storePngAsset` 自动恢复「重新识别」）、`T03` `--ocr-worker`（`T04` 独立注册为可中断任务支持推理期间确认退出即时回收 worker，同时保留 `T03` 既有行为）与原生剪贴板。
-- **阶段 6 PR 3（`feat/phase-6-pr3-p04-searchable-pdf`）｜`P04` 扫描版 PDF 转可搜索 + `ocr_core` 竖排回映射修正**：
-  - 修正 `src-tauri/src/ocr_core.rs` 竖排条在 `rotate270` 后的词元回映射方向（从错误的 `P3→P0` 修正为沿 `P0→P3` / `P1→P2` 自上而下映射，并在 `rotated_180 = true` 时经反转对应自下而上，补齐同竖条双词元双分支实测验证与 `T03`/`T04` 回归）。
-  - 在 `pdf_pdfium.rs` 新增 `FPDF_DeviceToPage` 精确仿射设备→页面变换（与 `FPDF_RenderPageBitmap` 共享同一实际位图尺寸与旋转参数）及逐页文字层检测 `inspect_pages_text_status_with_pdfium`。
-  - 新增 `src-tauri/src/pdf_searchable.rs` 与 `src/tools/pdf-searchable/`（`P04`）：默认跳过已有可搜索文字页避免重复叠加，以自包含无轮廓 TrueType（含非零选区包围盒）+ `CIDToGIDMap` + UTF-16BE `ToUnicode` CMap + `3 Tr` 嵌入不可见中英文 Unicode 文字层，完整保留原画面、页序、原有文字、书签与链接，并通过真实 PDFium 选区矩形与独立 `pypdf` 验证 `Rotate 90/180/270`、直接/继承偏置 `CropBox`、`4096 px` 大页渲染封顶、加密拒开、数字签名提示、原子另存取消清 `.tmp` 与二次运行幂等性；`C08` 扫描件横幅同步提供一键直达 `P04`。
+- **阶段 6 PR 3（PR #39，`feat/phase-6-pr3-p04-searchable-pdf`）｜`P04` 扫描版 PDF 转可搜索 + `ocr_core` 旋转阅读方向与安全收尾**：
+  - 修正 `src-tauri/src/ocr_core.rs` 竖排条在 `rotate270` 后的词元回映射方向，并增补真实阅读方向四边形 `reading_quad_px`（基线 `read_BL→read_BR` + 上行 `read_BL→read_TL`，覆盖 0°/90° CW/180°/270° CW 四方向）同时保留 `T03`/`T04` 既有 `quad_px`/`bbox_px` 预览语义。
+  - 在 `pdf_pdfium.rs` 新增 `FPDF_DeviceToPage` 精确仿射设备→页面变换及逐页文字层检测 `inspect_pages_text_status_with_pdfium`；在 `pdf_searchable.rs` 中以单 `TJ` 文本对象按行写入不可见 Unicode 文字层（修复 PDFium 在 180° 倒置扫描页上拆分重排相邻 Span 的选区问题），并在 `doc.save()` 写完 `.tmp` 之后、`commit_existing_tmp()` 之前二次检查取消标记保护已有目标文件。
+  - 在 `src/tools/pdf-searchable/PdfSearchableWorkspace.tsx` 中将覆盖确认绑定至完整转换请求（输入/目标/参数变更即失效）并加入单调加载令牌防止快速切档或加载中清空后的迟到响应回写；通过 `C08` 检索高亮、Google Chrome 原生 PDF 查看器四方向旋转页实测拖选复制与独立 `pypdf` 复核。
 
 ## v0.18.0 · 阶段 5B（进阶 PDF 处理与文档水印）
 

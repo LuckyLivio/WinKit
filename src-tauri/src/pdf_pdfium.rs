@@ -1686,13 +1686,105 @@ mod win_impl {
             Ok(out)
         })
     }
+
+    /// Extracts every individual character on `page_number` in PDFium reading/copy order along
+    /// with its exact normalized `[0, 1]` selection rectangle (`FPDFText_CountRects(i, 1)` +
+    /// `FPDFText_GetRect`), used to verify per-character selection alignment on rotated text.
+    pub fn extract_page_char_rects_with_pdfium(
+        resource_dir: Option<&Path>,
+        path: &Path,
+        page_number: usize,
+    ) -> Result<Vec<(char, PdfNormalizedRect)>, AppError> {
+        if page_number == 0 {
+            return Err(AppError::invalid_param("Page number must be >= 1."));
+        }
+        with_pdfium(resource_dir, |api| {
+            let loaded = open_pdf_doc(api, path)?;
+            let page_count = unsafe { (api.FPDF_GetPageCount)(loaded.doc) }.max(0) as usize;
+            if page_number > page_count {
+                return Err(AppError::invalid_param(format!(
+                    "Requested page {page_number} is out of bounds (document has {page_count} pages)."
+                )));
+            }
+            let page = unsafe { (api.FPDF_LoadPage)(loaded.doc, (page_number - 1) as c_int) };
+            if page.is_null() {
+                return Err(AppError::new(
+                    "PDF_PAGE_ERROR",
+                    format!("Failed to load PDF page {page_number}."),
+                ));
+            }
+
+            let mut out = Vec::new();
+            let text_page = unsafe { (api.FPDFText_LoadPage)(page) };
+            if !text_page.is_null() {
+                let raw_count = unsafe { (api.FPDFText_CountChars)(text_page) };
+                if raw_count > 0 {
+                    let limit = (raw_count as usize).min(20_000);
+                    for i in 0..limit {
+                        let mut ch_buf = [0u16; 3];
+                        let got = unsafe {
+                            (api.FPDFText_GetText)(text_page, i as c_int, 1, ch_buf.as_mut_ptr())
+                        };
+                        if got <= 1 {
+                            continue;
+                        }
+                        let ch_str = String::from_utf16_lossy(&ch_buf[..(got as usize - 1)]);
+                        let Some(ch) = ch_str.chars().next() else {
+                            continue;
+                        };
+                        let rc = unsafe { (api.FPDFText_CountRects)(text_page, i as c_int, 1) };
+                        if rc <= 0 {
+                            continue;
+                        }
+                        let mut left = 0.0;
+                        let mut top = 0.0;
+                        let mut right = 0.0;
+                        let mut bottom = 0.0;
+                        let ok = unsafe {
+                            (api.FPDFText_GetRect)(
+                                text_page,
+                                0,
+                                &mut left,
+                                &mut top,
+                                &mut right,
+                                &mut bottom,
+                            )
+                        };
+                        if ok != 0 {
+                            if let Some(norm) =
+                                pdf_rect_to_normalized(api, page, left, top, right, bottom)
+                            {
+                                out.push((ch, norm));
+                            }
+                        }
+                    }
+                }
+                unsafe { (api.FPDFText_ClosePage)(text_page) };
+            }
+            unsafe { (api.FPDF_ClosePage)(page) };
+            Ok(out)
+        })
+    }
 }
 
 #[cfg(windows)]
 pub use win_impl::{
-    extract_page_text_with_pdfium, inspect_pages_text_status_with_pdfium, inspect_with_pdfium,
-    render_page_png_with_pdfium, render_page_rgba_with_pdfium, search_document_with_pdfium,
+    extract_page_char_rects_with_pdfium, extract_page_text_with_pdfium,
+    inspect_pages_text_status_with_pdfium, inspect_with_pdfium, render_page_png_with_pdfium,
+    render_page_rgba_with_pdfium, search_document_with_pdfium,
 };
+
+#[cfg(not(windows))]
+pub fn extract_page_char_rects_with_pdfium(
+    _resource_dir: Option<&Path>,
+    _path: &Path,
+    _page_number: usize,
+) -> Result<Vec<(char, PdfNormalizedRect)>, AppError> {
+    Err(AppError::new(
+        "PDF_ENGINE_MISSING",
+        "Bundled Windows PDFium engine is only available on Windows.",
+    ))
+}
 
 #[cfg(not(windows))]
 pub fn inspect_pages_text_status_with_pdfium(

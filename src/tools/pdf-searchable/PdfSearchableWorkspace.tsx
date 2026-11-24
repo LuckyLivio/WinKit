@@ -48,6 +48,33 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
+interface PendingOverwriteRequest {
+  inputPath: string;
+  inputFileName: string;
+  outputPath: string;
+  scope: "all" | "range";
+  pageRange: string;
+  skipExistingTextPages: boolean;
+  ocrDpi: 150 | 200 | 300;
+  maxSideLen: 1280 | 1600;
+  selectedPageCount: number;
+}
+
+function requestMatchesState(
+  req: PendingOverwriteRequest,
+  cur: ReturnType<typeof usePdfSession>["pdfSession"]["searchablePdf"],
+): boolean {
+  return (
+    cur.inspectResult?.inspection.path === req.inputPath &&
+    cur.outputPath.trim() === req.outputPath &&
+    cur.scope === req.scope &&
+    cur.pageRange.trim() === req.pageRange &&
+    cur.skipExistingTextPages === req.skipExistingTextPages &&
+    cur.ocrDpi === req.ocrDpi &&
+    cur.maxSideLen === req.maxSideLen
+  );
+}
+
 export function PdfSearchableWorkspace() {
   const { locale, t } = useI18n();
   const zh = locale === "zh-CN";
@@ -62,10 +89,11 @@ export function PdfSearchableWorkspace() {
   const st = pdfSession.searchablePdf;
 
   const [thumbDataUrl, setThumbDataUrl] = useState<string | null>(null);
-  const [overwritePending, setOverwritePending] = useState<string | null>(null);
+  const [overwritePending, setOverwritePending] = useState<PendingOverwriteRequest | null>(null);
   const stateRef = useRef(st);
   stateRef.current = st;
   const seqRef = useRef(1);
+  const loadSeqRef = useRef(0);
 
   // Load OCR runtime readiness once
   useEffect(() => {
@@ -95,9 +123,12 @@ export function PdfSearchableWorkspace() {
 
   const openPdfPath = useCallback(
     async (path: string) => {
+      const loadId = ++loadSeqRef.current;
+      setOverwritePending(null);
       updateSearchablePdfSession((prev) => ({
         ...prev,
         sourcePath: path,
+        inspectResult: null,
         inspectLoading: true,
         encryptedError: false,
         lastResult: null,
@@ -108,7 +139,9 @@ export function PdfSearchableWorkspace() {
 
       try {
         const res = await inspectSearchablePdfPages(path);
+        if (loadSeqRef.current !== loadId) return;
         const suggested = await suggestSafeSiblingPath(path, "_searchable", "pdf").catch(() => "");
+        if (loadSeqRef.current !== loadId) return;
         updateSearchablePdfSession((prev) => ({
           ...prev,
           sourcePath: res.inspection.path,
@@ -122,6 +155,7 @@ export function PdfSearchableWorkspace() {
           errorMessage: null,
         }));
       } catch (err) {
+        if (loadSeqRef.current !== loadId) return;
         const parsed = parseBackendError(err);
         updateSearchablePdfSession((prev) => ({
           ...prev,
@@ -134,6 +168,25 @@ export function PdfSearchableWorkspace() {
     },
     [t, updateSearchablePdfSession],
   );
+
+  // Invalidate any pending overwrite confirmation as soon as input, output target, or any
+  // conversion parameter changes so authorization for document A can never apply to document B.
+  useEffect(() => {
+    setOverwritePending((pending) => {
+      if (!pending) return null;
+      return requestMatchesState(pending, st) ? pending : null;
+    });
+  }, [
+    st,
+    st.sourcePath,
+    st.inspectResult?.inspection.path,
+    st.outputPath,
+    st.scope,
+    st.pageRange,
+    st.skipExistingTextPages,
+    st.ocrDpi,
+    st.maxSideLen,
+  ]);
 
   // Consume handoff from C08 "转为可搜索 PDF (P04)"
   useEffect(() => {
@@ -257,14 +310,13 @@ export function PdfSearchableWorkspace() {
     return { selected: selectedSet.size, willOcr, willSkipExisting };
   }, [rangeCheck.pages, rangeCheck.valid, st.inspectResult, st.skipExistingTextPages]);
 
-  const runConversion = useCallback(
-    async (overwrite: boolean) => {
+  const executeConversion = useCallback(
+    async (req: PendingOverwriteRequest, overwrite: boolean) => {
       const cur = stateRef.current;
       if (
         cur.taskStatus === "running" ||
-        !cur.inspectResult ||
-        !cur.outputPath.trim() ||
-        cur.engineStatus?.ready === false
+        cur.engineStatus?.ready === false ||
+        !requestMatchesState(req, cur)
       ) {
         return;
       }
@@ -277,7 +329,7 @@ export function PdfSearchableWorkspace() {
           taskId,
           toolId: "P04",
           current: 0,
-          total: planSummary.selected || prev.inspectResult?.inspection.pageCount || 1,
+          total: req.selectedPageCount,
           percent: 2,
           detail: zh ? "正在检查页面文字层…" : "Inspecting page text layers...",
         },
@@ -288,12 +340,12 @@ export function PdfSearchableWorkspace() {
 
       try {
         const res = await makePdfSearchable(taskId, {
-          inputPath: cur.inspectResult.inspection.path,
-          outputPath: cur.outputPath.trim(),
-          pageRange: cur.scope === "range" ? cur.pageRange.trim() : null,
-          skipExistingTextPages: cur.skipExistingTextPages,
-          ocrDpi: cur.ocrDpi,
-          maxSideLen: cur.maxSideLen,
+          inputPath: req.inputPath,
+          outputPath: req.outputPath,
+          pageRange: req.scope === "range" ? req.pageRange : null,
+          skipExistingTextPages: req.skipExistingTextPages,
+          ocrDpi: req.ocrDpi,
+          maxSideLen: req.maxSideLen,
           overwrite,
         });
 
@@ -319,7 +371,9 @@ export function PdfSearchableWorkspace() {
             activeTaskId: null,
             progress: null,
           }));
-          setOverwritePending(cur.outputPath.trim());
+          if (requestMatchesState(req, stateRef.current)) {
+            setOverwritePending(req);
+          }
           return;
         }
         if (parsed.code === "TASK_CANCELLED") {
@@ -343,8 +397,32 @@ export function PdfSearchableWorkspace() {
         }
       }
     },
-    [planSummary.selected, t, updateSearchablePdfSession, zh],
+    [t, updateSearchablePdfSession, zh],
   );
+
+  const runConversion = useCallback(async () => {
+    const cur = stateRef.current;
+    if (
+      cur.taskStatus === "running" ||
+      !cur.inspectResult ||
+      !cur.outputPath.trim() ||
+      cur.engineStatus?.ready === false
+    ) {
+      return;
+    }
+    const boundRequest: PendingOverwriteRequest = {
+      inputPath: cur.inspectResult.inspection.path,
+      inputFileName: cur.inspectResult.inspection.fileName,
+      outputPath: cur.outputPath.trim(),
+      scope: cur.scope,
+      pageRange: cur.pageRange.trim(),
+      skipExistingTextPages: cur.skipExistingTextPages,
+      ocrDpi: cur.ocrDpi,
+      maxSideLen: cur.maxSideLen,
+      selectedPageCount: planSummary.selected || cur.inspectResult.inspection.pageCount || 1,
+    };
+    await executeConversion(boundRequest, false);
+  }, [executeConversion, planSummary.selected]);
 
   const handleCancel = useCallback(async () => {
     const tid = stateRef.current.activeTaskId;
@@ -354,11 +432,14 @@ export function PdfSearchableWorkspace() {
 
   const handleClear = useCallback(() => {
     if (stateRef.current.taskStatus === "running") return;
+    loadSeqRef.current += 1;
+    setOverwritePending(null);
     setThumbDataUrl(null);
     updateSearchablePdfSession((prev) => ({
       ...prev,
       sourcePath: null,
       inspectResult: null,
+      inspectLoading: false,
       encryptedError: false,
       scope: "all",
       pageRange: "",
@@ -824,7 +905,7 @@ export function PdfSearchableWorkspace() {
                     type="button"
                     className="btn btn-primary"
                     disabled={!canStart}
-                    onClick={() => void runConversion(false)}
+                    onClick={() => void runConversion()}
                   >
                     <Save size={15} strokeWidth={1.75} aria-hidden="true" />
                     <span>{zh ? "开始离线识别并另存 PDF" : "Make Searchable PDF"}</span>
@@ -892,15 +973,18 @@ export function PdfSearchableWorkspace() {
           title={zh ? "覆盖已有文件？" : "Overwrite Existing File?"}
           body={
             zh
-              ? `目标文件已存在：${overwritePending}\n确认覆盖吗？`
-              : `Output file already exists:\n${overwritePending}\nOverwrite it?`
+              ? `来源文档：${overwritePending.inputFileName}\n目标文件已存在：${overwritePending.outputPath}\n确认按当前设置覆盖该文件吗？`
+              : `Source document: ${overwritePending.inputFileName}\nOutput file already exists:\n${overwritePending.outputPath}\nOverwrite it with the current settings?`
           }
           confirmLabel={zh ? "确认覆盖" : "Overwrite"}
           cancelLabel={zh ? "取消" : "Cancel"}
           onCancel={() => setOverwritePending(null)}
           onConfirm={() => {
+            const bound = overwritePending;
             setOverwritePending(null);
-            void runConversion(true);
+            if (requestMatchesState(bound, stateRef.current)) {
+              void executeConversion(bound, true);
+            }
           }}
         />
       )}

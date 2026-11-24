@@ -13,7 +13,9 @@
 
 use crate::error::AppError;
 use crate::fs_guard::validate_existing_input_file;
-use crate::ocr_core::{OcrPageResult, OcrPoint, OcrRecognizeOptions, DEFAULT_DET_LIMIT_SIDE};
+use crate::ocr_core::{
+    oriented_reading_quad, OcrPageResult, OcrPoint, OcrRecognizeOptions, DEFAULT_DET_LIMIT_SIDE,
+};
 use crate::ocr_worker::{OcrSessionManager, OcrWorkerRequest, OcrWorkerResponse};
 use crate::pdf_annotate::resolve_page_frame;
 use crate::pdf_core::{
@@ -659,69 +661,198 @@ fn fmt_num(v: f64) -> String {
     }
 }
 
-fn emit_quad_token_ops(
+fn emit_line_tj_ops(
     ops: &mut String,
     font_res_name: &str,
-    token: &str,
-    quad_px: &[OcrPoint; 4],
+    line: &crate::ocr_core::OcrTextLine,
     d2p: &PdfDeviceToPageTransform,
     cid_by_char: &HashMap<char, u16>,
 ) -> bool {
-    let mut hex = String::with_capacity(token.chars().count() * 4);
-    let mut width_units_sum = 0u64;
-    for ch in token.chars() {
-        if ch.is_control() {
-            continue;
-        }
-        let Some(&cid) = cid_by_char.get(&ch) else {
-            continue;
-        };
-        hex.push_str(&format!("{cid:04X}"));
-        width_units_sum += u64::from(cid_width_units(ch));
-    }
-    if hex.is_empty() || width_units_sum == 0 {
-        return false;
-    }
+    let line_reading_quad = line.reading_quad_px.unwrap_or_else(|| {
+        oriented_reading_quad(&line.quad_px, line.vertical_rotated, line.rotated_180)
+    });
 
-    // Map all 4 device-pixel corners [TL, TR, BR, BL] into PDF page user space via `FPDF_DeviceToPage`.
-    let p0 = d2p.map_device_point(f64::from(quad_px[0].x), f64::from(quad_px[0].y));
-    let p1 = d2p.map_device_point(f64::from(quad_px[1].x), f64::from(quad_px[1].y));
-    let p2 = d2p.map_device_point(f64::from(quad_px[2].x), f64::from(quad_px[2].y));
-    let p3 = d2p.map_device_point(f64::from(quad_px[3].x), f64::from(quad_px[3].y));
+    // Map all 4 device-pixel corners ordered in true reading orientation
+    // `[read_TL, read_TR, read_BR, read_BL]` into PDF page user space via `FPDF_DeviceToPage`.
+    let p0 = d2p.map_device_point(
+        f64::from(line_reading_quad[0].x),
+        f64::from(line_reading_quad[0].y),
+    );
+    let p1 = d2p.map_device_point(
+        f64::from(line_reading_quad[1].x),
+        f64::from(line_reading_quad[1].y),
+    );
+    let p2 = d2p.map_device_point(
+        f64::from(line_reading_quad[2].x),
+        f64::from(line_reading_quad[2].y),
+    );
+    let p3 = d2p.map_device_point(
+        f64::from(line_reading_quad[3].x),
+        f64::from(line_reading_quad[3].y),
+    );
 
-    // Reading-direction baseline vector along bottom edge P3 -> P2 (averaged with P0 -> P1 for robustness).
+    // Reading-direction baseline vector along `read_BL -> read_BR` (averaged with `read_TL -> read_TR`).
     let bx = 0.5 * ((p2.0 - p3.0) + (p1.0 - p0.0));
     let by = 0.5 * ((p2.1 - p3.1) + (p1.1 - p0.1));
-    let span_len = bx.hypot(by);
+    let line_len = bx.hypot(by);
 
-    // Upward ascent vector along left edge P3 -> P0 (averaged with P2 -> P1).
+    // Upward glyph ascent vector along `read_BL -> read_TL` (averaged with `read_BR -> read_TR`).
     let vx = 0.5 * ((p0.0 - p3.0) + (p1.0 - p2.0));
     let vy = 0.5 * ((p0.1 - p3.1) + (p1.1 - p2.1));
-    let span_height = vx.hypot(vy);
+    let line_height = vx.hypot(vy);
 
-    if span_len < 0.25 || span_height < 0.25 || !span_len.is_finite() || !span_height.is_finite() {
+    if line_len < 0.25 || line_height < 0.25 || !line_len.is_finite() || !line_height.is_finite() {
         return false;
     }
 
-    let ux = bx / span_len;
-    let uy = by / span_len;
-    let hx = vx / span_height;
-    let hy = vy / span_height;
+    let ux = bx / line_len;
+    let uy = by / line_len;
+    let hx = vx / line_height;
+    let hy = vy / line_height;
 
     // Glyphless font metrics: ascent = 880, descent = -120 (total em = 1000).
-    // Place text baseline 12% up from bottom edge P3 so glyphs cover exactly [P3..P0] x [P3..P2].
+    // Place text baseline 12% up from bottom edge `read_BL` so glyphs cover [read_BL..read_TL] x [read_BL..read_BR].
     let origin_x = p3.0 + 0.12 * vx;
     let origin_y = p3.1 + 0.12 * vy;
+    let font_size = line_height.clamp(0.5, 2000.0);
 
-    let font_size = span_height.clamp(0.5, 2000.0);
-    let natural_width = font_size * (width_units_sum as f64 / 1000.0);
+    let encode_token = |s: &str| -> (String, u64) {
+        let mut hex = String::with_capacity(s.chars().count() * 4);
+        let mut units = 0u64;
+        for ch in s.chars() {
+            if ch.is_control() {
+                continue;
+            }
+            if let Some(&cid) = cid_by_char.get(&ch) {
+                hex.push_str(&format!("{cid:04X}"));
+                units += u64::from(cid_width_units(ch));
+            }
+        }
+        (hex, units)
+    };
+
+    // Emit the entire `OcrTextLine` as ONE single `Tm ... TJ` PDF text object so viewers
+    // (PDFium, Chrome, Edge, Acrobat) NEVER split or reorder adjacent spans on rotated /
+    // 180° upside-down lines while preserving exact per-span CTC positioning via `TJ` kerning.
+    if line.spans.is_empty() {
+        let (hex, width_units_sum) = encode_token(line.text.trim());
+        if hex.is_empty() || width_units_sum == 0 {
+            return false;
+        }
+        let natural_width = font_size * (width_units_sum as f64 / 1000.0);
+        if natural_width <= 1e-6 {
+            return false;
+        }
+        let tz = ((line_len / natural_width) * 100.0).clamp(5.0, 2000.0);
+        ops.push_str(&format!(
+            "/{font_res_name} {} Tf {} Tz {} {} {} {} {} {} Tm <{hex}> Tj\n",
+            fmt_num(font_size),
+            fmt_num(tz),
+            fmt_num(ux),
+            fmt_num(uy),
+            fmt_num(hx),
+            fmt_num(hy),
+            fmt_num(origin_x),
+            fmt_num(origin_y),
+        ));
+        return true;
+    }
+
+    struct EncodedSpan {
+        hex: String,
+        units: u64,
+        start_along: f64,
+        has_leading_space: bool,
+    }
+
+    let line_chars: Vec<char> = line.text.chars().collect();
+    let space_cid = cid_by_char.get(&' ').copied();
+    let space_units = u64::from(cid_width_units(' '));
+
+    let mut encoded_spans: Vec<EncodedSpan> = Vec::with_capacity(line.spans.len());
+    let mut prev_end: usize = 0;
+    let mut total_units: u64 = 0;
+
+    for span in &line.spans {
+        let (hex, units) = encode_token(&span.text);
+        if hex.is_empty() || units == 0 {
+            continue;
+        }
+        let sq = span.reading_quad_px.unwrap_or_else(|| {
+            let raw_q = span.quad_px.unwrap_or_else(|| quad_from_bbox(span.bbox_px));
+            oriented_reading_quad(&raw_q, line.vertical_rotated, line.rotated_180)
+        });
+        let sp_bl = d2p.map_device_point(f64::from(sq[3].x), f64::from(sq[3].y));
+        let start_along = ((sp_bl.0 - p3.0) * ux + (sp_bl.1 - p3.1) * uy).clamp(0.0, line_len);
+        let has_leading_space = !encoded_spans.is_empty()
+            && prev_end < span.char_start
+            && span.char_start <= line_chars.len()
+            && line_chars[prev_end..span.char_start]
+                .iter()
+                .any(|c| c.is_whitespace());
+        if has_leading_space && space_cid.is_some() {
+            total_units += space_units;
+        }
+        total_units += units;
+        encoded_spans.push(EncodedSpan {
+            hex,
+            units,
+            start_along,
+            has_leading_space,
+        });
+        prev_end = span.char_end;
+    }
+
+    if encoded_spans.is_empty() || total_units == 0 {
+        return false;
+    }
+
+    let natural_width = font_size * (total_units as f64 / 1000.0);
     if natural_width <= 1e-6 {
         return false;
     }
-    let tz = ((span_len / natural_width) * 100.0).clamp(5.0, 2000.0);
+    let tz = ((line_len / natural_width) * 100.0).clamp(5.0, 2000.0);
+    let pt_per_unit = (font_size * (tz / 100.0)) / 1000.0;
+
+    let mut tj_items = String::with_capacity(line.text.len() * 5 + 32);
+    let mut cur_along = 0.0f64;
+
+    for (idx, sp) in encoded_spans.iter().enumerate() {
+        if sp.has_leading_space {
+            if let Some(scid) = space_cid {
+                tj_items.push_str(&format!("<{scid:04X}> "));
+                cur_along += (space_units as f64) * pt_per_unit;
+            }
+        }
+        // Apply gentle non-overlapping kerning to track CTC span boundaries on wide-gap lines
+        // without ever pulling backward over previous characters or faking spaces where none exist.
+        if idx > 0 && pt_per_unit > 1e-6 {
+            let delta_pt = sp.start_along - cur_along;
+            let max_pull = if sp.has_leading_space {
+                (space_units as f64) * pt_per_unit * 0.6
+            } else {
+                font_size * 0.15
+            };
+            let max_push = if sp.has_leading_space {
+                line_len * 0.35
+            } else {
+                // Keep non-space CJK/ASCII boundary adjustments tight (< 120 em units) so PDFium
+                // never synthesizes a false space between contiguous spans.
+                100.0 * pt_per_unit
+            };
+            let clamped_pt = delta_pt.clamp(-max_pull, max_push);
+            let adj_em = -(clamped_pt / pt_per_unit);
+            if adj_em.abs() >= 10.0 && adj_em.is_finite() {
+                tj_items.push_str(&format!("{} ", fmt_num(adj_em)));
+                cur_along += clamped_pt;
+            }
+        }
+        tj_items.push_str(&format!("<{}> ", sp.hex));
+        cur_along += (sp.units as f64) * pt_per_unit;
+    }
 
     ops.push_str(&format!(
-        "/{font_res_name} {} Tf {} Tz {} {} {} {} {} {} Tm <{hex}> Tj\n",
+        "/{font_res_name} {} Tf {} Tz {} {} {} {} {} {} Tm [{}] TJ\n",
         fmt_num(font_size),
         fmt_num(tz),
         fmt_num(ux),
@@ -730,6 +861,7 @@ fn emit_quad_token_ops(
         fmt_num(hy),
         fmt_num(origin_x),
         fmt_num(origin_y),
+        tj_items.trim_end(),
     ));
     true
 }
@@ -752,15 +884,6 @@ fn quad_from_bbox(b: crate::ocr_core::OcrBoundingBox) -> [OcrPoint; 4] {
     ]
 }
 
-fn gap_quad_between(prev: &[OcrPoint; 4], next: &[OcrPoint; 4]) -> Option<[OcrPoint; 4]> {
-    let dx = next[0].x - prev[1].x;
-    let dy = next[0].y - prev[1].y;
-    if dx.hypot(dy) < 0.5 {
-        return None;
-    }
-    Some([prev[1], next[0], next[3], prev[2]])
-}
-
 /// Builds a self-contained invisible PDF text content stream (`q BT 3 Tr ... ET Q`) for one OCR'd page.
 pub fn build_page_invisible_text_stream(
     page_ocr: &OcrPageResult,
@@ -777,55 +900,8 @@ pub fn build_page_invisible_text_stream(
         if line.text.trim().is_empty() {
             continue;
         }
-        if line.spans.is_empty() {
-            if emit_quad_token_ops(
-                &mut ops,
-                font_res_name,
-                line.text.trim(),
-                &line.quad_px,
-                d2p,
-                cid_by_char,
-            ) {
-                emitted_any = true;
-            }
-            continue;
-        }
-
-        let line_chars: Vec<char> = line.text.chars().collect();
-        let mut prev_quad: Option<[OcrPoint; 4]> = None;
-        let mut prev_end: usize = 0;
-
-        for span in &line.spans {
-            let sq = span.quad_px.unwrap_or_else(|| quad_from_bbox(span.bbox_px));
-
-            // Bridge explicit inter-token whitespace so viewers preserve word boundaries
-            // during phrase search and copy/paste without fusing adjacent ASCII words.
-            if let Some(pq) = prev_quad {
-                let gap_slice = if prev_end < span.char_start && span.char_start <= line_chars.len()
-                {
-                    &line_chars[prev_end..span.char_start]
-                } else {
-                    &[]
-                };
-                if gap_slice.iter().any(|c| c.is_whitespace()) {
-                    if let Some(gq) = gap_quad_between(&pq, &sq) {
-                        let _ = emit_quad_token_ops(
-                            &mut ops,
-                            font_res_name,
-                            " ",
-                            &gq,
-                            d2p,
-                            cid_by_char,
-                        );
-                    }
-                }
-            }
-
-            if emit_quad_token_ops(&mut ops, font_res_name, &span.text, &sq, d2p, cid_by_char) {
-                emitted_any = true;
-                prev_quad = Some(sq);
-                prev_end = span.char_end;
-            }
+        if emit_line_tj_ops(&mut ops, font_res_name, line, d2p, cid_by_char) {
+            emitted_any = true;
         }
     }
 
@@ -1000,10 +1076,35 @@ pub fn make_pdf_searchable_impl<F>(
     ocr_mgr: &OcrSessionManager,
     req: &MakePdfSearchableRequest,
     cancel_flag: &Arc<AtomicBool>,
-    mut emit_progress: F,
+    emit_progress: F,
 ) -> Result<MakePdfSearchableResult, AppError>
 where
     F: FnMut(PdfTaskProgressPayload),
+{
+    make_pdf_searchable_with_save_hook(
+        task_id,
+        pdf_mgr,
+        ocr_mgr,
+        req,
+        cancel_flag,
+        emit_progress,
+        || {},
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_pdf_searchable_with_save_hook<F, H>(
+    task_id: &str,
+    pdf_mgr: &PdfSessionManager,
+    ocr_mgr: &OcrSessionManager,
+    req: &MakePdfSearchableRequest,
+    cancel_flag: &Arc<AtomicBool>,
+    mut emit_progress: F,
+    after_save_before_commit: H,
+) -> Result<MakePdfSearchableResult, AppError>
+where
+    F: FnMut(PdfTaskProgressPayload),
+    H: FnOnce(),
 {
     let t0 = Instant::now();
     let (canonical, mut doc, had_signatures, signature_count) =
@@ -1047,6 +1148,9 @@ where
 
     let canonical_str = canonical.to_string_lossy().into_owned();
     let text_summaries = pdf_mgr.inspect_pages_text(&canonical_str)?;
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
     let summary_by_page: HashMap<usize, &PdfPageTextSummary> =
         text_summaries.iter().map(|s| (s.page_number, s)).collect();
 
@@ -1359,6 +1463,10 @@ where
             format!("Failed to write searchable PDF output: {e}"),
         )
     })?;
+    after_save_before_commit();
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
     let (final_path, output_bytes) = atomic_out.commit_existing_tmp()?;
 
     let mut pages_out = Vec::with_capacity(total_pages);
@@ -1403,7 +1511,8 @@ mod tests {
         images_to_pdf_impl, ImagesToPdfRequest, PdfPageOrientation, PdfPageSizePreset,
     };
     use crate::pdf_pdfium::{
-        extract_page_text_with_pdfium, render_page_rgba_with_pdfium, search_document_with_pdfium,
+        extract_page_char_rects_with_pdfium, extract_page_text_with_pdfium,
+        render_page_rgba_with_pdfium, search_document_with_pdfium, PdfNormalizedRect,
     };
     use sha2::{Digest, Sha256};
     use std::fs;
@@ -2097,5 +2206,468 @@ mod tests {
         .expect("signed pdf searchable");
         assert!(sig_res.had_signatures);
         assert!(sig_res.warnings.iter().any(|w| w.contains("signature")));
+    }
+
+    #[test]
+    fn p04_cancel_during_doc_save_preserves_existing_target_hash_and_cleans_tmp() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("ocr_bilingual_sample.png");
+        assert!(fixture.is_file(), "Missing fixture {}", fixture.display());
+
+        let dir = tempdir().expect("tempdir");
+        let input_pdf = dir.path().join("scan_input.pdf");
+        let no_cancel = AtomicBool::new(false);
+        images_to_pdf_impl(
+            &ImagesToPdfRequest {
+                task_id: None,
+                image_paths: vec![fixture.to_string_lossy().into_owned()],
+                output_path: input_pdf.to_string_lossy().into_owned(),
+                overwrite: Some(true),
+                page_size: PdfPageSizePreset::Original,
+                orientation: PdfPageOrientation::Auto,
+                margin_pt: 0.0,
+                background_hex: "#FFFFFF".to_string(),
+                jpeg_quality: None,
+                lossless_png_images: Some(true),
+                assumed_dpi: Some(150.0),
+            },
+            &no_cancel,
+            |_| {},
+        )
+        .expect("create input pdf");
+        let input_sha_before = sha256_file(&input_pdf);
+
+        // Pre-populate an existing target file so overwrite=true must NOT clobber it if cancel arrives during doc.save().
+        let existing_target = dir.path().join("existing_target.pdf");
+        fs::write(
+            &existing_target,
+            b"%PDF-1.4\n% sentinel-target-bytes-must-survive-cancel\n%%EOF\n",
+        )
+        .expect("write sentinel target");
+        let target_sha_before = sha256_file(&existing_target);
+
+        let pdf_mgr = PdfSessionManager::default();
+        let ocr_mgr = OcrSessionManager::default();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let cancel_during_save = Arc::clone(&cancel_flag);
+
+        let err = make_pdf_searchable_with_save_hook(
+            "p04-cancel-during-save",
+            &pdf_mgr,
+            &ocr_mgr,
+            &MakePdfSearchableRequest {
+                input_path: input_pdf.to_string_lossy().into_owned(),
+                output_path: existing_target.to_string_lossy().into_owned(),
+                page_range: None,
+                skip_existing_text_pages: true,
+                ocr_dpi: 200.0,
+                max_side_len: 1280,
+                overwrite: true,
+                max_side_cap_override: None,
+            },
+            &cancel_flag,
+            |_| {},
+            move || {
+                // Simulate user cancelling while `doc.save()` was serializing the `.tmp` file.
+                cancel_during_save.store(true, Ordering::SeqCst);
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "TASK_CANCELLED");
+        assert_eq!(
+            sha256_file(&existing_target),
+            target_sha_before,
+            "Existing target file must remain byte-for-byte unchanged when cancelled during doc.save()"
+        );
+        assert_eq!(
+            sha256_file(&input_pdf),
+            input_sha_before,
+            "Source PDF must remain untouched"
+        );
+        let leftover_tmps: Vec<_> = fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(
+            leftover_tmps.is_empty(),
+            "All temporary files must be deleted after post-save cancellation: {leftover_tmps:?}"
+        );
+    }
+
+    /// Finds the contiguous sequence of `(char, PdfNormalizedRect)` matching `needle` in PDFium's
+    /// extracted character stream (exact copy/selection order).
+    fn find_char_rects_for_token(
+        chars: &[(char, PdfNormalizedRect)],
+        needle: &str,
+    ) -> Option<Vec<(char, PdfNormalizedRect)>> {
+        let target: Vec<char> = needle.chars().collect();
+        if target.is_empty() || chars.len() < target.len() {
+            return None;
+        }
+        for i in 0..=(chars.len() - target.len()) {
+            if (0..target.len()).all(|j| chars[i + j].0 == target[j]) {
+                return Some(chars[i..i + target.len()].to_vec());
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn p04_rotated_text_per_char_selection_search_and_copy_order_for_page_rotate_and_baked_bitmap()
+    {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("ocr_bilingual_sample.png");
+        assert!(fixture.is_file(), "Missing fixture {}", fixture.display());
+
+        let base_rgb = image::open(&fixture)
+            .expect("open bilingual fixture")
+            .to_rgb8();
+        let rot90_cw_rgb = image::imageops::rotate90(&base_rgb);
+        let rot180_rgb = image::imageops::rotate180(&base_rgb);
+        let rot270_cw_rgb = image::imageops::rotate270(&base_rgb);
+
+        let dir = tempdir().expect("tempdir");
+        let input_pdf = dir.path().join("p04_rotated_text_suite.pdf");
+
+        // Build a 6-page PDF covering BOTH classes of rotated text:
+        // Class 1 — PDF `/Rotate` dictionary rotation (visual upright after viewer applies /Rotate):
+        //   Page 1: /Rotate 90
+        //   Page 2: /Rotate 180
+        //   Page 3: /Rotate 270
+        // Class 2 — `/Rotate = 0` scanned pages where text is physically rotated into the bitmap:
+        //   Page 4: /Rotate 0 + 90° CW baked bitmap (vertical text reading top-to-bottom)
+        //   Page 5: /Rotate 0 + 180° baked bitmap (upside-down horizontal text reading right-to-left)
+        //   Page 6: /Rotate 0 + 270° CW (90° CCW) baked bitmap (vertical text reading bottom-to-top)
+        let mut doc = Document::with_version("1.5");
+        let root_pages_id = doc.new_object_id();
+
+        let add_rgb_xobj = |doc: &mut Document, img: &image::RgbImage| -> ObjectId {
+            let compressed = zlib_compress(img.as_raw()).expect("compress rgb");
+            let mut img_dict = Dictionary::new();
+            img_dict.set("Type", Object::Name(b"XObject".to_vec()));
+            img_dict.set("Subtype", Object::Name(b"Image".to_vec()));
+            img_dict.set("Width", Object::Integer(i64::from(img.width())));
+            img_dict.set("Height", Object::Integer(i64::from(img.height())));
+            img_dict.set("ColorSpace", Object::Name(b"DeviceRGB".to_vec()));
+            img_dict.set("BitsPerComponent", Object::Integer(8));
+            img_dict.set("Filter", Object::Name(b"FlateDecode".to_vec()));
+            let img_id = doc.add_object(Object::Stream(Stream::new(img_dict, compressed)));
+            let mut xobjs = Dictionary::new();
+            xobjs.set("Im0", Object::Reference(img_id));
+            let mut res = Dictionary::new();
+            res.set("XObject", Object::Dictionary(xobjs));
+            doc.add_object(Object::Dictionary(res))
+        };
+
+        let res_base = add_rgb_xobj(&mut doc, &base_rgb);
+        let res_rot90 = add_rgb_xobj(&mut doc, &rot90_cw_rgb);
+        let res_rot180 = add_rgb_xobj(&mut doc, &rot180_rgb);
+        let res_rot270 = add_rgb_xobj(&mut doc, &rot270_cw_rgb);
+
+        let add_page = |doc: &mut Document,
+                        res_id: ObjectId,
+                        media: [f32; 4],
+                        rotate: Option<i64>,
+                        draw_rect: [f32; 4],
+                        draw_rot_cw: u16|
+         -> ObjectId {
+            let [x0, y0, x1, y1] = draw_rect;
+            let w = x1 - x0;
+            let h = y1 - y0;
+            let ctm = match draw_rot_cw {
+                90 => format!("0 {h} -{w} 0 {x1} {y0} cm"),
+                180 => format!("-{w} 0 0 -{h} {x1} {y1} cm"),
+                270 => format!("0 -{h} {w} 0 {x0} {y1} cm"),
+                _ => format!("{w} 0 0 {h} {x0} {y0} cm"),
+            };
+            let ops = format!("q\n{ctm}\n/Im0 Do\nQ\n");
+            let cid = doc.add_object(Object::Stream(Stream::new(
+                Dictionary::new(),
+                ops.into_bytes(),
+            )));
+            let mut p = Dictionary::new();
+            p.set("Type", Object::Name(b"Page".to_vec()));
+            p.set("Parent", Object::Reference(root_pages_id));
+            p.set(
+                "MediaBox",
+                Object::Array(media.into_iter().map(Object::Real).collect()),
+            );
+            if let Some(r) = rotate {
+                p.set("Rotate", Object::Integer(r));
+            }
+            p.set("Resources", Object::Reference(res_id));
+            p.set("Contents", Object::Reference(cid));
+            doc.add_object(Object::Dictionary(p))
+        };
+
+        // Class 1: PDF /Rotate 90, 180, 270
+        let p1 = add_page(
+            &mut doc,
+            res_base,
+            [0.0, 0.0, 300.0, 600.0],
+            Some(90),
+            [40.0, 30.0, 260.0, 570.0],
+            90,
+        );
+        let p2 = add_page(
+            &mut doc,
+            res_base,
+            [0.0, 0.0, 600.0, 300.0],
+            Some(180),
+            [30.0, 40.0, 570.0, 260.0],
+            180,
+        );
+        let p3 = add_page(
+            &mut doc,
+            res_base,
+            [0.0, 0.0, 300.0, 600.0],
+            Some(270),
+            [40.0, 30.0, 260.0, 570.0],
+            270,
+        );
+        // Class 2: /Rotate=0 with 90° CW, 180°, 270° CW baked into bitmap
+        let p4 = add_page(
+            &mut doc,
+            res_rot90,
+            [0.0, 0.0, 300.0, 600.0],
+            None,
+            [40.0, 30.0, 260.0, 570.0],
+            0,
+        );
+        let p5 = add_page(
+            &mut doc,
+            res_rot180,
+            [0.0, 0.0, 600.0, 300.0],
+            None,
+            [30.0, 40.0, 570.0, 260.0],
+            0,
+        );
+        let p6 = add_page(
+            &mut doc,
+            res_rot270,
+            [0.0, 0.0, 300.0, 600.0],
+            None,
+            [40.0, 30.0, 260.0, 570.0],
+            0,
+        );
+
+        let mut root_pages = Dictionary::new();
+        root_pages.set("Type", Object::Name(b"Pages".to_vec()));
+        root_pages.set(
+            "Kids",
+            Object::Array(vec![
+                Object::Reference(p1),
+                Object::Reference(p2),
+                Object::Reference(p3),
+                Object::Reference(p4),
+                Object::Reference(p5),
+                Object::Reference(p6),
+            ]),
+        );
+        root_pages.set("Count", Object::Integer(6));
+        doc.objects
+            .insert(root_pages_id, Object::Dictionary(root_pages));
+
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", Object::Reference(root_pages_id));
+        let catalog_id = doc.add_object(Object::Dictionary(catalog));
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+        doc.save(&input_pdf).expect("save rotated fixture pdf");
+
+        let out_pdf = dir.path().join("p04_rotated_text_searchable.pdf");
+        let pdf_mgr = PdfSessionManager::default();
+        let ocr_mgr = OcrSessionManager::default();
+        let res = make_pdf_searchable_impl(
+            "p04-rotated-selection",
+            &pdf_mgr,
+            &ocr_mgr,
+            &MakePdfSearchableRequest {
+                input_path: input_pdf.to_string_lossy().into_owned(),
+                output_path: out_pdf.to_string_lossy().into_owned(),
+                page_range: None,
+                skip_existing_text_pages: true,
+                ocr_dpi: 200.0,
+                max_side_len: 1280,
+                overwrite: true,
+                max_side_cap_override: None,
+            },
+            &Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .expect("run p04 on rotated suite");
+        assert_eq!(res.ocr_applied_pages, 6);
+
+        // Whole-word search must hit multi-character tokens on ALL 6 pages (both /Rotate and baked-in bitmap rotations).
+        let search_zh =
+            search_document_with_pdfium(None, &out_pdf, "离线文字识别", false).expect("search zh");
+        let search_en =
+            search_document_with_pdfium(None, &out_pdf, "WinKit", false).expect("search en");
+
+        for page_num in 1usize..=6 {
+            let page_txt =
+                extract_page_text_with_pdfium(None, &out_pdf, page_num).expect("extract text");
+            assert!(
+                page_txt.full_text.contains("WinKit"),
+                "Page {page_num} copy order missing 'WinKit'; full_text={:?}",
+                page_txt.full_text
+            );
+            assert!(
+                page_txt.full_text.contains("离线文字识别"),
+                "Page {page_num} copy order missing '离线文字识别'; full_text={:?}",
+                page_txt.full_text
+            );
+            assert!(
+                search_en.matches.iter().any(|m| m.page_number == page_num),
+                "Page {page_num} whole-word search failed for 'WinKit'"
+            );
+            assert!(
+                search_zh.matches.iter().any(|m| m.page_number == page_num),
+                "Page {page_num} whole-word search failed for '离线文字识别'"
+            );
+        }
+
+        // Now verify PER-CHARACTER selection boxes inside multi-character tokens ("WinKit" & "离线文字识别"):
+        // Pages 1..=3 (/Rotate 90/180/270): visual upright -> characters advance left-to-right (increasing center_x, same row y).
+        for page_num in [1usize, 2, 3] {
+            let chars =
+                extract_page_char_rects_with_pdfium(None, &out_pdf, page_num).expect("char rects");
+            for token in ["WinKit", "离线文字识别"] {
+                let seq = find_char_rects_for_token(&chars, token).unwrap_or_else(|| {
+                    panic!("Page {page_num} missing char rects for token {token:?}")
+                });
+                let first_cy = seq[0].1.top + 0.5 * seq[0].1.height;
+                for w in seq.windows(2) {
+                    let cx0 = w[0].1.left + 0.5 * w[0].1.width;
+                    let cx1 = w[1].1.left + 0.5 * w[1].1.width;
+                    let cy1 = w[1].1.top + 0.5 * w[1].1.height;
+                    assert!(
+                        cx1 > cx0 + 0.002,
+                        "Page {page_num} (/Rotate) token {token:?} char '{}' -> '{}' did not advance L->R: {:?} vs {:?}",
+                        w[0].0,
+                        w[1].0,
+                        w[0].1,
+                        w[1].1
+                    );
+                    assert!(
+                        (cy1 - first_cy).abs() < 0.04,
+                        "Page {page_num} (/Rotate) token {token:?} char '{}' drifted vertically: {:?}",
+                        w[1].0,
+                        w[1].1
+                    );
+                }
+            }
+        }
+
+        // Page 4 (/Rotate=0, 90° CW baked bitmap): vertical reading TOP-TO-BOTTOM -> increasing center_y, same column x!
+        {
+            let chars =
+                extract_page_char_rects_with_pdfium(None, &out_pdf, 4).expect("p4 char rects");
+            for token in ["WinKit", "离线文字识别"] {
+                let seq = find_char_rects_for_token(&chars, token)
+                    .unwrap_or_else(|| panic!("Page 4 missing char rects for {token:?}"));
+                let first_cx = seq[0].1.left + 0.5 * seq[0].1.width;
+                for w in seq.windows(2) {
+                    let cy0 = w[0].1.top + 0.5 * w[0].1.height;
+                    let cy1 = w[1].1.top + 0.5 * w[1].1.height;
+                    let cx1 = w[1].1.left + 0.5 * w[1].1.width;
+                    assert!(
+                        cy1 > cy0 + 0.002,
+                        "Page 4 (baked 90° CW) token {token:?} char '{}' -> '{}' did not advance Top->Bottom: {:?} vs {:?}",
+                        w[0].0,
+                        w[1].0,
+                        w[0].1,
+                        w[1].1
+                    );
+                    assert!(
+                        (cx1 - first_cx).abs() < 0.05,
+                        "Page 4 (baked 90° CW) token {token:?} char '{}' drifted horizontally out of vertical column: {:?}",
+                        w[1].0,
+                        w[1].1
+                    );
+                }
+            }
+        }
+
+        // Page 5 (/Rotate=0, 180° baked bitmap): upside-down horizontal reading RIGHT-TO-LEFT -> decreasing center_x, same row y!
+        // Also verify cross-span order: "WinKit" precedes "离线文字识别" in PDFium's char stream so dragging
+        // from 'W' to '试' in Chrome/Edge selects the full line without PDFium reordering adjacent spans!
+        {
+            let chars =
+                extract_page_char_rects_with_pdfium(None, &out_pdf, 5).expect("p5 char rects");
+            let joined_no_ws: String = chars
+                .iter()
+                .map(|(c, _)| *c)
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            let pos_wk = joined_no_ws.find("WinKit").expect("Page 5 missing WinKit");
+            let pos_zh = joined_no_ws
+                .find("离线文字识别")
+                .expect("Page 5 missing 离线文字识别");
+            assert!(
+                pos_wk < pos_zh,
+                "Page 5 (baked 180°) span order inverted in PDFium (pos_wk={pos_wk}, pos_zh={pos_zh}, text={joined_no_ws:?})"
+            );
+            for token in ["WinKit", "离线文字识别"] {
+                let seq = find_char_rects_for_token(&chars, token)
+                    .unwrap_or_else(|| panic!("Page 5 missing char rects for {token:?}"));
+                let first_cy = seq[0].1.top + 0.5 * seq[0].1.height;
+                for w in seq.windows(2) {
+                    let cx0 = w[0].1.left + 0.5 * w[0].1.width;
+                    let cx1 = w[1].1.left + 0.5 * w[1].1.width;
+                    let cy1 = w[1].1.top + 0.5 * w[1].1.height;
+                    assert!(
+                        cx1 < cx0 - 0.002,
+                        "Page 5 (baked 180°) token {token:?} char '{}' -> '{}' did not advance Right->Left: {:?} vs {:?}",
+                        w[0].0,
+                        w[1].0,
+                        w[0].1,
+                        w[1].1
+                    );
+                    assert!(
+                        (cy1 - first_cy).abs() < 0.04,
+                        "Page 5 (baked 180°) token {token:?} char '{}' drifted vertically: {:?}",
+                        w[1].0,
+                        w[1].1
+                    );
+                }
+            }
+        }
+
+        // Page 6 (/Rotate=0, 270° CW / 90° CCW baked bitmap): vertical reading BOTTOM-TO-TOP -> decreasing center_y, same column x!
+        {
+            let chars =
+                extract_page_char_rects_with_pdfium(None, &out_pdf, 6).expect("p6 char rects");
+            for token in ["WinKit", "离线文字识别"] {
+                let seq = find_char_rects_for_token(&chars, token)
+                    .unwrap_or_else(|| panic!("Page 6 missing char rects for {token:?}"));
+                let first_cx = seq[0].1.left + 0.5 * seq[0].1.width;
+                for w in seq.windows(2) {
+                    let cy0 = w[0].1.top + 0.5 * w[0].1.height;
+                    let cy1 = w[1].1.top + 0.5 * w[1].1.height;
+                    let cx1 = w[1].1.left + 0.5 * w[1].1.width;
+                    assert!(
+                        cy1 < cy0 - 0.002,
+                        "Page 6 (baked 270° CW) token {token:?} char '{}' -> '{}' did not advance Bottom->Top: {:?} vs {:?}",
+                        w[0].0,
+                        w[1].0,
+                        w[0].1,
+                        w[1].1
+                    );
+                    assert!(
+                        (cx1 - first_cx).abs() < 0.05,
+                        "Page 6 (baked 270° CW) token {token:?} char '{}' drifted horizontally out of vertical column: {:?}",
+                        w[1].0,
+                        w[1].1
+                    );
+                }
+            }
+        }
     }
 }

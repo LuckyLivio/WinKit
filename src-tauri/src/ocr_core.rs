@@ -66,9 +66,15 @@ pub struct OcrSpan {
     pub text: String,
     pub bbox_px: OcrBoundingBox,
     pub bbox_norm: OcrBoundingBox,
-    /// Four corners ordered clockwise `[TL, TR, BR, BL]` in image pixel coordinates.
+    /// Four corners ordered clockwise `[TL, TR, BR, BL]` in image pixel coordinates
+    /// (preserves preview overlay semantics for `T03`/`T04`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quad_px: Option<[OcrPoint; 4]>,
+    /// Four corners ordered in true reading orientation `[read_TL, read_TR, read_BR, read_BL]`
+    /// in image pixel coordinates, where `read_BL -> read_BR` is the text baseline along the
+    /// reading direction and `read_BL -> read_TL` is the upward glyph ascent direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading_quad_px: Option<[OcrPoint; 4]>,
     pub char_start: usize,
     pub char_end: usize,
 }
@@ -90,6 +96,13 @@ pub struct OcrTextLine {
     /// Baseline tilt angle in degrees (positive = clockwise downward from horizontal).
     pub angle_deg: f32,
     pub rotated_180: bool,
+    /// True when the detected box was tall/vertical (`h / w >= 1.5`) and rotated 90° CCW before recognition.
+    #[serde(default)]
+    pub vertical_rotated: bool,
+    /// Four corners ordered in true reading orientation `[read_TL, read_TR, read_BR, read_BL]`
+    /// in image pixel coordinates (`read_BL -> read_BR` = baseline, `read_BL -> read_TL` = ascent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading_quad_px: Option<[OcrPoint; 4]>,
     pub spans: Vec<OcrSpan>,
 }
 
@@ -364,6 +377,7 @@ impl RapidOcrEngine {
                 confidence: conf,
                 quad_px,
                 rotated_180,
+                vertical_rot,
                 spans,
             });
         }
@@ -689,6 +703,7 @@ struct RawLineCandidate {
     confidence: f32,
     quad_px: [OcrPoint; 4],
     rotated_180: bool,
+    vertical_rot: bool,
     spans: Vec<OcrSpan>,
 }
 
@@ -1166,6 +1181,25 @@ fn lerp_pt(a: OcrPoint, b: OcrPoint, t: f32) -> OcrPoint {
     }
 }
 
+/// Returns the 4 corners of a text box in **true reading orientation**
+/// `[read_TL, read_TR, read_BR, read_BL]` in image pixel coordinates, matching the exact warp +
+/// `rotate270` (`vertical_rot`) + `rotate180` (`rotated_180`) pipeline fed to the recognizer:
+/// - `read_BL -> read_BR` (and `read_TL -> read_TR`): reading baseline direction
+/// - `read_BL -> read_TL` (and `read_BR -> read_TR`): upward glyph ascent direction
+pub fn oriented_reading_quad(
+    quad_px: &[OcrPoint; 4],
+    vertical_rot: bool,
+    rotated_180: bool,
+) -> [OcrPoint; 4] {
+    let [p0, p1, p2, p3] = *quad_px;
+    match (vertical_rot, rotated_180) {
+        (false, false) => [p0, p1, p2, p3], // 0° horizontal L->R, ascent up
+        (false, true) => [p2, p3, p0, p1],  // 180° upside-down R->L, ascent down
+        (true, false) => [p1, p2, p3, p0],  // 90° CW vertical T->B, ascent right
+        (true, true) => [p3, p0, p1, p2],   // 270° CW (90° CCW) vertical B->T, ascent left
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_token_spans(
     text: &str,
@@ -1181,6 +1215,8 @@ fn build_token_spans(
     if chars.is_empty() || char_steps.is_empty() {
         return Vec::new();
     }
+
+    let line_reading_quad = oriented_reading_quad(quad, vertical_rot, rotated_180);
 
     // Group non-whitespace runs into spans, splitting between CJK/non-ASCII and ASCII tokens so
     // P04 invisible text layers and T04 selection align cleanly on mixed Chinese+English lines.
@@ -1222,20 +1258,22 @@ fn build_token_spans(
         // Ensure a minimal non-degenerate span width without ever violating clamp's min <= max
         // invariant (e.g. when the final CTC timestep puts `raw_u0` near `1.0`).
         let min_step = (1.0 / denom).min(0.005);
-        let (mut u0, mut u1) = if raw_u1 - raw_u0 < min_step {
+        let (rec_u0, rec_u1) = if raw_u1 - raw_u0 < min_step {
             let expanded_u1 = (raw_u0 + min_step).min(1.0);
             let adjusted_u0 = (expanded_u1 - min_step).max(0.0);
             (adjusted_u0, expanded_u1)
         } else {
             (raw_u0, raw_u1)
         };
-        if rotated_180 {
-            let n0 = (1.0 - u1).clamp(0.0, 1.0);
-            let n1 = (1.0 - u0).clamp(n0, 1.0);
-            u0 = n0;
-            u1 = n1;
-        }
+        let (u0, u1) = if rotated_180 {
+            let n0 = (1.0 - rec_u1).clamp(0.0, 1.0);
+            let n1 = (1.0 - rec_u0).clamp(n0, 1.0);
+            (n0, n1)
+        } else {
+            (rec_u0, rec_u1)
+        };
 
+        // Preview quad keeps clockwise [TL, TR, BR, BL] semantics in image pixel space for T03/T04.
         let sub_quad = if vertical_rot {
             // `imageops::rotate270` maps source `(x, y)` -> destination `(dx = y, dy = w - 1 - x)`,
             // so the recognition horizontal axis `u ∈ [0, 1]` runs top-to-bottom along `P0 -> P3`
@@ -1256,6 +1294,17 @@ fn build_token_spans(
                 lerp_pt(quad[3], quad[2], u0),
             ]
         };
+
+        // Reading-oriented quad [read_TL, read_TR, read_BR, read_BL] interpolates along the true
+        // recognizer axis `rec_u0..rec_u1`, so `read_BL -> read_BR` always runs along reading order
+        // and `read_BL -> read_TL` points upward along glyph ascent for 0°, 90° CW, 180°, and 270° CW.
+        let reading_quad = [
+            lerp_pt(line_reading_quad[0], line_reading_quad[1], rec_u0),
+            lerp_pt(line_reading_quad[0], line_reading_quad[1], rec_u1),
+            lerp_pt(line_reading_quad[3], line_reading_quad[2], rec_u1),
+            lerp_pt(line_reading_quad[3], line_reading_quad[2], rec_u0),
+        ];
+
         let bbox_px = quad_to_bbox(&sub_quad);
         let bbox_norm = norm_bbox(bbox_px, img_w, img_h);
         let span_text: String = chars[start..end].iter().collect();
@@ -1264,6 +1313,7 @@ fn build_token_spans(
             bbox_px,
             bbox_norm,
             quad_px: Some(sub_quad),
+            reading_quad_px: Some(reading_quad),
             char_start: start,
             char_end: end,
         });
@@ -1361,6 +1411,8 @@ fn assemble_reading_order(
             let angle_deg = (q[1].y - q[0].y).atan2(q[1].x - q[0].x).to_degrees();
             let bbox_norm = norm_bbox(entry.bbox, img_w, img_h);
 
+            let reading_quad_px =
+                oriented_reading_quad(&q, entry.cand.vertical_rot, entry.cand.rotated_180);
             lines.push(OcrTextLine {
                 index: lines.len(),
                 row_index,
@@ -1372,6 +1424,8 @@ fn assemble_reading_order(
                 bbox_norm,
                 angle_deg: (angle_deg * 100.0).round() / 100.0,
                 rotated_180: entry.cand.rotated_180,
+                vertical_rotated: entry.cand.vertical_rot,
+                reading_quad_px: Some(reading_quad_px),
                 spans: entry.cand.spans,
             });
         }
@@ -1449,6 +1503,7 @@ mod tests {
                 OcrPoint { x, y: y + 30.0 },
             ],
             rotated_180: false,
+            vertical_rot: false,
             spans: Vec::new(),
         };
         // Simulate +2.3° tilt: right half of line 1 is 15 px higher than left half, still overlaps!
@@ -1654,6 +1709,38 @@ mod tests {
             f_second.bbox_px
         );
         assert!(f_second.bbox_px.y + f_second.bbox_px.height < f_first.bbox_px.y);
+
+        // Verify reading_quad_px baseline (read_BL -> read_BR) and ascent (read_BL -> read_TL)
+        // across all 4 physical orientations while preview quad_px keeps clockwise [TL, TR, BR, BL].
+        let rq_top = s_top.reading_quad_px.expect("90 CW reading_quad_px");
+        // 90° CW: baseline points downward (+y: 60 -> 140), ascent points right (+x: 100 -> 140)
+        assert!((rq_top[3].x - 100.0).abs() < 0.1 && (rq_top[3].y - 60.0).abs() < 0.1);
+        assert!((rq_top[2].x - 100.0).abs() < 0.1 && (rq_top[2].y - 140.0).abs() < 0.1);
+        assert!((rq_top[0].x - 140.0).abs() < 0.1 && (rq_top[0].y - 60.0).abs() < 0.1);
+
+        let rq_flip = f_first.reading_quad_px.expect("270 CW reading_quad_px");
+        // 270° CW (90° CCW): baseline points upward (-y: 380 -> 300), ascent points left (-x: 140 -> 100)
+        assert!((rq_flip[3].x - 140.0).abs() < 0.1 && (rq_flip[3].y - 380.0).abs() < 0.1);
+        assert!((rq_flip[2].x - 140.0).abs() < 0.1 && (rq_flip[2].y - 300.0).abs() < 0.1);
+        assert!((rq_flip[0].x - 100.0).abs() < 0.1 && (rq_flip[0].y - 380.0).abs() < 0.1);
+
+        // 180° horizontal upside-down: baseline points left (-x), ascent points down (+y)
+        let horiz_quad = [
+            OcrPoint { x: 100.0, y: 50.0 },
+            OcrPoint { x: 500.0, y: 50.0 },
+            OcrPoint { x: 500.0, y: 90.0 },
+            OcrPoint { x: 100.0, y: 90.0 },
+        ];
+        let h_180 = build_token_spans("TOP BOT", &steps, 10, &horiz_quad, 600, 200, true, false);
+        let rq_180 = h_180[0].reading_quad_px.expect("180 reading_quad_px");
+        // First token ("TOP") lies near right side (x=460 -> 380), baseline along y=50 (right-to-left),
+        // ascent downward to y=90, while preview quad_px still stays clockwise TL=(380,50)..BR=(460,90).
+        assert!((rq_180[3].x - 460.0).abs() < 0.1 && (rq_180[3].y - 50.0).abs() < 0.1);
+        assert!((rq_180[2].x - 380.0).abs() < 0.1 && (rq_180[2].y - 50.0).abs() < 0.1);
+        assert!((rq_180[0].x - 460.0).abs() < 0.1 && (rq_180[0].y - 90.0).abs() < 0.1);
+        let pq_180 = h_180[0].quad_px.expect("180 preview quad_px");
+        assert!((pq_180[0].x - 380.0).abs() < 0.1 && (pq_180[0].y - 50.0).abs() < 0.1);
+        assert!((pq_180[2].x - 460.0).abs() < 0.1 && (pq_180[2].y - 90.0).abs() < 0.1);
     }
 
     #[test]
