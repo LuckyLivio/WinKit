@@ -4255,6 +4255,7 @@ export interface TranscribeMediaInspectResult {
   hasAudio: boolean;
   hasVideo: boolean;
   durationSec: number | null;
+  containerStartTimeSec?: number;
   audioStartTimeSec: number;
   audioCodec: string | null;
   sampleRate: number | null;

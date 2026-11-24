@@ -128,6 +128,21 @@ export function parseTimestampInput(raw: string): number | null {
 }
 
 /**
+ * Normalizes a single subtitle cue's text identically to Rust `asr_core::sanitize_srt_cue_text`:
+ * preserves normal multi-line subtitles while stripping consecutive blank lines and whitespace-only
+ * lines (spaces, tabs, full-width spaces) so one cue never splits into malformed SRT blocks.
+ */
+export function sanitizeSrtCueText(raw: string): string {
+  return raw
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0)
+    .join("\r\n");
+}
+
+/**
  * Strictly validates non-empty transcript segments for SRT subtitle compliance:
  * non-negative start, `end > start`, monotonic start times, and zero overlaps.
  */
@@ -141,7 +156,7 @@ export function validateTranscriptSegments(segments: TranscriptSegment[]): Segme
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]!;
-    if (!seg.text.trim()) continue;
+    if (sanitizeSrtCueText(seg.text).length === 0) continue;
     nonEmptyCount += 1;
     const cueNumber = nonEmptyCount;
 
@@ -184,25 +199,27 @@ export function validateTranscriptSegments(segments: TranscriptSegment[]): Segme
 }
 
 export function formatTranscriptAsSrt(segments: TranscriptSegment[]): string {
-  const nonEmpty = segments.filter((s) => s.text.trim().length > 0);
+  const nonEmpty = segments
+    .map((seg) => ({ seg, body: sanitizeSrtCueText(seg.text) }))
+    .filter((entry) => entry.body.length > 0);
   return nonEmpty
-    .map((seg, idx) => {
+    .map(({ seg, body }, idx) => {
       const start = formatSrtTimestamp(seg.startSec);
       const end = formatSrtTimestamp(seg.endSec);
-      const body = seg.text.trim().replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      return `${idx + 1}\r\n${start} --> ${end}\r\n${body}\r\n`;
+      return `${idx + 1}\r\n${start} --> ${end}\r\n${body}\r\n\r\n`;
     })
-    .join("\r\n");
+    .join("");
 }
 
 export function formatTranscriptAsTxt(
   segments: TranscriptSegment[],
   includeTimestamps: boolean,
 ): string {
-  const nonEmpty = segments.filter((s) => s.text.trim().length > 0);
+  const nonEmpty = segments
+    .map((seg) => ({ seg, body: sanitizeSrtCueText(seg.text) }))
+    .filter((entry) => entry.body.length > 0);
   return nonEmpty
-    .map((seg) => {
-      const body = seg.text.trim();
+    .map(({ seg, body }) => {
       if (!includeTimestamps) return body;
       return `[${formatSrtTimestamp(seg.startSec)} -> ${formatSrtTimestamp(seg.endSec)}] ${body}`;
     })
@@ -258,6 +275,39 @@ export function isSupportedTranscribeMediaPath(path: string): boolean {
 
 export function computeSegmentsDigestKey(segments: TranscriptSegment[]): string {
   return segments
-    .map((s) => `${s.startSec.toFixed(3)}|${s.endSec.toFixed(3)}|${s.text.trim()}`)
+    .map((s) => `${s.startSec.toFixed(3)}|${s.endSec.toFixed(3)}|${s.text}`)
     .join("\n");
+}
+
+/**
+ * Maps a playback-zero cue timestamp onto HTMLMediaElement's seek timeline.
+ * Standard media, audio-only delays, and mid-stream PTS gaps seek directly at `playbackSec`.
+ * Containers with a non-zero whole-container start timestamp (e.g. Matroska/WebM shifted to +10s)
+ * may be exposed by Chromium with `playerDuration ≈ containerStartTimeSec + playbackDurationSec`
+ * and playback zero at `containerStartTimeSec`; this helper maps playback-zero cue clicks onto
+ * the exact matching frame in the player without disturbing normal media.
+ */
+export function resolvePreviewSeekTime(
+  playbackSec: number,
+  playerDuration: number,
+  containerStartTimeSec: number,
+  playbackDurationSec: number | null,
+): number {
+  const safeSec = Number.isFinite(playbackSec) && playbackSec > 0 ? playbackSec : 0;
+  let origin = 0;
+  if (
+    Number.isFinite(containerStartTimeSec) &&
+    containerStartTimeSec > 0.05 &&
+    Number.isFinite(playerDuration) &&
+    playerDuration > containerStartTimeSec &&
+    (playbackDurationSec === null ||
+      playerDuration >= playbackDurationSec + containerStartTimeSec * 0.5)
+  ) {
+    origin = containerStartTimeSec;
+  }
+  const target = origin + safeSec;
+  if (Number.isFinite(playerDuration) && playerDuration > 0) {
+    return Math.min(target, Math.max(origin, playerDuration - 0.05));
+  }
+  return target;
 }

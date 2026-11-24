@@ -133,6 +133,12 @@
   background: var(--accent-soft);
 }
 
+.t01-dropzone.is-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .t01-dropzone-title {
   font-size: 13px;
   font-weight: 600;

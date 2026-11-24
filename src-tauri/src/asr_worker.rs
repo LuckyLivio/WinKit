@@ -11,7 +11,7 @@
 //!   requests run through the exact same `dispatch_asr_request` handler in-process.
 
 use crate::asr_core::{
-    decode_wav_native_to_mono_16k, prepare_media_wav_for_asr, AsrLanguage, AsrProgressPayload,
+    decode_wav_streaming_to_mono_16k, prepare_media_wav_for_asr, AsrLanguage, AsrProgressPayload,
     SenseVoiceAsrEngine, TranscribeMediaRequest, TranscribeMediaResult,
 };
 use crate::asr_models::{
@@ -204,7 +204,10 @@ where
                 Ok(eng) => eng,
                 Err(err) => return err_resp(err),
             };
-            let mut decoded = match decode_wav_native_to_mono_16k(Path::new(&wav_path)) {
+            let mut decoded = match decode_wav_streaming_to_mono_16k(
+                Path::new(&wav_path),
+                !decoded_with_ffmpeg,
+            ) {
                 Ok(Some(d)) => d,
                 Ok(None) => {
                     return err_resp(AppError::decode_failed(
@@ -216,9 +219,7 @@ where
             decoded.timeline_offset_sec = timeline_offset_sec.max(0.0);
             decoded.decoded_with_ffmpeg = decoded_with_ffmpeg;
             if let Some(exp) = expected_duration_sec.filter(|d| d.is_finite() && *d > 0.0) {
-                decoded.duration_sec = exp.max(decoded.duration_sec + decoded.timeline_offset_sec);
-            } else {
-                decoded.duration_sec += decoded.timeline_offset_sec;
+                decoded.duration_sec = decoded.duration_sec.max(exp);
             }
 
             match engine.transcribe_samples(

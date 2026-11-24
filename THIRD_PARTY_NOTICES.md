@@ -103,11 +103,11 @@ WinKit does **not** bundle speech recognition model weights inside the installer
   - **Upstream Model**: `iic/SenseVoiceSmall` (FunAudioLLM / Alibaba Group).
   - **Pinned Distribution Archive**: `k2-fsa/sherpa-onnx` `asr-models` release `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2` (`163,002,883` bytes, SHA-256 `7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e`, `https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models`).
   - **Verified Extracted Files**: `model.int8.onnx` (`239,233,841` bytes, SHA-256 `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51`) and `tokens.txt` (`315,894` bytes, SHA-256 `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc`).
-  - **License & Preservation**: Model weights are licensed under the **FunASR Model Open Source License Agreement v1.1** (Copyright (C) 2023-2028 Alibaba Group; free to use, copy, modify, and share with attribution of source, author, and model name); ONNX conversion and packaging by `k2-fsa/sherpa-onnx` (Xiaomi Corp.) under **Apache-2.0**. WinKit writes the verbatim notice to `LICENSE-sensevoice.txt` alongside the installed weights.
+  - **License & Preservation**: Model weights are licensed under the **FunASR Model Open Source License Agreement v1.1** (`Copyright (C) [2023-2028] [Alibaba Group]. All rights reserved.`, full bilingual English/Chinese text at `https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE`; the pinned archive's 71-byte `LICENSE` file contains `Ref to https://github.com/modelscope/FunASR?tab=readme-ov-file#license`); ONNX conversion and packaging by `k2-fsa/sherpa-onnx` (Xiaomi Corp.) under **Apache-2.0**. WinKit writes the complete verbatim bilingual FunASR Model License v1.1 together with provenance and packaging attribution to `LICENSE-sensevoice.txt` alongside the installed weights.
 - **Silero VAD v5 ONNX**:
   - **Upstream Model**: `snakers4/silero-vad` (`https://github.com/snakers4/silero-vad`).
   - **Pinned Distribution File**: `silero_vad_v5.onnx` (`2,313,101` bytes, SHA-256 `6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396`, `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad_v5.onnx`).
-  - **License & Preservation**: **MIT License** (Copyright (c) 2024 Silero Team). WinKit writes the verbatim MIT notice to `LICENSE-silero-vad.txt` alongside the installed weights.
+  - **License & Preservation**: **MIT License** (`Copyright (c) 2020-present Silero Team`, upstream `https://github.com/snakers4/silero-vad/blob/master/LICENSE`). WinKit writes the complete verbatim MIT license text to `LICENSE-silero-vad.txt` alongside the installed weights.
 
 ## Application Icons & Visual Assets
 

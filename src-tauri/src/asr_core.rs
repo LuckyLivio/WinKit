@@ -28,7 +28,7 @@ use crate::ocr_ort::{resolve_ort_dll_path, OrtInput, OrtRuntime, OrtSession};
 use serde::{Deserialize, Serialize};
 use std::f32::consts::PI;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,6 +48,7 @@ const FBANK_LOW_FREQ: f32 = 20.0;
 const FBANK_HIGH_FREQ: f32 = 8_000.0;
 const FBANK_PREEMPH: f32 = 0.97;
 const MAX_MEDIA_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB safety cap
+pub const MAX_NATIVE_WAV_BYTES: u64 = 512 * 1024 * 1024; // Shared native-WAV size limit (inspect + decode)
 const MAX_AUDIO_DURATION_SEC: f64 = 4.0 * 3600.0; // 4 hours safety cap
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -99,6 +100,8 @@ pub struct TranscribeMediaInspectResult {
     pub has_audio: bool,
     pub has_video: bool,
     pub duration_sec: Option<f64>,
+    #[serde(default)]
+    pub container_start_time_sec: f64,
     pub audio_start_time_sec: f64,
     pub audio_codec: Option<String>,
     pub sample_rate: Option<u32>,
@@ -186,7 +189,9 @@ impl Drop for ScopedTempFile {
     }
 }
 
-/// Decoded 16 kHz mono PCM waveform (`f32` in `[-1.0, +1.0]`) anchored to original media timeline.
+/// Decoded 16 kHz mono PCM waveform (`f32` in `[-1.0, +1.0]`) anchored to playback zero (`t = 0.0`).
+/// Any audio-only delay and mid-stream PTS gaps are already preserved as silence inside `samples`,
+/// while `timeline_offset_sec` records the informational relative audio stream delay for UI display.
 pub struct DecodedMono16k {
     pub samples: Vec<f32>,
     pub duration_sec: f64,
@@ -200,53 +205,72 @@ struct WavHeaderInfo {
     channels: u16,
     sample_rate: u32,
     bits_per_sample: u16,
-    data_offset: usize,
-    data_len: usize,
+    data_offset: u64,
+    data_len: u64,
     duration_sec: f64,
 }
 
-fn parse_wav_header(bytes: &[u8]) -> Option<WavHeaderInfo> {
-    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        return None;
+#[derive(Debug, Clone, Copy)]
+struct NativeWavEligibility {
+    header: WavHeaderInfo,
+    can_decode_natively: bool,
+}
+
+/// Walks RIFF/WAVE chunks via `Seek` in O(1) memory, reading exact `fmt ` parameters and the
+/// `data` chunk's declared byte length (clamped to EOF so trailing `LIST/INFO`/`id3 ` metadata
+/// chunks never inflate duration or get decoded as audio).
+fn parse_wav_header_from_file(
+    path: &Path,
+    file_len: u64,
+) -> Result<Option<WavHeaderInfo>, AppError> {
+    if file_len < 44 {
+        return Ok(None);
     }
-    let mut pos = 12usize;
+    let mut file = File::open(path).map_err(|e| AppError::from_io(e, "Unable to open WAV file"))?;
+    let mut riff = [0u8; 12];
+    if file.read_exact(&mut riff).is_err() {
+        return Ok(None);
+    }
+    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
+        return Ok(None);
+    }
+
+    let mut pos = 12u64;
     let mut audio_format = 0u16;
     let mut channels = 0u16;
     let mut sample_rate = 0u32;
     let mut bits_per_sample = 0u16;
     let mut got_fmt = false;
-    let mut data_offset = 0usize;
-    let mut data_len = 0usize;
+    let mut data_offset = 0u64;
+    let mut data_len = 0u64;
     let mut got_data = false;
 
-    while pos + 8 <= bytes.len() {
-        let chunk_id = &bytes[pos..pos + 4];
-        let chunk_size = u32::from_le_bytes([
-            bytes[pos + 4],
-            bytes[pos + 5],
-            bytes[pos + 6],
-            bytes[pos + 7],
-        ]) as usize;
-        pos += 8;
-        if pos > bytes.len() {
+    while pos + 8 <= file_len {
+        if file.seek(SeekFrom::Start(pos)).is_err() {
             break;
         }
-        let avail = bytes.len() - pos;
-        let actual_size = chunk_size.min(avail);
+        let mut hdr = [0u8; 8];
+        if file.read_exact(&mut hdr).is_err() {
+            break;
+        }
+        let chunk_id = &hdr[0..4];
+        let chunk_size = u64::from(u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]));
+        pos += 8;
+        let avail = file_len.saturating_sub(pos);
 
-        if chunk_id == b"fmt " && actual_size >= 16 {
-            audio_format = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
-            channels = u16::from_le_bytes([bytes[pos + 2], bytes[pos + 3]]);
-            sample_rate = u32::from_le_bytes([
-                bytes[pos + 4],
-                bytes[pos + 5],
-                bytes[pos + 6],
-                bytes[pos + 7],
-            ]);
-            bits_per_sample = u16::from_le_bytes([bytes[pos + 14], bytes[pos + 15]]);
+        if chunk_id == b"fmt " && chunk_size >= 16 && avail >= 16 {
+            let read_len = (chunk_size.min(avail).min(256)) as usize;
+            let mut fmt_buf = vec![0u8; read_len];
+            if file.read_exact(&mut fmt_buf).is_err() {
+                break;
+            }
+            audio_format = u16::from_le_bytes([fmt_buf[0], fmt_buf[1]]);
+            channels = u16::from_le_bytes([fmt_buf[2], fmt_buf[3]]);
+            sample_rate = u32::from_le_bytes([fmt_buf[4], fmt_buf[5], fmt_buf[6], fmt_buf[7]]);
+            bits_per_sample = u16::from_le_bytes([fmt_buf[14], fmt_buf[15]]);
             // Support WAVE_FORMAT_EXTENSIBLE (0xFFFE) if subformat is PCM (1) or IEEE float (3).
-            if audio_format == 0xFFFE && actual_size >= 40 {
-                let sub_fmt = u16::from_le_bytes([bytes[pos + 24], bytes[pos + 25]]);
+            if audio_format == 0xFFFE && read_len >= 40 {
+                let sub_fmt = u16::from_le_bytes([fmt_buf[24], fmt_buf[25]]);
                 if sub_fmt == 1 || sub_fmt == 3 {
                     audio_format = sub_fmt;
                 }
@@ -254,30 +278,41 @@ fn parse_wav_header(bytes: &[u8]) -> Option<WavHeaderInfo> {
             got_fmt = true;
         } else if chunk_id == b"data" {
             data_offset = pos;
-            data_len = actual_size;
+            // Respect the RIFF `data` chunk size so trailing LIST/INFO/id3 chunks are excluded.
+            // Only fall back to remaining file bytes when streaming writers left 0 or 0xFFFF_FFFF.
+            data_len = if chunk_size == 0 || chunk_size == u64::from(u32::MAX) {
+                avail
+            } else {
+                chunk_size.min(avail)
+            };
             got_data = true;
-            break;
+            if got_fmt {
+                break;
+            }
         }
 
         let padded = chunk_size.saturating_add(chunk_size & 1);
-        pos = pos.saturating_add(padded);
+        match pos.checked_add(padded) {
+            Some(next) if next > pos => pos = next,
+            _ => break,
+        }
     }
 
     if !got_fmt || !got_data || channels == 0 || sample_rate == 0 {
-        return None;
+        return Ok(None);
     }
     let supported = (audio_format == 1 && matches!(bits_per_sample, 8 | 16 | 24 | 32))
         || (audio_format == 3 && bits_per_sample == 32);
     if !supported {
-        return None;
+        return Ok(None);
     }
-    let bytes_per_frame = usize::from(channels) * usize::from(bits_per_sample / 8);
+    let bytes_per_frame = u64::from(channels) * u64::from(bits_per_sample / 8);
     if bytes_per_frame == 0 {
-        return None;
+        return Ok(None);
     }
     let total_frames = data_len / bytes_per_frame;
     let duration_sec = total_frames as f64 / f64::from(sample_rate);
-    Some(WavHeaderInfo {
+    Ok(Some(WavHeaderInfo {
         audio_format,
         channels,
         sample_rate,
@@ -285,19 +320,46 @@ fn parse_wav_header(bytes: &[u8]) -> Option<WavHeaderInfo> {
         data_offset,
         data_len,
         duration_sec,
-    })
+    }))
 }
 
-/// Pure-Rust decoder for standard PCM / IEEE-float WAV files -> mono 16 kHz `f32` in `[-1.0, 1.0]`.
-pub fn decode_wav_native_to_mono_16k(path: &Path) -> Result<Option<DecodedMono16k>, AppError> {
-    let meta =
-        fs::metadata(path).map_err(|e| AppError::from_io(e, "Unable to inspect WAV file"))?;
-    if meta.len() > 512 * 1024 * 1024 {
-        // Large >512 MiB WAVs stream through FFmpeg when available to keep RAM bounded.
+fn is_wav_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("wav"))
+        .unwrap_or(false)
+}
+
+/// Shared eligibility check used identically by inspection, preparation, and native WAV decoding.
+fn inspect_wav_native_eligibility(
+    path: &Path,
+    file_len: u64,
+) -> Result<Option<NativeWavEligibility>, AppError> {
+    if !is_wav_extension(path) {
         return Ok(None);
     }
-    let bytes = fs::read(path).map_err(|e| AppError::from_io(e, "Unable to read WAV file"))?;
-    let Some(hdr) = parse_wav_header(&bytes) else {
+    let Some(header) = parse_wav_header_from_file(path, file_len)? else {
+        return Ok(None);
+    };
+    Ok(Some(NativeWavEligibility {
+        header,
+        can_decode_natively: file_len <= MAX_NATIVE_WAV_BYTES,
+    }))
+}
+
+/// Bounded-memory streaming pure-Rust decoder for standard PCM / IEEE-float WAV files ->
+/// mono 16 kHz `f32` in `[-1.0, 1.0]`, reading strictly `data_len` bytes in 1 MiB frame chunks.
+pub fn decode_wav_streaming_to_mono_16k(
+    path: &Path,
+    enforce_native_size_cap: bool,
+) -> Result<Option<DecodedMono16k>, AppError> {
+    let meta =
+        fs::metadata(path).map_err(|e| AppError::from_io(e, "Unable to inspect WAV file"))?;
+    let file_len = meta.len();
+    if enforce_native_size_cap && file_len > MAX_NATIVE_WAV_BYTES {
+        return Ok(None);
+    }
+    let Some(hdr) = parse_wav_header_from_file(path, file_len)? else {
         return Ok(None);
     };
     if hdr.duration_sec > MAX_AUDIO_DURATION_SEC {
@@ -309,67 +371,138 @@ pub fn decode_wav_native_to_mono_16k(path: &Path) -> Result<Option<DecodedMono16
     let ch = usize::from(hdr.channels);
     let bps = usize::from(hdr.bits_per_sample / 8);
     let frame_bytes = ch * bps;
-    let data = &bytes[hdr.data_offset..hdr.data_offset + hdr.data_len];
-    let frame_count = data.len() / frame_bytes;
-    let mut mono = Vec::with_capacity(frame_count);
-
-    for frame in data.chunks_exact(frame_bytes) {
-        let mut acc = 0.0f32;
-        for c in 0..ch {
-            let s = &frame[c * bps..(c + 1) * bps];
-            let sample = match (hdr.audio_format, hdr.bits_per_sample) {
-                (1, 8) => (f32::from(s[0]) - 128.0) / 128.0,
-                (1, 16) => f32::from(i16::from_le_bytes([s[0], s[1]])) / 32768.0,
-                (1, 24) => {
-                    let sign = if (s[2] & 0x80) != 0 { 0xFF } else { 0x00 };
-                    let v = i32::from_le_bytes([s[0], s[1], s[2], sign]);
-                    (v as f32) / 8_388_608.0
-                }
-                (1, 32) => {
-                    (i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64 / 2_147_483_648.0) as f32
-                }
-                (3, 32) => f32::from_le_bytes([s[0], s[1], s[2], s[3]]).clamp(-1.0, 1.0),
-                _ => 0.0,
-            };
-            acc += sample;
-        }
-        mono.push((acc / ch as f32).clamp(-1.0, 1.0));
+    let total_src_frames = (hdr.data_len / frame_bytes as u64) as usize;
+    if total_src_frames == 0 {
+        return Ok(Some(DecodedMono16k {
+            samples: Vec::new(),
+            duration_sec: 0.0,
+            timeline_offset_sec: 0.0,
+            decoded_with_ffmpeg: false,
+        }));
     }
 
-    let samples_16k = if hdr.sample_rate == ASR_SAMPLE_RATE {
-        mono
+    let ratio = f64::from(hdr.sample_rate) / f64::from(ASR_SAMPLE_RATE);
+    let expected_out_frames = if hdr.sample_rate == ASR_SAMPLE_RATE {
+        total_src_frames
     } else {
-        resample_linear(&mono, hdr.sample_rate, ASR_SAMPLE_RATE)
+        ((total_src_frames as f64) / ratio).round().max(1.0) as usize
     };
-    let duration_sec = samples_16k.len() as f64 / f64::from(ASR_SAMPLE_RATE);
+    let mut out_samples = Vec::with_capacity(expected_out_frames);
 
+    let mut file = File::open(path).map_err(|e| AppError::from_io(e, "Unable to open WAV file"))?;
+    file.seek(SeekFrom::Start(hdr.data_offset))
+        .map_err(|e| AppError::from_io(e, "Unable to seek to WAV data chunk"))?;
+
+    // Align 1 MiB chunk buffer to whole PCM frames so every read decodes clean frames.
+    let chunk_frames = ((1024 * 1024) / frame_bytes).max(1024);
+    let mut raw_buf = vec![0u8; chunk_frames * frame_bytes];
+    let mut remaining_bytes = hdr.data_len;
+
+    let mut mono_chunk = Vec::with_capacity(chunk_frames);
+    let mut src_frame_offset: u64 = 0;
+    let mut out_idx: u64 = 0;
+    let mut prev_tail_sample: Option<f32> = None;
+
+    while remaining_bytes >= frame_bytes as u64 {
+        let to_read =
+            (remaining_bytes.min(raw_buf.len() as u64) as usize / frame_bytes) * frame_bytes;
+        if to_read == 0 {
+            break;
+        }
+        let n = read_exact_or_eof(&mut file, &mut raw_buf[..to_read])
+            .map_err(|e| AppError::from_io(e, "Unable to stream WAV PCM data"))?;
+        let usable = (n / frame_bytes) * frame_bytes;
+        if usable == 0 {
+            break;
+        }
+        remaining_bytes = remaining_bytes.saturating_sub(usable as u64);
+
+        mono_chunk.clear();
+        for frame in raw_buf[..usable].chunks_exact(frame_bytes) {
+            let mut acc = 0.0f32;
+            for c in 0..ch {
+                let s = &frame[c * bps..(c + 1) * bps];
+                let sample = match (hdr.audio_format, hdr.bits_per_sample) {
+                    (1, 8) => (f32::from(s[0]) - 128.0) / 128.0,
+                    (1, 16) => f32::from(i16::from_le_bytes([s[0], s[1]])) / 32768.0,
+                    (1, 24) => {
+                        let sign = if (s[2] & 0x80) != 0 { 0xFF } else { 0x00 };
+                        let v = i32::from_le_bytes([s[0], s[1], s[2], sign]);
+                        (v as f32) / 8_388_608.0
+                    }
+                    (1, 32) => {
+                        (i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64 / 2_147_483_648.0)
+                            as f32
+                    }
+                    (3, 32) => f32::from_le_bytes([s[0], s[1], s[2], s[3]]).clamp(-1.0, 1.0),
+                    _ => 0.0,
+                };
+                acc += sample;
+            }
+            mono_chunk.push((acc / ch as f32).clamp(-1.0, 1.0));
+        }
+
+        if hdr.sample_rate == ASR_SAMPLE_RATE {
+            out_samples.extend_from_slice(&mono_chunk);
+        } else {
+            let chunk_len = mono_chunk.len() as u64;
+            let chunk_end_frame = src_frame_offset + chunk_len;
+            let is_last_chunk = remaining_bytes < frame_bytes as u64;
+            let last_global = (total_src_frames - 1) as u64;
+
+            while (out_idx as usize) < expected_out_frames {
+                let pos = out_idx as f64 * ratio;
+                let idx = (pos.floor() as u64).min(last_global);
+                let next = (idx + 1).min(last_global);
+                if next >= chunk_end_frame && !is_last_chunk {
+                    break;
+                }
+                let s0 = if idx < src_frame_offset {
+                    prev_tail_sample.unwrap_or(mono_chunk[0])
+                } else {
+                    let local = (idx - src_frame_offset) as usize;
+                    mono_chunk[local.min(mono_chunk.len() - 1)]
+                };
+                let s1 = if next < src_frame_offset {
+                    prev_tail_sample.unwrap_or(mono_chunk[0])
+                } else {
+                    let local = (next - src_frame_offset) as usize;
+                    mono_chunk[local.min(mono_chunk.len() - 1)]
+                };
+                let frac = (pos - idx as f64) as f32;
+                out_samples.push(s0 * (1.0 - frac) + s1 * frac);
+                out_idx += 1;
+            }
+            prev_tail_sample = mono_chunk.last().copied();
+            src_frame_offset = chunk_end_frame;
+        }
+    }
+
+    let duration_sec = out_samples.len() as f64 / f64::from(ASR_SAMPLE_RATE);
     Ok(Some(DecodedMono16k {
-        samples: samples_16k,
+        samples: out_samples,
         duration_sec,
         timeline_offset_sec: 0.0,
         decoded_with_ffmpeg: false,
     }))
 }
 
-fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
-    if input.is_empty() || src_rate == 0 || dst_rate == 0 {
-        return Vec::new();
+fn read_exact_or_eof(reader: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
     }
-    if src_rate == dst_rate {
-        return input.to_vec();
-    }
-    let ratio = f64::from(src_rate) / f64::from(dst_rate);
-    let out_len = ((input.len() as f64) / ratio).round().max(1.0) as usize;
-    let mut out = Vec::with_capacity(out_len);
-    let last = input.len() - 1;
-    for i in 0..out_len {
-        let pos = i as f64 * ratio;
-        let idx = (pos.floor() as usize).min(last);
-        let next = (idx + 1).min(last);
-        let frac = (pos - idx as f64) as f32;
-        out.push(input[idx] * (1.0 - frac) + input[next] * frac);
-    }
-    out
+    Ok(filled)
+}
+
+/// Pure-Rust decoder for standard PCM / IEEE-float WAV files (`<= 512 MiB`) -> mono 16 kHz `f32`.
+pub fn decode_wav_native_to_mono_16k(path: &Path) -> Result<Option<DecodedMono16k>, AppError> {
+    decode_wav_streaming_to_mono_16k(path, true)
 }
 
 #[derive(Debug, Deserialize)]
@@ -431,8 +564,96 @@ fn probe_via_ffprobe(ffprobe: &Path, input: &Path) -> Result<FfprobeAudioTimelin
         .map_err(|e| AppError::decode_failed(format!("Failed to parse ffprobe JSON output: {e}")))
 }
 
-/// Inspects an audio or video file for `T01`, returning native-WAV capability, duration, codec,
-/// and exact audio stream `start_time` offset on the original media timeline.
+fn compute_container_start_time_sec(probed: &FfprobeAudioTimeline) -> f64 {
+    let min_stream_start = probed
+        .streams
+        .iter()
+        .filter(|s| matches!(s.codec_type.as_deref(), Some("video" | "audio")))
+        .filter_map(|s| parse_opt_f64(s.start_time.as_deref()))
+        .reduce(f64::min);
+    let origin = probed
+        .format
+        .as_ref()
+        .and_then(|f| parse_opt_f64(f.start_time.as_deref()))
+        .or(min_stream_start)
+        .unwrap_or(0.0);
+    if origin.is_finite() && origin > 0.005 {
+        round_ms(origin)
+    } else {
+        0.0
+    }
+}
+
+/// Computes the audio stream's delay relative to the container's playback zero point (`format.start_time`).
+/// - Whole container shifted to e.g. `10.0s` (both video & audio start at `10.0s`) -> `0.0s`
+/// - Audio-only delay (`format=0.0s, video=0.0s, audio=2.5s`) -> `2.5s`
+/// - Combined (`format=10.0s, video=10.0s, audio=12.5s`) -> `2.5s`
+fn compute_relative_audio_delay_sec(
+    probed: &FfprobeAudioTimeline,
+    audio_stream: Option<&FfprobeAudioStreamEntry>,
+) -> f64 {
+    let min_stream_start = probed
+        .streams
+        .iter()
+        .filter(|s| matches!(s.codec_type.as_deref(), Some("video" | "audio")))
+        .filter_map(|s| parse_opt_f64(s.start_time.as_deref()))
+        .reduce(f64::min);
+    let container_origin = probed
+        .format
+        .as_ref()
+        .and_then(|f| parse_opt_f64(f.start_time.as_deref()))
+        .or(min_stream_start)
+        .unwrap_or(0.0);
+    let audio_start = audio_stream
+        .and_then(|s| parse_opt_f64(s.start_time.as_deref()))
+        .unwrap_or(container_origin);
+    let rel = audio_start - container_origin;
+    if rel.is_finite() && rel > 0.005 {
+        round_ms(rel)
+    } else {
+        0.0
+    }
+}
+
+/// Computes normalized playback duration (handling Matroska containers with non-zero start_time
+/// where `format.duration` may reflect end-PTS rather than elapsed duration).
+fn compute_playback_duration_sec(
+    probed: &FfprobeAudioTimeline,
+    audio_stream: Option<&FfprobeAudioStreamEntry>,
+) -> Option<f64> {
+    let format_start = probed
+        .format
+        .as_ref()
+        .and_then(|f| parse_opt_f64(f.start_time.as_deref()))
+        .unwrap_or(0.0);
+    let raw_fmt_dur = probed
+        .format
+        .as_ref()
+        .and_then(|f| parse_opt_f64(f.duration.as_deref()));
+    let stream_dur = probed
+        .streams
+        .iter()
+        .find(|s| s.codec_type.as_deref() == Some("video"))
+        .and_then(|s| parse_opt_f64(s.duration.as_deref()))
+        .or_else(|| audio_stream.and_then(|s| parse_opt_f64(s.duration.as_deref())));
+    let is_matroska = probed
+        .format
+        .as_ref()
+        .and_then(|f| f.format_name.as_deref())
+        .map(|n| n.contains("matroska") || n.contains("webm"))
+        .unwrap_or(false);
+    if is_matroska && format_start > 0.5 {
+        if let Some(d) = raw_fmt_dur {
+            if d > format_start {
+                return Some(round_ms(d - format_start));
+            }
+        }
+    }
+    raw_fmt_dur.or(stream_dur)
+}
+
+/// Inspects an audio or video file for `T01`, sharing the exact same native-WAV eligibility rules
+/// as transcription execution and reporting relative audio delay from playback zero.
 pub fn inspect_transcribe_media_impl(
     media_root: &Path,
     path_raw: &str,
@@ -451,46 +672,28 @@ pub fn inspect_transcribe_media_impl(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "media".to_string());
 
-    let is_wav_ext = canonical
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("wav"))
-        .unwrap_or(false);
-
-    if is_wav_ext {
-        // Inspect WAV header cheaply (first 64 KiB covers standard RIFF/WAVE headers)
-        let mut head = vec![0u8; 65_536.min(byte_length as usize)];
-        let mut f =
-            File::open(&canonical).map_err(|e| AppError::from_io(e, "Unable to open WAV file"))?;
-        let n = f
-            .read(&mut head)
-            .map_err(|e| AppError::from_io(e, "Unable to read WAV header"))?;
-        head.truncate(n);
-        if let Some(hdr) = parse_wav_header(&head) {
-            let bytes_per_frame = usize::from(hdr.channels) * usize::from(hdr.bits_per_sample / 8);
-            let actual_data_len = byte_length.saturating_sub(hdr.data_offset as u64);
-            let total_frames = actual_data_len / bytes_per_frame.max(1) as u64;
-            let duration_sec = total_frames as f64 / f64::from(hdr.sample_rate);
-            return Ok(TranscribeMediaInspectResult {
-                path: canonical.to_string_lossy().into_owned(),
-                file_name,
-                byte_length,
-                is_wav_native: true,
-                requires_ffmpeg: false,
-                has_audio: true,
-                has_video: false,
-                duration_sec: Some(duration_sec),
-                audio_start_time_sec: 0.0,
-                audio_codec: Some(if hdr.audio_format == 3 {
-                    format!("pcm_f{}le", hdr.bits_per_sample)
-                } else {
-                    format!("pcm_s{}le", hdr.bits_per_sample)
-                }),
-                sample_rate: Some(hdr.sample_rate),
-                channels: Some(u32::from(hdr.channels)),
-                container_format: Some("wav".to_string()),
-            });
-        }
+    if let Some(elig) = inspect_wav_native_eligibility(&canonical, byte_length)? {
+        let hdr = elig.header;
+        return Ok(TranscribeMediaInspectResult {
+            path: canonical.to_string_lossy().into_owned(),
+            file_name,
+            byte_length,
+            is_wav_native: elig.can_decode_natively,
+            requires_ffmpeg: !elig.can_decode_natively,
+            has_audio: true,
+            has_video: false,
+            duration_sec: Some(hdr.duration_sec),
+            container_start_time_sec: 0.0,
+            audio_start_time_sec: 0.0,
+            audio_codec: Some(if hdr.audio_format == 3 {
+                format!("pcm_f{}le", hdr.bits_per_sample)
+            } else {
+                format!("pcm_s{}le", hdr.bits_per_sample)
+            }),
+            sample_rate: Some(hdr.sample_rate),
+            channels: Some(u32::from(hdr.channels)),
+            container_format: Some("wav".to_string()),
+        });
     }
 
     let tools = require_media_tools(media_root)?;
@@ -505,20 +708,9 @@ pub fn inspect_transcribe_media_impl(
         .find(|s| s.codec_type.as_deref() == Some("audio"));
     let has_audio = audio_stream.is_some();
 
-    let format_start = probed
-        .format
-        .as_ref()
-        .and_then(|f| parse_opt_f64(f.start_time.as_deref()))
-        .unwrap_or(0.0);
-    let audio_start_time_sec = audio_stream
-        .and_then(|s| parse_opt_f64(s.start_time.as_deref()))
-        .unwrap_or(format_start)
-        .max(0.0);
-    let duration_sec = probed
-        .format
-        .as_ref()
-        .and_then(|f| parse_opt_f64(f.duration.as_deref()))
-        .or_else(|| audio_stream.and_then(|s| parse_opt_f64(s.duration.as_deref())));
+    let container_start_time_sec = compute_container_start_time_sec(&probed);
+    let audio_delay_sec = compute_relative_audio_delay_sec(&probed, audio_stream);
+    let duration_sec = compute_playback_duration_sec(&probed, audio_stream);
 
     Ok(TranscribeMediaInspectResult {
         path: canonical.to_string_lossy().into_owned(),
@@ -529,7 +721,8 @@ pub fn inspect_transcribe_media_impl(
         has_audio,
         has_video,
         duration_sec,
-        audio_start_time_sec,
+        container_start_time_sec,
+        audio_start_time_sec: audio_delay_sec,
         audio_codec: audio_stream.and_then(|s| s.codec_name.clone()),
         sample_rate: audio_stream
             .and_then(|s| s.sample_rate.as_deref())
@@ -539,110 +732,31 @@ pub fn inspect_transcribe_media_impl(
     })
 }
 
-/// Decodes any local audio or video file into 16 kHz mono PCM `f32` samples with original media
-/// timeline alignment (`timeline_offset_sec`). Native PCM WAVs decode without FFmpeg; other
-/// containers stream through WinKit's managed/discovered FFmpeg with cancellation support.
+/// Decodes any local audio or video file into 16 kHz mono PCM `f32` samples aligned to media
+/// playback zero (`t = 0.0`), preserving audio-only delays and mid-stream PTS gaps via FFmpeg
+/// `aresample=async=1:first_pts=0`.
 pub fn decode_media_to_mono_16k(
     media_root: &Path,
     canonical_input: &Path,
     cancel_flag: &AtomicBool,
     mut on_decode_progress: impl FnMut(f64),
 ) -> Result<DecodedMono16k, AppError> {
-    if cancel_flag.load(Ordering::Relaxed) {
-        return Err(AppError::cancelled());
-    }
-
-    let is_wav_ext = canonical_input
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("wav"))
-        .unwrap_or(false);
-    if is_wav_ext {
-        if let Some(decoded) = decode_wav_native_to_mono_16k(canonical_input)? {
-            on_decode_progress(100.0);
-            return Ok(decoded);
-        }
-    }
-
-    let tools = require_media_tools(media_root)?;
-    let probed = probe_via_ffprobe(&tools.ffprobe, canonical_input)?;
-    let audio_stream = probed
-        .streams
-        .iter()
-        .find(|s| s.codec_type.as_deref() == Some("audio"))
-        .ok_or_else(|| {
-            AppError::decode_failed("Selected media file contains no audio track to transcribe.")
-        })?;
-
-    let format_start = probed
-        .format
-        .as_ref()
-        .and_then(|f| parse_opt_f64(f.start_time.as_deref()))
-        .unwrap_or(0.0);
-    let audio_start_time_sec = parse_opt_f64(audio_stream.start_time.as_deref())
-        .unwrap_or(format_start)
-        .max(0.0);
-    let expected_dur = probed
-        .format
-        .as_ref()
-        .and_then(|f| parse_opt_f64(f.duration.as_deref()))
-        .or_else(|| parse_opt_f64(audio_stream.duration.as_deref()));
-
-    if let Some(d) = expected_dur {
-        if d > MAX_AUDIO_DURATION_SEC {
-            return Err(AppError::size_limit(
-                "Media file exceeds the 4-hour offline transcription safety limit.",
-            ));
-        }
-    }
-
-    let tmp_wav =
-        ScopedTempFile(std::env::temp_dir().join(format!("winkit_t01_{}.wav", Uuid::new_v4())));
-    let args: Vec<String> = vec![
-        "-i".into(),
-        canonical_input.to_string_lossy().into_owned(),
-        "-map".into(),
-        "0:a:0".into(),
-        "-vn".into(),
-        "-sn".into(),
-        "-dn".into(),
-        "-ac".into(),
-        "1".into(),
-        "-ar".into(),
-        ASR_SAMPLE_RATE.to_string(),
-        "-c:a".into(),
-        "pcm_s16le".into(),
-        tmp_wav.0.to_string_lossy().into_owned(),
-    ];
-
-    run_ffmpeg_cancellable(
-        &tools.ffmpeg,
-        &args,
-        expected_dur,
+    let prepared = prepare_media_wav_for_asr(
+        media_root,
+        &canonical_input.to_string_lossy(),
         cancel_flag,
-        |_out_sec, pct| {
-            if let Some(p) = pct {
-                on_decode_progress(p.clamp(0.0, 99.0));
-            }
-        },
+        &mut on_decode_progress,
     )?;
-
-    if cancel_flag.load(Ordering::Relaxed) {
-        return Err(AppError::cancelled());
+    let mut decoded =
+        decode_wav_streaming_to_mono_16k(&prepared.wav_path, !prepared.decoded_with_ffmpeg)?
+            .ok_or_else(|| {
+                AppError::decode_failed("Decoded audio stream could not be read as 16 kHz PCM WAV.")
+            })?;
+    decoded.timeline_offset_sec = prepared.timeline_offset_sec;
+    decoded.decoded_with_ffmpeg = prepared.decoded_with_ffmpeg;
+    if let Some(d) = prepared.expected_duration_sec {
+        decoded.duration_sec = decoded.duration_sec.max(d);
     }
-
-    let mut decoded = decode_wav_native_to_mono_16k(&tmp_wav.0)?.ok_or_else(|| {
-        AppError::decode_failed("FFmpeg decoded audio stream could not be read as 16 kHz PCM WAV.")
-    })?;
-    decoded.timeline_offset_sec = audio_start_time_sec;
-    decoded.decoded_with_ffmpeg = true;
-    // Original media duration includes any initial audio start_time offset.
-    if let Some(d) = expected_dur {
-        decoded.duration_sec = d.max(decoded.duration_sec + audio_start_time_sec);
-    } else {
-        decoded.duration_sec += audio_start_time_sec;
-    }
-    on_decode_progress(100.0);
     Ok(decoded)
 }
 
@@ -652,16 +766,19 @@ pub struct PreparedAudioWav {
     pub wav_path: PathBuf,
     pub original_input_path: String,
     pub file_name: String,
+    /// Informational relative audio-stream delay from media playback zero (already preserved as
+    /// leading silence inside `wav_path` when decoded via FFmpeg `aresample=async=1:first_pts=0`).
     pub timeline_offset_sec: f64,
     pub expected_duration_sec: Option<f64>,
     pub decoded_with_ffmpeg: bool,
     _temp_guard: Option<ScopedTempFile>,
 }
 
-/// Prepares any audio/video input as a WAV readable directly by `--asr-worker`.
+/// Prepares any audio/video input as a playback-zero-aligned WAV readable by `--asr-worker`.
 /// - Standard PCM/float WAVs (`<= 512 MiB`) require zero FFmpeg and zero temp files.
-/// - Other containers (`.mp3`, `.m4a`, `.mp4`, `.mkv`, etc.) extract 16 kHz mono PCM16 WAV via
-///   WinKit's cancellable FFmpeg runner while preserving `audio_start_time_sec` timeline alignment.
+/// - Other containers and `> 512 MiB` WAVs stream through WinKit's cancellable FFmpeg runner with
+///   `-af aresample=async=1:first_pts=0` so whole-container non-zero start timestamps anchor to
+///   playback zero (`0.0s`) while audio-only delays and mid-stream PTS gaps are preserved intact.
 pub fn prepare_media_wav_for_asr(
     media_root: &Path,
     raw_input_path: &str,
@@ -686,25 +803,9 @@ pub fn prepare_media_wav_for_asr(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "media".to_string());
 
-    let is_wav_ext = canonical_input
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("wav"))
-        .unwrap_or(false);
-    if is_wav_ext && byte_length <= 512 * 1024 * 1024 {
-        let mut head = vec![0u8; 65_536.min(byte_length as usize)];
-        let mut f = File::open(&canonical_input)
-            .map_err(|e| AppError::from_io(e, "Unable to open WAV file"))?;
-        let n = f
-            .read(&mut head)
-            .map_err(|e| AppError::from_io(e, "Unable to read WAV header"))?;
-        head.truncate(n);
-        if let Some(hdr) = parse_wav_header(&head) {
-            let bytes_per_frame = usize::from(hdr.channels) * usize::from(hdr.bits_per_sample / 8);
-            let actual_data_len = byte_length.saturating_sub(hdr.data_offset as u64);
-            let total_frames = actual_data_len / bytes_per_frame.max(1) as u64;
-            let duration_sec = total_frames as f64 / f64::from(hdr.sample_rate);
-            if duration_sec > MAX_AUDIO_DURATION_SEC {
+    if let Some(elig) = inspect_wav_native_eligibility(&canonical_input, byte_length)? {
+        if elig.can_decode_natively {
+            if elig.header.duration_sec > MAX_AUDIO_DURATION_SEC {
                 return Err(AppError::size_limit(
                     "Audio file exceeds the 4-hour offline transcription safety limit.",
                 ));
@@ -715,7 +816,7 @@ pub fn prepare_media_wav_for_asr(
                 original_input_path,
                 file_name,
                 timeline_offset_sec: 0.0,
-                expected_duration_sec: Some(duration_sec),
+                expected_duration_sec: Some(elig.header.duration_sec),
                 decoded_with_ffmpeg: false,
                 _temp_guard: None,
             });
@@ -732,19 +833,8 @@ pub fn prepare_media_wav_for_asr(
             AppError::decode_failed("Selected media file contains no audio track to transcribe.")
         })?;
 
-    let format_start = probed
-        .format
-        .as_ref()
-        .and_then(|f| parse_opt_f64(f.start_time.as_deref()))
-        .unwrap_or(0.0);
-    let audio_start_time_sec = parse_opt_f64(audio_stream.start_time.as_deref())
-        .unwrap_or(format_start)
-        .max(0.0);
-    let expected_dur = probed
-        .format
-        .as_ref()
-        .and_then(|f| parse_opt_f64(f.duration.as_deref()))
-        .or_else(|| parse_opt_f64(audio_stream.duration.as_deref()));
+    let audio_delay_sec = compute_relative_audio_delay_sec(&probed, Some(audio_stream));
+    let expected_dur = compute_playback_duration_sec(&probed, Some(audio_stream));
 
     if let Some(d) = expected_dur {
         if d > MAX_AUDIO_DURATION_SEC {
@@ -756,6 +846,8 @@ pub fn prepare_media_wav_for_asr(
 
     let tmp_wav =
         ScopedTempFile(std::env::temp_dir().join(format!("winkit_t01_{}.wav", Uuid::new_v4())));
+    // `aresample=async=1:first_pts=0` aligns sample 0 to FFmpeg's container playback zero while
+    // inserting exact silence for audio-only initial delays and mid-stream audio PTS gaps.
     let args: Vec<String> = vec![
         "-i".into(),
         canonical_input.to_string_lossy().into_owned(),
@@ -764,6 +856,8 @@ pub fn prepare_media_wav_for_asr(
         "-vn".into(),
         "-sn".into(),
         "-dn".into(),
+        "-af".into(),
+        "aresample=async=1:first_pts=0".into(),
         "-ac".into(),
         "1".into(),
         "-ar".into(),
@@ -794,7 +888,7 @@ pub fn prepare_media_wav_for_asr(
         wav_path: tmp_wav.0.clone(),
         original_input_path,
         file_name,
-        timeline_offset_sec: audio_start_time_sec,
+        timeline_offset_sec: audio_delay_sec,
         expected_duration_sec: expected_dur,
         decoded_with_ffmpeg: true,
         _temp_guard: Some(tmp_wav),
@@ -1407,10 +1501,10 @@ impl SenseVoiceAsrEngine {
             );
 
             let slice = &decoded.samples[reg.start_sample..reg.end_sample];
-            let reg_start_sec = decoded.timeline_offset_sec
-                + (reg.start_sample as f64 / f64::from(ASR_SAMPLE_RATE));
-            let reg_end_sec =
-                decoded.timeline_offset_sec + (reg.end_sample as f64 / f64::from(ASR_SAMPLE_RATE));
+            // Decoded WAV sample 0 is already aligned to media playback zero (with audio-only
+            // initial delays and mid-stream PTS gaps preserved as silence inside `decoded.samples`).
+            let reg_start_sec = reg.start_sample as f64 / f64::from(ASR_SAMPLE_RATE);
+            let reg_end_sec = reg.end_sample as f64 / f64::from(ASR_SAMPLE_RATE);
 
             let (det_lang, ctc_tokens) = self.recognize_slice(slice, language, use_itn)?;
             if ctc_tokens.is_empty() {
@@ -1751,26 +1845,46 @@ pub fn validate_subtitle_segments(segments: &[TranscriptSegment]) -> Result<(), 
     Ok(())
 }
 
+/// Normalizes a single subtitle cue's text identically across frontend copy and Rust export:
+/// preserves normal multi-line subtitles while stripping blank lines and whitespace-only lines
+/// (including spaces, tabs, and full-width spaces) so one cue can never split into malformed SRT blocks.
+pub fn sanitize_srt_cue_text(raw: &str) -> String {
+    raw.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .split('\n')
+        .map(|line| line.trim_end())
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\r\n")
+}
+
 pub fn format_segments_to_srt(segments: &[TranscriptSegment]) -> Result<String, AppError> {
-    let non_empty: Vec<&TranscriptSegment> = segments
-        .iter()
-        .filter(|s| !s.text.trim().is_empty())
-        .collect();
-    if non_empty.is_empty() {
+    let mut sanitized: Vec<TranscriptSegment> = Vec::with_capacity(segments.len());
+    for seg in segments {
+        let body = sanitize_srt_cue_text(&seg.text);
+        if body.is_empty() {
+            continue;
+        }
+        let mut cloned = seg.clone();
+        cloned.text = body;
+        sanitized.push(cloned);
+    }
+    if sanitized.is_empty() {
         return Err(AppError::invalid_param(
             "No non-empty transcript segments to export as SRT.",
         ));
     }
-    let owned: Vec<TranscriptSegment> = non_empty.iter().map(|s| (*s).clone()).collect();
-    validate_subtitle_segments(&owned)?;
+    validate_subtitle_segments(&sanitized)?;
 
-    let mut out = String::with_capacity(owned.len() * 64);
-    for (idx, seg) in owned.iter().enumerate() {
+    let mut out = String::with_capacity(sanitized.len() * 64);
+    for (idx, seg) in sanitized.iter().enumerate() {
         let num = idx + 1;
         let start = format_srt_timestamp(seg.start_sec);
         let end = format_srt_timestamp(seg.end_sec);
-        let body = seg.text.trim().replace("\r\n", "\n").replace('\r', "\n");
-        out.push_str(&format!("{num}\r\n{start} --> {end}\r\n{body}\r\n\r\n"));
+        out.push_str(&format!(
+            "{num}\r\n{start} --> {end}\r\n{}\r\n\r\n",
+            seg.text
+        ));
     }
     Ok(out)
 }
@@ -1778,7 +1892,7 @@ pub fn format_segments_to_srt(segments: &[TranscriptSegment]) -> Result<String, 
 pub fn format_segments_to_txt(segments: &[TranscriptSegment], include_timestamps: bool) -> String {
     let mut lines = Vec::new();
     for seg in segments {
-        let body = seg.text.trim();
+        let body = sanitize_srt_cue_text(&seg.text);
         if body.is_empty() {
             continue;
         }
@@ -1790,7 +1904,7 @@ pub fn format_segments_to_txt(segments: &[TranscriptSegment], include_timestamps
                 body
             ));
         } else {
-            lines.push(body.to_string());
+            lines.push(body);
         }
     }
     lines.join("\r\n")
@@ -1841,7 +1955,7 @@ pub fn export_transcript_file_impl(
     let segment_count = req
         .segments
         .iter()
-        .filter(|s| !s.text.trim().is_empty())
+        .filter(|s| !sanitize_srt_cue_text(&s.text).is_empty())
         .count();
 
     Ok(ExportTranscriptResult {
@@ -1976,6 +2090,478 @@ mod tests {
         let n_frames = fb.len() / FBANK_NUM_BINS;
         assert!((45..=52).contains(&n_frames), "got {n_frames} fbank frames");
         assert!(fb.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn multiline_srt_with_blank_and_whitespace_lines_roundtrips_as_single_cue_in_v02() {
+        let dir = tempdir().expect("tempdir");
+        let segs = vec![
+            TranscriptSegment {
+                id: 1,
+                start_sec: 0.5,
+                end_sec: 4.2,
+                text: "第一行中文校对   \r\n\r\n   \n\t\n\u{3000}\nSecond English line\n\n".into(),
+                language: Some("zh".into()),
+            },
+            TranscriptSegment {
+                id: 2,
+                start_sec: 4.5,
+                end_sec: 6.0,
+                text: "   \n\t\n\u{3000}  ".into(), // whitespace-only cue must be skipped cleanly
+                language: None,
+            },
+            TranscriptSegment {
+                id: 3,
+                start_sec: 6.2,
+                end_sec: 9.8,
+                text: "Line A\rLine B  \n\n\n第三行中英混排".into(),
+                language: Some("en".into()),
+            },
+        ];
+
+        let srt = format_segments_to_srt(&segs).expect("format srt");
+        assert!(srt.contains(
+            "1\r\n00:00:00,500 --> 00:00:04,200\r\n第一行中文校对\r\nSecond English line\r\n\r\n"
+        ));
+        assert!(srt.contains(
+            "2\r\n00:00:06,200 --> 00:00:09,800\r\nLine A\r\nLine B\r\n第三行中英混排\r\n\r\n"
+        ));
+
+        let out_srt = dir.path().join("multiline_bilingual.srt");
+        let res = export_transcript_file_impl(&ExportTranscriptRequest {
+            output_path: out_srt.to_string_lossy().into_owned(),
+            format: TranscriptExportFormat::Srt,
+            segments: segs,
+            forbidden_source_paths: vec![],
+            overwrite: false,
+        })
+        .expect("export multiline srt");
+        assert_eq!(res.segment_count, 2);
+
+        // Roundtrip through V02 subtitle parser — each edited segment MUST stay ONE cue!
+        let parsed = parse_subtitle_file_impl(&out_srt.to_string_lossy()).expect("v02 parse");
+        assert_eq!(parsed.cue_count, 2);
+        assert_eq!(parsed.cues[0].text, "第一行中文校对\nSecond English line");
+        assert_eq!(parsed.cues[1].text, "Line A\nLine B\n第三行中英混排");
+    }
+
+    #[test]
+    fn wav_inspect_and_decode_honor_riff_data_chunk_and_shared_512mib_cap() {
+        let dir = tempdir().expect("tempdir");
+        let wav_path = dir.path().join("with_trailing_list.wav");
+        let sr = 16_000u32;
+        let frames = 8_000usize; // exact 0.500 s
+        let data_len = (frames * 2) as u32;
+        let junk_payload = vec![0x7Fu8; 40_000]; // 40 KB trailing LIST/INFO chunk (~1.25 s if wrongly counted!)
+        let riff_size = 36 + data_len + 8 + junk_payload.len() as u32;
+
+        let mut buf = Vec::with_capacity((riff_size + 8) as usize);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&riff_size.to_le_bytes());
+        buf.extend_from_slice(b"WAVEfmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes());
+        buf.extend_from_slice(&sr.to_le_bytes());
+        buf.extend_from_slice(&(sr * 2).to_le_bytes());
+        buf.extend_from_slice(&2u16.to_le_bytes());
+        buf.extend_from_slice(&16u16.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..frames {
+            let s = ((2.0 * PI * 440.0 * (i as f32) / (sr as f32)).sin() * 12000.0) as i16;
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        buf.extend_from_slice(b"LIST");
+        buf.extend_from_slice(&(junk_payload.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&junk_payload);
+        fs::write(&wav_path, &buf).expect("write wav with trailing LIST");
+
+        // Inspection must compute exact 0.500 s from RIFF `data` chunk (ignoring trailing 40 KB LIST)
+        let inspected = inspect_transcribe_media_impl(dir.path(), &wav_path.to_string_lossy())
+            .expect("inspect wav");
+        assert!(inspected.is_wav_native);
+        assert!(!inspected.requires_ffmpeg);
+        let dur = inspected.duration_sec.expect("duration");
+        assert!(
+            (dur - 0.5).abs() < 0.005,
+            "expected 0.5s from data chunk, got {dur}s"
+        );
+
+        // Native streaming decode must read exact 8,000 samples (ignoring trailing LIST metadata)
+        let decoded = decode_wav_native_to_mono_16k(&wav_path)
+            .expect("decode")
+            .expect("native");
+        assert_eq!(decoded.samples.len(), 8_000);
+        assert!((decoded.duration_sec - 0.5).abs() < 0.005);
+
+        // Shared eligibility check: a file exceeding MAX_NATIVE_WAV_BYTES reports requires_ffmpeg=true
+        let over_cap = inspect_wav_native_eligibility(&wav_path, MAX_NATIVE_WAV_BYTES + 1024)
+            .expect("elig")
+            .expect("wav header");
+        assert!(!over_cap.can_decode_natively);
+        assert!((over_cap.header.duration_sec - 0.5).abs() < 0.005);
+    }
+
+    #[test]
+    fn timeline_alignment_handles_container_offset_audio_delay_and_midstream_gap_with_v02_burnin() {
+        use crate::media_subtitles::{
+            burn_in_subtitles_impl, BurnInSubtitlesRequest, SubtitleBoxStyle, SubtitleBurnStyle,
+            SubtitlePosition,
+        };
+        let dir = tempdir().expect("tempdir");
+        let Ok(tools) = require_media_tools(dir.path()) else {
+            return;
+        };
+        let run_ff = |args: &[&str]| {
+            let mut cmd = Command::new(&tools.ffmpeg);
+            configure_hidden_command(&mut cmd);
+            let out = cmd
+                .args(["-y", "-hide_banner", "-loglevel", "error"])
+                .args(args)
+                .output()
+                .expect("run ffmpeg");
+            assert!(
+                out.status.success(),
+                "ffmpeg failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+
+        let tone = dir.path().join("tone.wav");
+        run_ff(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=440:r=16000:d=1.5",
+            &tone.to_string_lossy(),
+        ]);
+
+        // 1. Whole container non-zero start (+10.0s)
+        let case1 = dir.path().join("case1_container_10s.mkv");
+        run_ff(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=#102040:s=320x240:r=24:d=4.0",
+            "-i",
+            &tone.to_string_lossy(),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-output_ts_offset",
+            "10.0",
+            &case1.to_string_lossy(),
+        ]);
+
+        // 2. Audio-only delay (+2.5s)
+        let case2 = dir.path().join("case2_audio_delay.mp4");
+        run_ff(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=#102040:s=320x240:r=24:d=5.5",
+            "-itsoffset",
+            "2.5",
+            "-i",
+            &tone.to_string_lossy(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-t",
+            "5.5",
+            &case2.to_string_lossy(),
+        ]);
+
+        // 3. Mid-stream audio PTS gap (0.5..2.0s, 4.0s gap, 6.0..7.5s)
+        let case3 = dir.path().join("case3_midgap.mkv");
+        run_ff(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=#102040:s=320x240:r=24:d=8.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=440:r=16000:d=3.0",
+            "-filter_complex",
+            "[1:a]asetpts=if(lt(T\\,1.5)\\,PTS+0.5/TB\\,PTS+4.5/TB)[agap]",
+            "-map",
+            "0:v:0",
+            "-map",
+            "[agap]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-t",
+            "8.5",
+            &case3.to_string_lossy(),
+        ]);
+
+        let active_ranges = |samples: &[f32]| -> Vec<(f64, f64)> {
+            let win = (ASR_SAMPLE_RATE / 20) as usize; // 50 ms
+            let mut out = Vec::new();
+            let mut in_seg = false;
+            let mut s0 = 0.0;
+            for (idx, chunk) in samples.chunks(win).enumerate() {
+                let peak = chunk.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+                let t = (idx * win) as f64 / f64::from(ASR_SAMPLE_RATE);
+                if peak > 0.05 && !in_seg {
+                    in_seg = true;
+                    s0 = t;
+                } else if peak <= 0.05 && in_seg {
+                    in_seg = false;
+                    out.push((s0, t));
+                }
+            }
+            if in_seg {
+                out.push((s0, samples.len() as f64 / f64::from(ASR_SAMPLE_RATE)));
+            }
+            out
+        };
+
+        let cancel = AtomicBool::new(false);
+
+        // Verify Case 1: whole container +10s -> playback zero (0.0s)
+        let i1 = inspect_transcribe_media_impl(dir.path(), &case1.to_string_lossy()).expect("i1");
+        assert!(
+            i1.audio_start_time_sec < 0.05,
+            "whole-container offset must normalize to 0.0s, got {}",
+            i1.audio_start_time_sec
+        );
+        let d1 = decode_media_to_mono_16k(dir.path(), &case1, &cancel, |_| {}).expect("d1");
+        let r1 = active_ranges(&d1.samples);
+        assert_eq!(r1.len(), 1, "case1 active ranges: {r1:?}");
+        assert!(r1[0].0 < 0.15, "case1 should begin near 0.0s: {r1:?}");
+
+        // Verify Case 2: audio-only delay +2.5s -> preserved at 2.5s
+        let i2 = inspect_transcribe_media_impl(dir.path(), &case2.to_string_lossy()).expect("i2");
+        assert!(
+            (i2.audio_start_time_sec - 2.45).abs() < 0.25,
+            "case2 relative delay expected ~2.5s, got {}",
+            i2.audio_start_time_sec
+        );
+        let d2 = decode_media_to_mono_16k(dir.path(), &case2, &cancel, |_| {}).expect("d2");
+        let r2 = active_ranges(&d2.samples);
+        assert_eq!(r2.len(), 1, "case2 active ranges: {r2:?}");
+        assert!(
+            (r2[0].0 - 2.5).abs() < 0.15,
+            "case2 audio onset should stay at ~2.5s: {r2:?}"
+        );
+
+        // Verify Case 3: mid-stream gap -> BOTH 0.5s initial delay AND 4.0s gap preserved!
+        let d3 = decode_media_to_mono_16k(dir.path(), &case3, &cancel, |_| {}).expect("d3");
+        let r3 = active_ranges(&d3.samples);
+        assert_eq!(r3.len(), 2, "case3 must preserve mid-stream gap: {r3:?}");
+        assert!(
+            (r3[0].0 - 0.5).abs() < 0.15,
+            "case3 seg1 start ~0.5s: {r3:?}"
+        );
+        assert!(
+            (r3[1].0 - 6.0).abs() < 0.2,
+            "case3 seg2 start ~6.0s: {r3:?}"
+        );
+
+        // Verify V02 actual burn-in pixel timing using SRT exported directly from Case 3 decoded ranges!
+        let srt3 = dir.path().join("case3.srt");
+        export_transcript_file_impl(&ExportTranscriptRequest {
+            output_path: srt3.to_string_lossy().into_owned(),
+            format: TranscriptExportFormat::Srt,
+            segments: vec![
+                TranscriptSegment {
+                    id: 1,
+                    start_sec: r3[0].0,
+                    end_sec: r3[0].1,
+                    text: "GAP_SEG_ONE".into(),
+                    language: None,
+                },
+                TranscriptSegment {
+                    id: 2,
+                    start_sec: r3[1].0,
+                    end_sec: r3[1].1,
+                    text: "GAP_SEG_TWO".into(),
+                    language: None,
+                },
+            ],
+            forbidden_source_paths: vec![case3.to_string_lossy().into_owned()],
+            overwrite: false,
+        })
+        .expect("export case3 srt");
+
+        let burned3 = dir.path().join("case3_burned.mp4");
+        burn_in_subtitles_impl(
+            dir.path(),
+            &BurnInSubtitlesRequest {
+                task_id: "t01-v02-gap-check".into(),
+                video_path: case3.to_string_lossy().into_owned(),
+                subtitle_path: srt3.to_string_lossy().into_owned(),
+                output_path: burned3.to_string_lossy().into_owned(),
+                style: SubtitleBurnStyle {
+                    font_size: 72,
+                    position: SubtitlePosition::Bottom,
+                    box_style: SubtitleBoxStyle::OutlineShadow,
+                    font_name: None,
+                    margin_v: Some(24),
+                },
+                allow_overwrite: Some(true),
+            },
+            &cancel,
+            |_| {},
+        )
+        .expect("v02 burn case3");
+
+        let count_bright_bottom_pixels = |mp4: &Path, t_sec: f64| -> usize {
+            let png = dir.path().join(format!("frame_{:.1}.png", t_sec));
+            run_ff(&[
+                "-ss",
+                &format!("{t_sec:.2}"),
+                "-i",
+                &mp4.to_string_lossy(),
+                "-frames:v",
+                "1",
+                &png.to_string_lossy(),
+            ]);
+            let img = image::open(&png).expect("open frame").to_rgb8();
+            let (w, h) = img.dimensions();
+            let mut bright = 0usize;
+            for y in (h / 2)..h {
+                for x in 0..w {
+                    let p = img.get_pixel(x, y);
+                    if p[0] > 190 && p[1] > 190 && p[2] > 190 {
+                        bright += 1;
+                    }
+                }
+            }
+            bright
+        };
+
+        let px_seg1 = count_bright_bottom_pixels(&burned3, 1.2);
+        let px_gap = count_bright_bottom_pixels(&burned3, 4.0);
+        let px_seg2 = count_bright_bottom_pixels(&burned3, 6.7);
+        assert!(
+            px_seg1 > 50,
+            "expected burned subtitle in seg1 (1.2s), got {px_seg1}"
+        );
+        assert_eq!(
+            px_gap, 0,
+            "expected ZERO subtitle pixels inside 4.0s gap, got {px_gap}"
+        );
+        assert!(
+            px_seg2 > 50,
+            "expected burned subtitle in seg2 (6.7s), got {px_seg2}"
+        );
+
+        // Also verify V02 burn-in pixel timing on Case 1 (container +10s -> plays from 0.0s) and Case 2 (audio delay +2.5s)!
+        let srt1 = dir.path().join("case1.srt");
+        export_transcript_file_impl(&ExportTranscriptRequest {
+            output_path: srt1.to_string_lossy().into_owned(),
+            format: TranscriptExportFormat::Srt,
+            segments: vec![TranscriptSegment {
+                id: 1,
+                start_sec: r1[0].0,
+                end_sec: r1[0].1,
+                text: "CONTAINER_ZERO".into(),
+                language: None,
+            }],
+            forbidden_source_paths: vec![case1.to_string_lossy().into_owned()],
+            overwrite: false,
+        })
+        .expect("export case1 srt");
+        let burned1 = dir.path().join("case1_burned.mp4");
+        burn_in_subtitles_impl(
+            dir.path(),
+            &BurnInSubtitlesRequest {
+                task_id: "t01-v02-c1".into(),
+                video_path: case1.to_string_lossy().into_owned(),
+                subtitle_path: srt1.to_string_lossy().into_owned(),
+                output_path: burned1.to_string_lossy().into_owned(),
+                style: SubtitleBurnStyle {
+                    font_size: 72,
+                    position: SubtitlePosition::Bottom,
+                    box_style: SubtitleBoxStyle::OutlineShadow,
+                    font_name: None,
+                    margin_v: Some(24),
+                },
+                allow_overwrite: Some(true),
+            },
+            &cancel,
+            |_| {},
+        )
+        .expect("v02 burn case1");
+        assert!(
+            count_bright_bottom_pixels(&burned1, 0.8) > 50,
+            "case1 subtitle must burn at playback 0.8s"
+        );
+        assert_eq!(
+            count_bright_bottom_pixels(&burned1, 3.0),
+            0,
+            "case1 subtitle must disappear after 1.5s"
+        );
+
+        let srt2 = dir.path().join("case2.srt");
+        export_transcript_file_impl(&ExportTranscriptRequest {
+            output_path: srt2.to_string_lossy().into_owned(),
+            format: TranscriptExportFormat::Srt,
+            segments: vec![TranscriptSegment {
+                id: 1,
+                start_sec: r2[0].0,
+                end_sec: r2[0].1,
+                text: "AUDIO_DELAYED".into(),
+                language: None,
+            }],
+            forbidden_source_paths: vec![case2.to_string_lossy().into_owned()],
+            overwrite: false,
+        })
+        .expect("export case2 srt");
+        let burned2 = dir.path().join("case2_burned.mp4");
+        burn_in_subtitles_impl(
+            dir.path(),
+            &BurnInSubtitlesRequest {
+                task_id: "t01-v02-c2".into(),
+                video_path: case2.to_string_lossy().into_owned(),
+                subtitle_path: srt2.to_string_lossy().into_owned(),
+                output_path: burned2.to_string_lossy().into_owned(),
+                style: SubtitleBurnStyle {
+                    font_size: 72,
+                    position: SubtitlePosition::Bottom,
+                    box_style: SubtitleBoxStyle::OutlineShadow,
+                    font_name: None,
+                    margin_v: Some(24),
+                },
+                allow_overwrite: Some(true),
+            },
+            &cancel,
+            |_| {},
+        )
+        .expect("v02 burn case2");
+        assert_eq!(
+            count_bright_bottom_pixels(&burned2, 1.0),
+            0,
+            "case2 must have zero subtitle pixels before +2.5s audio delay"
+        );
+        assert!(
+            count_bright_bottom_pixels(&burned2, 3.2) > 50,
+            "case2 subtitle must burn during delayed speech at 3.2s"
+        );
     }
 
     #[test]

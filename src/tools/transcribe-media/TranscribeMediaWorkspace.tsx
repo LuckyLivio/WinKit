@@ -26,12 +26,10 @@ import {
   bindDisposableListener,
   exportTranscriptFile,
   formatLocalizedError,
-  inspectTranscribeMedia,
   openLocalDirectory,
   parseBackendError,
   pickSaveFilePath,
   pickSingleFile,
-  registerMediaPreviewPath,
   subscribeFileDrop,
   writeSystemClipboardText,
   type AsrLanguage,
@@ -49,6 +47,7 @@ import {
   formatTranscriptAsSrt,
   formatTranscriptAsTxt,
   parseTimestampInput,
+  resolvePreviewSeekTime,
   sortAndResolveSegmentOverlaps,
   suggestTranscriptExportPath,
   validateTranscriptSegments,
@@ -60,8 +59,14 @@ interface PendingExportOverwrite {
   outputPath: string;
   format: TranscriptExportFormat;
   sourcePath: string | null;
+  sourceGeneration: number;
   segmentsDigest: string;
   segments: TranscriptSegment[];
+}
+
+interface PendingRetranscribeConfirm {
+  sourceGeneration: number;
+  sourcePath: string;
 }
 
 function getPhaseLabel(phase: string, isZh: boolean): string {
@@ -105,6 +110,8 @@ export function TranscribeMediaWorkspace() {
   const {
     mediaSession,
     updateTranscribeMediaSession,
+    loadTranscribeMediaFile,
+    clearTranscribeMedia,
     startTranscribeMediaTask,
     cancelTranscribeMediaTask,
     handoffMediaFileToTool,
@@ -114,21 +121,27 @@ export function TranscribeMediaWorkspace() {
 
   const st = mediaSession.transcribeMedia;
   const running = st.taskStatus === "running";
+  const inspecting = st.inspectLoading;
 
   const [modelStatus, setModelStatus] = useState<AsrModelStatus | null>(null);
   const [mediaToolsStatus, setMediaToolsStatus] = useState<MediaToolsStatus | null>(null);
   const [hovering, setHovering] = useState(false);
-  const [inspecting, setInspecting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedKind, setCopiedKind] = useState<"txt" | "srt" | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [overwritePending, setOverwritePending] = useState<PendingExportOverwrite | null>(null);
+  const [retranscribeConfirm, setRetranscribeConfirm] = useState<PendingRetranscribeConfirm | null>(
+    null,
+  );
   const [draftTimes, setDraftTimes] = useState<Record<string, string>>({});
 
-  const loadSeqRef = useRef(0);
   const mediaPlayerRef = useRef<HTMLMediaElement | null>(null);
   const copyTimerRef = useRef<number | null>(null);
+  const sourceGenRef = useRef(st.sourceGeneration);
+  const sourcePathRef = useRef(st.sourcePath);
+  sourceGenRef.current = st.sourceGeneration;
+  sourcePathRef.current = st.sourcePath;
 
   useEffect(() => {
     return () => {
@@ -141,71 +154,56 @@ export function TranscribeMediaWorkspace() {
   const validation = useMemo(() => validateTranscriptSegments(st.segments), [st.segments]);
   const segmentsDigest = useMemo(() => computeSegmentsDigestKey(st.segments), [st.segments]);
 
-  // Invalidate any pending overwrite confirmation whenever source media or transcript edits change.
+  // Reset transient local UI state whenever active media switches or is cleared.
+  useEffect(() => {
+    setDraftTimes({});
+    setExportError(null);
+    setOverwritePending(null);
+    setRetranscribeConfirm(null);
+  }, [st.sourceGeneration]);
+
+  // Invalidate any pending overwrite confirmation whenever source media, segments, or run state changes.
   useEffect(() => {
     setOverwritePending((pending) => {
       if (!pending) return null;
-      if (pending.sourcePath !== st.sourcePath || pending.segmentsDigest !== segmentsDigest) {
+      if (
+        running ||
+        pending.sourceGeneration !== st.sourceGeneration ||
+        pending.sourcePath !== st.sourcePath ||
+        pending.segmentsDigest !== segmentsDigest
+      ) {
         return null;
       }
       return pending;
     });
-  }, [st.sourcePath, segmentsDigest]);
+  }, [running, st.sourceGeneration, st.sourcePath, segmentsDigest]);
+
+  useEffect(() => {
+    if (running) {
+      setRetranscribeConfirm(null);
+      setDraftTimes({});
+    }
+  }, [running]);
 
   const loadMediaFile = useCallback(
     async (filePath: string) => {
       if (running) return;
-      const loadId = ++loadSeqRef.current;
-      setInspecting(true);
       setExportError(null);
       setOverwritePending(null);
+      setRetranscribeConfirm(null);
       setDraftTimes({});
-      updateTranscribeMediaSession((prev) => ({
-        ...prev,
-        sourcePath: filePath,
-        inspect: null,
-        previewUrl: null,
-        lastResult: null,
-        segments: [],
-        lastExportedPath: null,
-        lastExportedFormat: null,
-        errorMessage: null,
-      }));
-
-      try {
-        const inspected = await inspectTranscribeMedia(filePath);
-        if (loadSeqRef.current !== loadId) return;
-        const preview = await registerMediaPreviewPath(inspected.path).catch(() => null);
-        if (loadSeqRef.current !== loadId) return;
-        updateTranscribeMediaSession((prev) => ({
-          ...prev,
-          sourcePath: inspected.path,
-          inspect: inspected,
-          previewUrl: preview?.url ?? null,
-          errorMessage: inspected.hasAudio
-            ? null
-            : isZh
-              ? "该媒体文件不包含可转写的音轨。"
-              : "This media file contains no audio stream to transcribe.",
-        }));
-      } catch (err) {
-        if (loadSeqRef.current !== loadId) return;
-        updateTranscribeMediaSession((prev) => ({
-          ...prev,
-          inspect: null,
-          previewUrl: null,
-          errorMessage: formatLocalizedError(err, t),
-        }));
-      } finally {
-        if (loadSeqRef.current === loadId) {
-          setInspecting(false);
-        }
-      }
+      await loadTranscribeMediaFile(
+        filePath,
+        (err) => formatLocalizedError(err, t),
+        isZh
+          ? "该媒体文件不包含可转写的音轨。"
+          : "This media file contains no audio stream to transcribe.",
+      );
     },
-    [isZh, running, t, updateTranscribeMediaSession],
+    [isZh, loadTranscribeMediaFile, running, t],
   );
 
-  // Clean handoff intake hook for future A02 / media tools sending audio to T01.
+  // Clean handoff intake hook for A02 / media tools sending audio to T01.
   useEffect(() => {
     const handed = consumePendingHandoff("T01");
     if (handed) {
@@ -246,41 +244,32 @@ export function TranscribeMediaWorkspace() {
 
   const handleClear = () => {
     if (running) return;
-    loadSeqRef.current += 1;
-    setInspecting(false);
     setSearchQuery("");
     setExportError(null);
     setOverwritePending(null);
+    setRetranscribeConfirm(null);
     setDraftTimes({});
-    updateTranscribeMediaSession((prev) => ({
-      ...prev,
-      sourcePath: null,
-      inspect: null,
-      previewUrl: null,
-      lastResult: null,
-      segments: [],
-      lastExportedPath: null,
-      lastExportedFormat: null,
-      errorMessage: null,
-    }));
+    clearTranscribeMedia();
   };
 
   const needsFfmpegAndMissing = Boolean(
     st.inspect && st.inspect.requiresFfmpeg && mediaToolsStatus && !mediaToolsStatus.ready,
   );
+  const ffmpegReadyForCurrent = Boolean(!st.inspect?.requiresFfmpeg || mediaToolsStatus?.ready);
   const canStart = Boolean(
     !running &&
     !inspecting &&
     st.sourcePath &&
     st.inspect?.hasAudio &&
     modelStatus?.ready &&
-    !needsFfmpegAndMissing,
+    ffmpegReadyForCurrent,
   );
 
-  const handleStartTranscribe = async () => {
+  const executeStartTranscribe = async () => {
     if (!canStart || !st.sourcePath) return;
     setExportError(null);
     setOverwritePending(null);
+    setRetranscribeConfirm(null);
     setDraftTimes({});
     await startTranscribeMediaTask(
       {
@@ -292,27 +281,56 @@ export function TranscribeMediaWorkspace() {
     );
   };
 
+  const handleStartTranscribe = () => {
+    if (!canStart || !st.sourcePath) return;
+    if (st.hasManualEdits && st.segments.length > 0) {
+      setRetranscribeConfirm({
+        sourceGeneration: st.sourceGeneration,
+        sourcePath: st.sourcePath,
+      });
+      return;
+    }
+    void executeStartTranscribe();
+  };
+
+  const handleConfirmRetranscribe = () => {
+    const pending = retranscribeConfirm;
+    setRetranscribeConfirm(null);
+    if (
+      !pending ||
+      pending.sourceGeneration !== st.sourceGeneration ||
+      pending.sourcePath !== st.sourcePath
+    ) {
+      return;
+    }
+    void executeStartTranscribe();
+  };
+
   const handleSeekTo = (sec: number) => {
     const el = mediaPlayerRef.current;
     if (!el) return;
-    const offset = st.lastResult?.timelineOffsetSec ?? st.inspect?.audioStartTimeSec ?? 0;
-    const target = Math.max(0, sec - (offset > 0 && el.duration && sec > el.duration ? offset : 0));
-    el.currentTime = Number.isFinite(el.duration)
-      ? Math.min(target, Math.max(0, el.duration - 0.05))
-      : target;
+    el.currentTime = resolvePreviewSeekTime(
+      sec,
+      el.duration,
+      st.inspect?.containerStartTimeSec ?? 0,
+      st.inspect?.durationSec ?? null,
+    );
     void el.play().catch(() => {});
   };
 
   const handleUpdateSegmentText = (index: number, nextText: string) => {
+    if (running) return;
     updateTranscribeMediaSession((prev) => {
+      if (prev.segments[index]?.text === nextText) return prev;
       const next = prev.segments.map((seg, idx) =>
         idx === index ? { ...seg, text: nextText } : seg,
       );
-      return { ...prev, segments: next };
+      return { ...prev, segments: next, hasManualEdits: true };
     });
   };
 
   const handleCommitTimestamp = (index: number, field: "startSec" | "endSec", rawValue: string) => {
+    if (running) return;
     const key = `${index}:${field}`;
     const parsed = parseTimestampInput(rawValue);
     setDraftTimes((prev) => {
@@ -322,24 +340,29 @@ export function TranscribeMediaWorkspace() {
     });
     if (parsed === null) return;
     updateTranscribeMediaSession((prev) => {
+      const cur = prev.segments[index];
+      if (!cur || Math.abs(cur[field] - parsed) < 1e-6) return prev;
       const next = prev.segments.map((seg, idx) =>
         idx === index ? { ...seg, [field]: parsed } : seg,
       );
-      return { ...prev, segments: next };
+      return { ...prev, segments: next, hasManualEdits: true };
     });
   };
 
   const handleDeleteSegment = (index: number) => {
+    if (running) return;
     setDraftTimes({});
     updateTranscribeMediaSession((prev) => ({
       ...prev,
       segments: prev.segments
         .filter((_, idx) => idx !== index)
         .map((seg, idx) => ({ ...seg, id: idx + 1 })),
+      hasManualEdits: true,
     }));
   };
 
   const handleInsertSegmentAfter = (index: number) => {
+    if (running) return;
     setDraftTimes({});
     updateTranscribeMediaSession((prev) => {
       const cur = prev.segments[index];
@@ -361,19 +384,23 @@ export function TranscribeMediaWorkspace() {
       return {
         ...prev,
         segments: arr.map((s, idx) => ({ ...s, id: idx + 1 })),
+        hasManualEdits: true,
       };
     });
   };
 
   const handleAutoFixOrder = () => {
+    if (running) return;
     setDraftTimes({});
     updateTranscribeMediaSession((prev) => ({
       ...prev,
       segments: sortAndResolveSegmentOverlaps(prev.segments),
+      hasManualEdits: true,
     }));
   };
 
   const handleCopy = async (kind: "txt" | "srt") => {
+    if (running) return;
     setExportError(null);
     if (kind === "srt" && !validation.valid) {
       setExportError(
@@ -403,6 +430,7 @@ export function TranscribeMediaWorkspace() {
     format: TranscriptExportFormat,
     segmentsSnapshot: TranscriptSegment[],
     sourcePathSnapshot: string | null,
+    sourceGenerationSnapshot: number,
     overwrite: boolean,
   ) => {
     setExporting(true);
@@ -416,18 +444,34 @@ export function TranscribeMediaWorkspace() {
         overwrite,
       });
       setOverwritePending(null);
-      updateTranscribeMediaSession((prev) => ({
-        ...prev,
-        lastExportedPath: res.outputPath,
-        lastExportedFormat: res.format,
-      }));
+      updateTranscribeMediaSession((prev) => {
+        if (
+          prev.sourceGeneration !== sourceGenerationSnapshot ||
+          prev.sourcePath !== sourcePathSnapshot
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          lastExportedPath: res.outputPath,
+          lastExportedFormat: res.format,
+          lastExportedSourcePath: sourcePathSnapshot,
+        };
+      });
     } catch (err) {
+      if (
+        sourceGenRef.current !== sourceGenerationSnapshot ||
+        sourcePathRef.current !== sourcePathSnapshot
+      ) {
+        return;
+      }
       const parsed = parseBackendError(err);
       if (!overwrite && parsed.code === "TARGET_ALREADY_EXISTS") {
         setOverwritePending({
           outputPath,
           format,
           sourcePath: sourcePathSnapshot,
+          sourceGeneration: sourceGenerationSnapshot,
           segmentsDigest: computeSegmentsDigestKey(segmentsSnapshot),
           segments: segmentsSnapshot,
         });
@@ -440,6 +484,7 @@ export function TranscribeMediaWorkspace() {
   };
 
   const handleExport = async (format: TranscriptExportFormat) => {
+    if (running) return;
     setExportError(null);
     if (validation.nonEmptyCount === 0) {
       setExportError(
@@ -455,8 +500,11 @@ export function TranscribeMediaWorkspace() {
       );
       return;
     }
-    const defaultPath = st.sourcePath
-      ? suggestTranscriptExportPath(st.sourcePath, format)
+    const exportGen = st.sourceGeneration;
+    const exportSourcePath = st.sourcePath;
+    const segmentsSnapshot = st.segments.map((s) => ({ ...s }));
+    const defaultPath = exportSourcePath
+      ? suggestTranscriptExportPath(exportSourcePath, format)
       : format === "srt"
         ? "transcript.srt"
         : "transcript.txt";
@@ -476,19 +524,21 @@ export function TranscribeMediaWorkspace() {
           : [{ name: "Text File (*.txt)", extensions: ["txt"] }],
     });
     if (!picked) return;
-    await executeExport(
-      picked,
-      format,
-      st.segments.map((s) => ({ ...s })),
-      st.sourcePath,
-      false,
-    );
+    if (sourceGenRef.current !== exportGen || sourcePathRef.current !== exportSourcePath) {
+      return;
+    }
+    await executeExport(picked, format, segmentsSnapshot, exportSourcePath, exportGen, false);
   };
 
   const handleConfirmOverwrite = async () => {
     const pending = overwritePending;
     if (!pending) return;
-    if (pending.sourcePath !== st.sourcePath || pending.segmentsDigest !== segmentsDigest) {
+    if (
+      running ||
+      pending.sourceGeneration !== st.sourceGeneration ||
+      pending.sourcePath !== st.sourcePath ||
+      pending.segmentsDigest !== segmentsDigest
+    ) {
       setOverwritePending(null);
       return;
     }
@@ -498,6 +548,7 @@ export function TranscribeMediaWorkspace() {
       pending.format,
       pending.segments,
       pending.sourcePath,
+      pending.sourceGeneration,
       true,
     );
   };
@@ -526,11 +577,13 @@ export function TranscribeMediaWorkspace() {
             aria-label={isZh ? "媒体来源与转写设置" : "Media Source & Settings"}
           >
             <div
-              className={`t01-dropzone ${hovering ? "is-hovering" : ""}`}
+              className={`t01-dropzone ${hovering ? "is-hovering" : ""} ${running ? "is-disabled" : ""}`}
               role="button"
-              tabIndex={0}
+              tabIndex={running ? -1 : 0}
+              aria-disabled={running}
               onClick={() => void handlePickFile()}
               onKeyDown={(e) => {
+                if (running) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   void handlePickFile();
@@ -607,8 +660,8 @@ export function TranscribeMediaWorkspace() {
                   {st.inspect.audioStartTimeSec > 0.01 && (
                     <span className="t01-pill is-warn mono" data-testid="t01-timeline-offset-pill">
                       {isZh
-                        ? `原时间轴起点 +${st.inspect.audioStartTimeSec.toFixed(3)}s`
-                        : `Timeline offset +${st.inspect.audioStartTimeSec.toFixed(3)}s`}
+                        ? `音轨延迟 +${st.inspect.audioStartTimeSec.toFixed(3)}s`
+                        : `Audio delay +${st.inspect.audioStartTimeSec.toFixed(3)}s`}
                     </span>
                   )}
                 </div>
@@ -642,10 +695,18 @@ export function TranscribeMediaWorkspace() {
             )}
 
             {needsFfmpegAndMissing && (
-              <div className="status-banner is-error" role="alert">
-                {isZh
-                  ? "当前文件不是标准 WAV，请先在上方「配置媒体组件」安装或指定本地 FFmpeg / ffprobe。"
-                  : "This container requires FFmpeg. Configure local FFmpeg / ffprobe in the panel above first."}
+              <div
+                className="status-banner is-error"
+                role="alert"
+                data-testid="t01-ffmpeg-required-banner"
+              >
+                {st.inspect?.containerFormat === "wav" && !st.inspect.isWavNative
+                  ? isZh
+                    ? "该 WAV 文件超过 512 MiB 直读上限或使用了非标准编码，需要本地 FFmpeg / ffprobe 解码。请先在上方「配置媒体组件」安装或指定本地 FFmpeg。"
+                    : "This WAV file exceeds the 512 MiB native-read limit or uses an unsupported WAV encoding, so local FFmpeg / ffprobe is required. Configure FFmpeg in the panel above first."
+                  : isZh
+                    ? "当前文件不是标准 WAV，请先在上方「配置媒体组件」安装或指定本地 FFmpeg / ffprobe。"
+                    : "This container requires FFmpeg. Configure local FFmpeg / ffprobe in the panel above first."}
               </div>
             )}
 
@@ -704,7 +765,7 @@ export function TranscribeMediaWorkspace() {
                   type="button"
                   className="btn btn-primary"
                   disabled={!canStart}
-                  onClick={() => void handleStartTranscribe()}
+                  onClick={handleStartTranscribe}
                   data-testid="t01-start-btn"
                 >
                   {st.lastResult ? (
@@ -805,6 +866,11 @@ export function TranscribeMediaWorkspace() {
                         {formatLanguageBadge(lang, isZh)}
                       </span>
                     ))}
+                    {st.hasManualEdits && (
+                      <span className="t01-pill is-warn" data-testid="t01-edited-pill">
+                        {isZh ? "已手工修改" : "Edited"}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -814,6 +880,7 @@ export function TranscribeMediaWorkspace() {
                   <input
                     type="checkbox"
                     checked={st.includeTxtTimestamps}
+                    disabled={running}
                     onChange={(e) =>
                       updateTranscribeMediaSession((prev) => ({
                         ...prev,
@@ -825,6 +892,14 @@ export function TranscribeMediaWorkspace() {
                 </label>
               )}
             </div>
+
+            {running && st.segments.length > 0 && (
+              <div className="status-banner" role="status" data-testid="t01-edit-locked-banner">
+                {isZh
+                  ? "正在重新离线转写，当前字幕内容已暂时锁定，防止覆盖或并发修改；若任务失败或取消，原有修改将完整保留。"
+                  : "Re-transcribing offline: editing and exporting are locked while running. Existing edits will remain intact if the run fails or is cancelled."}
+              </div>
+            )}
 
             {st.segments.length > 0 && (
               <div className="t01-toolbar">
@@ -843,7 +918,7 @@ export function TranscribeMediaWorkspace() {
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    disabled={exporting || validation.nonEmptyCount === 0}
+                    disabled={running || exporting || validation.nonEmptyCount === 0}
                     onClick={() => void handleCopy("txt")}
                     data-testid="t01-copy-txt-btn"
                   >
@@ -866,7 +941,7 @@ export function TranscribeMediaWorkspace() {
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    disabled={exporting || !validation.valid}
+                    disabled={running || exporting || !validation.valid}
                     onClick={() => void handleCopy("srt")}
                     data-testid="t01-copy-srt-btn"
                   >
@@ -889,7 +964,7 @@ export function TranscribeMediaWorkspace() {
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    disabled={exporting || validation.nonEmptyCount === 0}
+                    disabled={running || exporting || validation.nonEmptyCount === 0}
                     onClick={() =>
                       void handleExport(st.includeTxtTimestamps ? "txt_timestamped" : "txt")
                     }
@@ -902,7 +977,7 @@ export function TranscribeMediaWorkspace() {
                   <button
                     type="button"
                     className="btn btn-primary"
-                    disabled={exporting || !validation.valid}
+                    disabled={running || exporting || !validation.valid}
                     onClick={() => void handleExport("srt")}
                     data-testid="t01-export-srt-btn"
                   >
@@ -926,6 +1001,7 @@ export function TranscribeMediaWorkspace() {
                 <button
                   type="button"
                   className="btn btn-secondary"
+                  disabled={running}
                   onClick={handleAutoFixOrder}
                   data-testid="t01-autofix-order-btn"
                 >
@@ -948,42 +1024,47 @@ export function TranscribeMediaWorkspace() {
               </div>
             )}
 
-            {st.lastExportedPath && (
-              <div className="t01-export-result" role="status" data-testid="t01-export-success">
-                <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                  <CheckCircle2
-                    size={15}
-                    style={{ color: "var(--status-ok)", flexShrink: 0 }}
-                    aria-hidden="true"
-                  />
-                  <span className="mono" style={{ wordBreak: "break-all" }}>
-                    {isZh ? "已导出：" : "Saved: "}
-                    {st.lastExportedPath}
-                  </span>
-                </div>
-                <div className="media-actions-row">
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => void openLocalDirectory(getParentDir(st.lastExportedPath!))}
-                  >
-                    <FolderOpen size={14} aria-hidden="true" />
-                    <span>{isZh ? "打开所在目录" : "Open Folder"}</span>
-                  </button>
-                  {st.lastExportedFormat === "srt" && (
+            {st.lastExportedPath &&
+              st.lastExportedSourcePath !== null &&
+              st.lastExportedSourcePath === st.sourcePath && (
+                <div className="t01-export-result" role="status" data-testid="t01-export-success">
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                    <CheckCircle2
+                      size={15}
+                      style={{ color: "var(--status-ok)", flexShrink: 0 }}
+                      aria-hidden="true"
+                    />
+                    <span className="mono" style={{ wordBreak: "break-all" }}>
+                      {isZh ? "已导出：" : "Saved: "}
+                      {st.lastExportedPath}
+                    </span>
+                  </div>
+                  <div className="media-actions-row">
                     <button
                       type="button"
-                      className="btn btn-secondary"
-                      onClick={() => handoffMediaFileToTool("V02", st.lastExportedPath!)}
-                      data-testid="t01-send-v02-btn"
+                      className="btn btn-ghost"
+                      onClick={() => void openLocalDirectory(getParentDir(st.lastExportedPath!))}
                     >
-                      <Captions size={14} aria-hidden="true" />
-                      <span>{isZh ? "发送到视频加字幕 (V02)" : "Send to Add Subtitles (V02)"}</span>
+                      <FolderOpen size={14} aria-hidden="true" />
+                      <span>{isZh ? "打开所在目录" : "Open Folder"}</span>
                     </button>
-                  )}
+                    {st.lastExportedFormat === "srt" && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={running}
+                        onClick={() => handoffMediaFileToTool("V02", st.lastExportedPath!)}
+                        data-testid="t01-send-v02-btn"
+                      >
+                        <Captions size={14} aria-hidden="true" />
+                        <span>
+                          {isZh ? "发送到视频加字幕 (V02)" : "Send to Add Subtitles (V02)"}
+                        </span>
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
             {st.segments.length === 0 ? (
               <div className="t01-empty-state" data-testid="t01-empty-state">
@@ -1033,6 +1114,7 @@ export function TranscribeMediaWorkspace() {
                             type="text"
                             className={`t01-time-input mono ${isBad ? "is-bad" : ""}`}
                             value={startVal}
+                            disabled={running}
                             aria-label={
                               isZh ? `第 ${index + 1} 条开始时间` : `Cue ${index + 1} start time`
                             }
@@ -1052,6 +1134,7 @@ export function TranscribeMediaWorkspace() {
                             type="text"
                             className={`t01-time-input mono ${isBad ? "is-bad" : ""}`}
                             value={endVal}
+                            disabled={running}
                             aria-label={
                               isZh ? `第 ${index + 1} 条结束时间` : `Cue ${index + 1} end time`
                             }
@@ -1077,6 +1160,7 @@ export function TranscribeMediaWorkspace() {
                           <button
                             type="button"
                             className="t01-icon-btn"
+                            disabled={running}
                             title={isZh ? "在下方插入一条字幕" : "Insert cue below"}
                             aria-label={
                               isZh ? `在第 ${index + 1} 条后插入` : `Insert after cue ${index + 1}`
@@ -1088,6 +1172,7 @@ export function TranscribeMediaWorkspace() {
                           <button
                             type="button"
                             className="t01-icon-btn"
+                            disabled={running}
                             title={isZh ? "删除此条字幕" : "Delete cue"}
                             aria-label={isZh ? `删除第 ${index + 1} 条` : `Delete cue ${index + 1}`}
                             onClick={() => handleDeleteSegment(index)}
@@ -1101,6 +1186,7 @@ export function TranscribeMediaWorkspace() {
                         className="t01-segment-textarea"
                         value={seg.text}
                         rows={2}
+                        disabled={running}
                         aria-label={isZh ? `第 ${index + 1} 条文本` : `Cue ${index + 1} text`}
                         onChange={(e) => handleUpdateSegmentText(index, e.target.value)}
                       />
@@ -1112,6 +1198,21 @@ export function TranscribeMediaWorkspace() {
           </section>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(retranscribeConfirm)}
+        title={isZh ? "替换当前手工校对内容？" : "Replace Manual Transcript Edits?"}
+        body={
+          isZh
+            ? "当前转写结果包含未保存的手工修改。重新离线转写完成后将用新结果替换现有文本与时间戳；若转写失败或中途取消，原有修改仍会保留。是否继续？"
+            : "The current transcript contains manual edits. Completing a new transcription will replace the existing text and timestamps, while a failed or cancelled run keeps your current edits intact. Continue?"
+        }
+        confirmLabel={isZh ? "继续重新转写" : "Re-transcribe"}
+        cancelLabel={isZh ? "取消" : "Cancel"}
+        danger
+        onConfirm={handleConfirmRetranscribe}
+        onCancel={() => setRetranscribeConfirm(null)}
+      />
 
       <ConfirmDialog
         open={Boolean(overwritePending)}
