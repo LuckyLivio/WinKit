@@ -20,9 +20,10 @@
 use crate::error::AppError;
 use crate::fs_guard::validate_existing_input_file;
 use crate::pdf_pdfium::{
-    extract_page_text_with_pdfium, inspect_with_pdfium, render_page_png_with_pdfium,
-    render_page_rgba_with_pdfium, search_document_with_pdfium, PdfPageTextPayload, PdfRenderMeta,
-    PdfSearchResult, PdfiumInspectResult, MAX_PDF_FILE_BYTES,
+    extract_page_text_with_pdfium, inspect_pages_text_status_with_pdfium, inspect_with_pdfium,
+    render_page_png_with_pdfium, render_page_rgba_with_pdfium, search_document_with_pdfium,
+    PdfPageTextPayload, PdfPageTextSummary, PdfRenderMeta, PdfSearchResult, PdfiumInspectResult,
+    MAX_PDF_FILE_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -65,6 +66,9 @@ pub enum PdfWorkerRequest {
         path: String,
         page_number: usize,
     },
+    InspectPagesText {
+        path: String,
+    },
     Search {
         path: String,
         query: String,
@@ -80,6 +84,7 @@ pub enum PdfWorkerResponse {
     Inspect(PdfiumInspectResult),
     Render(PdfRenderMeta),
     ExtractText(PdfPageTextPayload),
+    PagesText { pages: Vec<PdfPageTextSummary> },
     Search(PdfSearchResult),
     Error { code: String, message: String },
     Bye,
@@ -228,6 +233,16 @@ pub fn dispatch_worker_request(
             };
             match extract_page_text_with_pdfium(resource_dir, &canonical, page_number) {
                 Ok(text) => (PdfWorkerResponse::ExtractText(text), Vec::new()),
+                Err(err) => error_response(err),
+            }
+        }
+        PdfWorkerRequest::InspectPagesText { path } => {
+            let canonical = match validate_worker_pdf_path(&path) {
+                Ok(p) => p,
+                Err(err) => return error_response(err),
+            };
+            match inspect_pages_text_status_with_pdfium(resource_dir, &canonical) {
+                Ok(pages) => (PdfWorkerResponse::PagesText { pages }, Vec::new()),
                 Err(err) => error_response(err),
             }
         }
@@ -450,7 +465,9 @@ impl LiveWorkerProc {
 
 fn timeout_for_request(req: &PdfWorkerRequest) -> Duration {
     match req {
-        PdfWorkerRequest::Search { .. } => SEARCH_REQUEST_TIMEOUT,
+        PdfWorkerRequest::Search { .. } | PdfWorkerRequest::InspectPagesText { .. } => {
+            SEARCH_REQUEST_TIMEOUT
+        }
         _ => DEFAULT_REQUEST_TIMEOUT,
     }
 }
@@ -769,5 +786,61 @@ mod tests {
 
         let mapped = map_worker_error("PDF_WORKER_TIMEOUT".to_string(), "timed out".to_string());
         assert_eq!(mapped.code, "PDF_WORKER_TIMEOUT");
+    }
+
+    #[test]
+    fn worker_ipc_json_roundtrips_pages_text_and_render_with_device_to_page() {
+        let req = PdfWorkerRequest::InspectPagesText {
+            path: "sample.pdf".to_string(),
+        };
+        let req_bytes = serde_json::to_vec(&req).expect("serialize InspectPagesText");
+        let req_back: PdfWorkerRequest =
+            serde_json::from_slice(&req_bytes).expect("deserialize InspectPagesText");
+        assert!(matches!(
+            req_back,
+            PdfWorkerRequest::InspectPagesText { .. }
+        ));
+
+        let resp_pages = PdfWorkerResponse::PagesText {
+            pages: vec![PdfPageTextSummary {
+                page_number: 1,
+                width_pt: 595.0,
+                height_pt: 842.0,
+                rotation: 90,
+                meaningful_char_count: 12,
+                has_text_layer: true,
+            }],
+        };
+        let resp_bytes = serde_json::to_vec(&resp_pages).expect("serialize PagesText");
+        let resp_back: PdfWorkerResponse =
+            serde_json::from_slice(&resp_bytes).expect("deserialize PagesText");
+        assert!(matches!(
+            resp_back,
+            PdfWorkerResponse::PagesText { pages } if pages.len() == 1 && pages[0].has_text_layer
+        ));
+
+        let resp_render = PdfWorkerResponse::Render(PdfRenderMeta {
+            page_number: 1,
+            width_px: 4096,
+            height_px: 2048,
+            page_width_pt: 2400.0,
+            page_height_pt: 1200.0,
+            rotation: 0,
+            capped: true,
+            device_to_page: Some(crate::pdf_pdfium::PdfDeviceToPageTransform::from_corners(
+                4096,
+                2048,
+                (0.0, 1200.0),
+                (2400.0, 1200.0),
+                (0.0, 0.0),
+            )),
+        });
+        let render_bytes = serde_json::to_vec(&resp_render).expect("serialize Render");
+        let render_back: PdfWorkerResponse =
+            serde_json::from_slice(&render_bytes).expect("deserialize Render");
+        assert!(matches!(
+            render_back,
+            PdfWorkerResponse::Render(m) if m.capped && m.device_to_page.is_some()
+        ));
     }
 }

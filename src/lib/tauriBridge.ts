@@ -3957,6 +3957,8 @@ export interface OcrSpan {
   text: string;
   bboxPx: OcrBoundingBox;
   bboxNorm: OcrBoundingBox;
+  quadPx?: [OcrPoint, OcrPoint, OcrPoint, OcrPoint];
+  readingQuadPx?: [OcrPoint, OcrPoint, OcrPoint, OcrPoint];
   charStart: number;
   charEnd: number;
 }
@@ -3972,6 +3974,8 @@ export interface OcrTextLine {
   bboxNorm: OcrBoundingBox;
   angleDeg: number;
   rotated180: boolean;
+  verticalRotated?: boolean;
+  readingQuadPx?: [OcrPoint, OcrPoint, OcrPoint, OcrPoint];
   spans: OcrSpan[];
 }
 
@@ -4111,4 +4115,76 @@ export async function subscribeOcrProgress(
   return listen<OcrProgressPayload>("winkit://ocr-progress", (event) => {
     handler(event.payload);
   });
+}
+
+// ============================================================================
+// Phase 6 PR 3: P04 Make PDF Searchable (Invisible Unicode OCR Text Layer)
+// ============================================================================
+
+export interface PdfPageTextSummary {
+  pageNumber: number;
+  widthPt: number;
+  heightPt: number;
+  rotation: number;
+  meaningfulCharCount: number;
+  hasTextLayer: boolean;
+}
+
+export interface PdfSearchableInspectResult {
+  inspection: PdfDocumentInspection;
+  pages: PdfPageTextSummary[];
+  scannedPageCount: number;
+  searchablePageCount: number;
+}
+
+export interface MakePdfSearchableRequest {
+  inputPath: string;
+  outputPath: string;
+  pageRange?: string | null;
+  skipExistingTextPages: boolean;
+  ocrDpi: number;
+  maxSideLen: number;
+  overwrite: boolean;
+}
+
+export interface SearchablePdfPageOutcome {
+  pageNumber: number;
+  status: "ocr_applied" | "skipped_existing_text" | "ocr_empty" | "skipped_out_of_range";
+  existingCharCount: number;
+  addedLineCount: number;
+  addedCharCount: number;
+  renderedWidthPx: number | null;
+  renderedHeightPx: number | null;
+  renderCapped: boolean;
+}
+
+export interface MakePdfSearchableResult {
+  outputPath: string;
+  outputBytes: number;
+  totalPages: number;
+  selectedPages: number;
+  ocrAppliedPages: number;
+  skippedExistingTextPages: number;
+  ocrEmptyPages: number;
+  skippedOutOfRangePages: number;
+  cappedPages: number;
+  totalLinesAdded: number;
+  totalCharsAdded: number;
+  elapsedMs: number;
+  hadSignatures: boolean;
+  warnings: string[];
+  pages: SearchablePdfPageOutcome[];
+}
+
+export async function inspectSearchablePdfPages(path: string): Promise<PdfSearchableInspectResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<PdfSearchableInspectResult>("inspect_searchable_pdf_pages", { path });
+}
+
+export async function makePdfSearchable(
+  taskId: string,
+  request: MakePdfSearchableRequest,
+): Promise<MakePdfSearchableResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<MakePdfSearchableResult>("make_pdf_searchable", { taskId, request });
 }

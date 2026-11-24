@@ -67,6 +67,7 @@ import { PdfEncryptWorkspace } from "../tools/pdf-encrypt/PdfEncryptWorkspace";
 import { PdfDecryptWorkspace } from "../tools/pdf-decrypt/PdfDecryptWorkspace";
 import { PdfCompressWorkspace } from "../tools/pdf-compress/PdfCompressWorkspace";
 import { PdfMarkdownWorkspace } from "../tools/pdf-markdown/PdfMarkdownWorkspace";
+import { PdfSearchableWorkspace } from "../tools/pdf-searchable/PdfSearchableWorkspace";
 import { ExtractTextWorkspace } from "../tools/extract-text/ExtractTextWorkspace";
 import { CaptureTextWorkspace } from "../tools/capture-text/CaptureTextWorkspace";
 
@@ -139,7 +140,8 @@ export type ToolIconName =
   | "pdf-encrypt"
   | "pdf-decrypt"
   | "pdf-compress"
-  | "pdf-markdown";
+  | "pdf-markdown"
+  | "pdf-searchable";
 
 export interface RegisteredTool {
   id: string;
@@ -1819,6 +1821,36 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "audio-convert",
     implementationStatus: "full",
     component: AudioConvertWorkspace,
+  },
+  {
+    id: "P04",
+    category: "pdf",
+    name: {
+      "zh-CN": "扫描版 PDF 转可搜索",
+      "en-US": "Make PDF Searchable",
+    },
+    summary: {
+      "zh-CN":
+        "离线逐页识别扫描 PDF 并叠加不可见 Unicode 文字层，默认跳过已有文字页，保留原画面、书签与链接，兼容旋转与偏置裁剪框",
+      "en-US":
+        "Embed an offline invisible Unicode OCR text layer onto scanned PDF pages while skipping already-searchable pages and preserving layout, bookmarks, and links",
+    },
+    keywords: [
+      "pdf",
+      "ocr",
+      "searchable pdf",
+      "make pdf searchable",
+      "scan",
+      "scanned pdf",
+      "扫描版pdf",
+      "可搜索pdf",
+      "双层pdf",
+      "文字层",
+      "离线ocr",
+    ],
+    icon: "pdf-searchable",
+    implementationStatus: "full",
+    component: PdfSearchableWorkspace,
   },
   {
     id: "P06",

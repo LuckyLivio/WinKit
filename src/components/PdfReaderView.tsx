@@ -940,13 +940,15 @@ export function PdfReaderView() {
       {info?.isLikelyScanned && (
         <div className="pdf-banner pdf-banner-info" role="status">
           <Info size={16} strokeWidth={1.75} aria-hidden="true" />
-          <span>{pm.reader.scannedBanner}</span>
+          <span style={{ flex: 1 }}>{pm.reader.scannedBanner}</span>
           <button
             type="button"
-            className="btn"
-            style={{ marginLeft: "auto" }}
-            onClick={() => sendPdfToTool(info.path, "T03")}
+            className="btn btn-primary"
+            onClick={() => sendPdfToTool(info.path, "P04")}
           >
+            {locale === "zh-CN" ? "转为可搜索 PDF (P04)" : "Make Searchable (P04)"}
+          </button>
+          <button type="button" className="btn" onClick={() => sendPdfToTool(info.path, "T03")}>
             {locale === "zh-CN" ? "识别文字 (T03)" : "Extract Text (T03)"}
           </button>
         </div>
