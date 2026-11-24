@@ -65,6 +65,8 @@ import { PdfSignWorkspace } from "../tools/pdf-sign/PdfSignWorkspace";
 import { PdfCropWorkspace } from "../tools/pdf-crop/PdfCropWorkspace";
 import { PdfEncryptWorkspace } from "../tools/pdf-encrypt/PdfEncryptWorkspace";
 import { PdfDecryptWorkspace } from "../tools/pdf-decrypt/PdfDecryptWorkspace";
+import { PdfCompressWorkspace } from "../tools/pdf-compress/PdfCompressWorkspace";
+import { PdfMarkdownWorkspace } from "../tools/pdf-markdown/PdfMarkdownWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -132,7 +134,9 @@ export type ToolIconName =
   | "pdf-sign"
   | "pdf-crop"
   | "pdf-encrypt"
-  | "pdf-decrypt";
+  | "pdf-decrypt"
+  | "pdf-compress"
+  | "pdf-markdown";
 
 export interface RegisteredTool {
   id: string;
@@ -1953,6 +1957,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     component: PdfCropWorkspace,
   },
   {
+    id: "P14",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 压缩",
+      "en-US": "Compress PDF",
+    },
+    summary: {
+      "zh-CN":
+        "提供无损结构优化、均衡压缩与最小体积三档离线压缩，绝不整页栅格化、保留可选文字与矢量，并自动防膨胀保留原样",
+      "en-US":
+        "Compress PDFs offline with Lossless Structure, Balanced, and Smallest modes without page rasterization, preserving selectable text/vectors with no-bloat retention",
+    },
+    keywords: [
+      "pdf",
+      "compress",
+      "shrink",
+      "optimize",
+      "reduce size",
+      "lossless",
+      "pdf压缩",
+      "压缩pdf",
+      "减小体积",
+      "无损优化",
+    ],
+    icon: "pdf-compress",
+    implementationStatus: "full",
+    component: PdfCompressWorkspace,
+  },
+  {
     id: "P15",
     category: "pdf",
     name: {
@@ -2035,6 +2068,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "pdf-to-images",
     implementationStatus: "full",
     component: PdfToImagesWorkspace,
+  },
+  {
+    id: "P23",
+    category: "pdf",
+    name: {
+      "zh-CN": "Markdown 转 PDF",
+      "en-US": "Markdown to PDF",
+    },
+    summary: {
+      "zh-CN":
+        "内置安全实时预览与本地 .md 打开，支持简约/GitHub 主题、A4/Letter、页眉页脚页码与标题目录书签，离线导出可选中矢量 PDF",
+      "en-US":
+        "Convert Markdown to vector PDF offline with live sanitized preview, Clean/GitHub themes, A4/Letter, headers/footers/page numbers, clickable links, and heading bookmarks",
+    },
+    keywords: [
+      "pdf",
+      "markdown",
+      "md to pdf",
+      "markdown to pdf",
+      "readme",
+      "export pdf",
+      "bookmarks",
+      "markdown转pdf",
+      "md转pdf",
+      "文档排版",
+    ],
+    icon: "pdf-markdown",
+    implementationStatus: "full",
+    component: PdfMarkdownWorkspace,
   },
 ];
 

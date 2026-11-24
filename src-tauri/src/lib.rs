@@ -38,9 +38,11 @@ pub mod media_trim;
 pub mod organize_downloads;
 pub mod password_gen;
 pub mod pdf_annotate;
+pub mod pdf_compress;
 pub mod pdf_core;
 pub mod pdf_crypto;
 pub mod pdf_export_images;
+pub mod pdf_markdown;
 pub mod pdf_ops;
 pub mod pdf_pdfium;
 pub mod pdf_qpdf;
@@ -201,6 +203,7 @@ use crate::pdf_annotate::{
     DetectedWhiteMargins, SaveSignatureTemplateRequest, SignPdfRequest, SignPdfResult,
     SignatureTemplateItem, SignatureTemplatesListResponse, WatermarkPdfRequest, WatermarkPdfResult,
 };
+use crate::pdf_compress::{compress_pdf_impl, CompressPdfRequest, CompressPdfResult};
 use crate::pdf_core::{
     PdfDocumentInspection, PdfRenderRequest, PdfSessionManager, RenderedPdfPagePayload,
     PDF_TASK_PROGRESS_EVENT,
@@ -212,6 +215,10 @@ use crate::pdf_crypto::{
 use crate::pdf_export_images::{
     pdf_to_images_impl, preview_pdf_to_images_plan_impl, PdfToImagesPlanPreview,
     PdfToImagesPlanRequest, PdfToImagesRequest, PdfToImagesResult,
+};
+use crate::pdf_markdown::{
+    export_markdown_to_pdf_impl, render_markdown_preview_impl, MarkdownPreviewRequest,
+    MarkdownPreviewResult, MarkdownToPdfRequest, MarkdownToPdfResult,
 };
 use crate::pdf_ops::{
     delete_pdf_pages_impl, extract_pdf_pages_impl, images_to_pdf_impl, merge_pdfs_impl,
@@ -5114,6 +5121,179 @@ async fn decrypt_pdf(
 }
 
 #[tauri::command]
+async fn compress_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    task_id: String,
+    request: CompressPdfRequest,
+) -> Result<CompressPdfResult, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid PDF compress task ID."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        pdf.set_resource_dir(res_dir);
+    }
+    let tid = trimmed_id.to_string();
+    let guard = registry.register_checked(&tid, "P14", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let session = pdf.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P14".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = compress_pdf_impl(&session, &request, &tid, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P14".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P14",
+                        done.output_bytes,
+                        Some(done.output_bytes),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P14", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF compress worker failed."))?
+}
+
+#[tauri::command]
+async fn render_markdown_preview(
+    registry: State<'_, TaskRegistry>,
+    request: MarkdownPreviewRequest,
+) -> Result<MarkdownPreviewResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    tauri::async_runtime::spawn_blocking(move || render_markdown_preview_impl(&request))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Markdown preview worker failed."))?
+}
+
+#[tauri::command]
+async fn export_markdown_to_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    task_id: String,
+    request: MarkdownToPdfRequest,
+) -> Result<MarkdownToPdfResult, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param(
+            "Invalid Markdown PDF export task ID.",
+        ));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        pdf.set_resource_dir(res_dir);
+    }
+    let tid = trimmed_id.to_string();
+    let guard = registry.register_checked(&tid, "P23", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let session = pdf.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P23".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = export_markdown_to_pdf_impl(&session, &request, &tid, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P23".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P23",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P23", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Markdown PDF export worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -5347,6 +5527,9 @@ pub fn run() {
             inspect_pdf_security,
             encrypt_pdf,
             decrypt_pdf,
+            compress_pdf,
+            render_markdown_preview,
+            export_markdown_to_pdf,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

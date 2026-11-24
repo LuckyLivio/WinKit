@@ -1,5 +1,24 @@
 # WinKit 阶段交接说明
 
+## v0.18.0 · 阶段 5B（进阶 PDF 处理与文档水印）
+
+`src/registry/tools.ts` 收录 **66 个**真实可用工具入口（文档与 PDF 分类增至 `13` 项：`P06–P17` 与 `P23`；既有 `I13` 同步补齐 PDF 水印模式并升级为 `待验收`，沿用同一入口不重复计数；侧栏共用能力 `C08`「PDF 快速预览」不计入 102 项工具条目数）。本轮按三个连续独立 PR（PR #33、PR #34、PR #35）顺序交付，完成真实 Windows 11 `150%` 缩放安装版全链路串联实测与单版本正式发布 `v0.18.0`。
+
+- **PR #33（`d902ee8`）｜`--pdf-worker` 资源加固 + `P06` PDF 签名 + `P13` PDF 页面裁剪 + `I13` PDF 水印**：
+  - **`src-tauri/src/pdf_worker.rs`**：为独立 `--pdf-worker` 渲染子进程的 Windows Job Object 增补 `JOB_OBJECT_LIMIT_PROCESS_MEMORY`（1 GiB）与 `JOB_OBJECT_LIMIT_ACTIVE_PROCESS`（1），叠加原有 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 与调用超时自动重启保护（诚实边界：Windows Job Object 属资源与生命周期回收隔离，不等同完整操作系统级安全沙箱）。
+  - **`src-tauri/src/pdf_sign_crop_wm.rs` + `src/tools/pdf-sign/`（`P06`）+ `src/tools/pdf-crop/`（`P13`）+ `src/tools/image-watermark/`（`I13` PDF 模式）**：`P06` 支持手绘/四款字体样式文字/透明 PNG 签名与页面交互式定位、缩放、旋转及不透明度调节，明示为可视电子签名而非 CA 数字证书，临时签名默认驻留内存、仅用户主动保存才落盘模板；`P13` 非破坏性更新 `/CropBox`（适配 0°/90°/180°/270° 旋转、自动白边检测及 A4/Letter/快递面单预设），明示非永久涂黑脱敏；`I13` 扩展「PDF 水印」标签并以单共享 Image XObject 叠加保留可选文字层与链接。
+- **PR #34（`6f88d72`）｜离线随包 `qpdf v12.4.2` + `P15` PDF 加密 + `P16` PDF 解除密码 + `C08` 加密联动**：
+  - **`scripts/ensure-qpdf.mjs` + `src-tauri/src/pdf_qpdf.rs` + `pdf_crypto.rs`**：固定选用官方 [`qpdf/qpdf` `v12.4.2`](https://github.com/qpdf/qpdf/releases/tag/v12.4.2)（`Apache-2.0`，Windows x64 `qpdf-12.4.2-msvc64.zip` `28,183,147` B，SHA-256 `db87077e683630c1217e0e8f9a20a9749d952ab676e881c3689187763a5de25d`），构建期校验提取 `qpdf/qpdf30.dll`（`7,448,064` B，SHA-256 `8812952678de93e0750308a113aa650e9161af466f9770679ea9673adeb61041`）及 3 个应用本地 MSVC 运行时 DLL（4 个 DLL 未压缩合计 `8,320,304` B / `7.93 MiB`，附 `licenses/qpdf-notices.txt` `19,534` B 与 `THIRD_PARTY_NOTICES.md`，不入源码库，CI 强制核验安装后字节与摘要一致）。全部加解密与无损结构重写通过短生命周期 `winkit.exe --qpdf-worker` 子进程调用 `qpdf30.dll` C API `qpdfjob_initialize_from_json`，经匿名标准输入管道传入内存 JSON 作业参数（零命令行密码暴露、零密码临时文件、内存缓冲区清零、支持取消与 Job Object 回收）。
+  - **`src/tools/pdf-encrypt/`（`P15`）+ `src/tools/pdf-decrypt/`（`P16`）+ `C08` 加密分流**：`P15` 支持单/批 AES-256（PDF 2.0 R6）加密、完整 Unicode/Emoji 密码、打印/复制/修改权限位及无权限密码时自动生成随机所有者密码；`P16` 精准区分未加密/需打开密码/仅限权/密码错误/文件损坏，仅使用用户已知密码解锁并经 `PDFium` 独立复核无密码可读；`C08` 遇到加密文档时明示「需要密码」而非报损坏，并提供一键直达 `P16`。
+- **PR #35｜`P14` PDF 压缩 + `P23` Markdown 转 PDF + `v0.18.0` 发布与全链路实测**：
+  - **`src-tauri/src/pdf_compress.rs` + `src/tools/pdf-compress/`（`P14`）**：提供「无损结构优化（`qpdf` 对象流与冗余清理）」「均衡（不透明位图最大边 `1600 px` / JPEG Q78 + 结构优化）」「最小体积（最大边 `1150 px` / JPEG Q62 + 结构优化）」三档，绝不整页光栅化、自动跳过含 `/SMask`/`/Mask`/`/ImageMask` 透明图、逐图及全局自动防膨胀（未缩小保留原件字节），支持批量队列、取消清理 `.tmp` 与 PDFium 页数核验。
+  - **`src-tauri/src/pdf_markdown.rs` + `src/tools/pdf-markdown/`（`P23`）**：纯 Rust `pulldown-cmark 0.13` CommonMark + GFM（表格/删除线/任务列表）AST 安全白名单过滤（转义全部原始 HTML、拒绝危险协议链接与全部远程图片、仅允许规范化位于源目录内的本地相对图片嵌入），前端实时预览运行在 `<iframe sandbox="">` 中，导出调用本机离线 Microsoft Edge 无头模式（`--disable-javascript --disable-extensions --disable-background-networking --host-resolver-rules=MAP * ~NOTFOUND` + 严格 CSP + 独立临时配置目录用后删除 + Job Object 进程树回收）输出真矢量 PDF，并经 `PDFium` + `lopdf` 写入 H1–H3 UTF-16BE 层次书签（`/Outlines`）。
+  - **正式 Release `v0.18.0` 与公开升级复测**：将于 `main` CI 完成发布并经独立文档 PR 回填正式公开安装包字节、SHA-256 与公开 `v0.17.0 → v0.18.0` 覆盖升级实测结果（详见 `docs/VERIFICATION.md`）。
+
+## 下一阶段
+
+下一阶段为 **阶段 6：本地识别、语音与端侧模型能力**（交付 `I04` 图片抠图去背景、`P04` 扫描版 PDF 转可搜索、以及 `T01–T07` 本地 OCR、离线语音转写/补齐 `A02` 与 `V02` 自动转写、本地 TTS 及经用户确认模型方案后的端侧摘要/问答/翻译）；随后推进阶段 7（`P01–P03`/`P05`/`P18–P22` 永久涂黑、表单填写拼合与 Office/网页转 PDF）。
+
 ## v0.17.0 · 阶段 5A（基础 PDF 工作台与内置 PDF 快速预览）
 
 `src/registry/tools.ts` 收录 **60 个**真实可用工具入口（新增「文档与 PDF」分类含 `7` 项独立工具 `P07–P12`/`P17`，并交付侧栏共用能力 `C08`「PDF 快速预览」，不计入 102 项工具条目数）。本轮按三个连续独立 PR（PR #29、PR #30、PR #31）顺序落地离线 `PDFium` 独立渲染子进程、纯 Rust `lopdf` 矢量结构引擎、`C08` 快速预览与全部 7 项基础 PDF 工具，完成真实 Windows 11 `150%` 缩放安装版全链路与 300 页长文档压测，并单版本正式发布 `v0.17.0`。

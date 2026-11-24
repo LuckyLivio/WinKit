@@ -189,5 +189,9 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Lock size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "pdf-decrypt":
       return <LockOpen size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-compress":
+      return <Minimize2 size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-markdown":
+      return <FileText size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

@@ -571,8 +571,19 @@ mod win_impl {
             )));
         }
 
-        let file = File::open(&canonical)
-            .map_err(|e| AppError::from_io(e, "Unable to open PDF file for reading"))?;
+        let mut file_attempt = 0u32;
+        let file = loop {
+            match File::open(&canonical) {
+                Ok(f) => break f,
+                Err(e) if matches!(e.raw_os_error(), Some(5 | 32 | 33)) && file_attempt < 6 => {
+                    file_attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(35 * file_attempt as u64));
+                }
+                Err(e) => {
+                    return Err(AppError::from_io(e, "Unable to open PDF file for reading"));
+                }
+            }
+        };
         let mut ctx = Box::new(FileReadCtx {
             file,
             len: file_len,

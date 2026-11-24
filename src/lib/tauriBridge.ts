@@ -651,7 +651,7 @@ export async function fetchRuntimeInfo(): Promise<AppRuntimeInfo> {
   if (!isTauriDesktop()) {
     return {
       name: "WinKit",
-      version: "0.17.0",
+      version: "0.18.0",
       platform: "web-test",
       arch: "x86_64",
     };
@@ -3818,4 +3818,114 @@ export async function decryptPdf(
 ): Promise<DecryptPdfResult> {
   assertFrontendNotShuttingDown();
   return invoke<DecryptPdfResult>("decrypt_pdf", { taskId, request });
+}
+
+// ---------- Phase 5B PR 3: P14 PDF Compress & P23 Markdown to PDF ----------
+
+export type PdfCompressMode = "lossless" | "balanced" | "smallest";
+
+export interface CompressPdfRequest {
+  inputPath: string;
+  outputPath: string;
+  overwrite: boolean;
+  mode: PdfCompressMode;
+}
+
+export interface CompressPdfResult {
+  outputPath: string;
+  mode: PdfCompressMode;
+  pageCount: number;
+  originalBytes: number;
+  outputBytes: number;
+  savedBytes: number;
+  savedPercent: number;
+  keptOriginal: boolean;
+  imagesInspected: number;
+  imagesOptimized: number;
+  imagesDownsampled: number;
+  hasTextLayer: boolean;
+  warnings: string[];
+}
+
+export type MarkdownTheme = "clean" | "github";
+export type MarkdownPaperSize = "a4" | "letter";
+export type MarkdownMarginPreset = "narrow" | "normal" | "wide";
+
+export interface MarkdownHeadingInfo {
+  level: number;
+  title: string;
+  slug: string;
+}
+
+export interface MarkdownPreviewRequest {
+  markdown: string;
+  sourceDir?: string | null;
+  theme: MarkdownTheme;
+  paperSize: MarkdownPaperSize;
+  marginPreset: MarkdownMarginPreset;
+  headerText?: string | null;
+  footerText?: string | null;
+  showPageNumbers: boolean;
+  locale?: string | null;
+}
+
+export interface MarkdownPreviewResult {
+  htmlDocument: string;
+  headings: MarkdownHeadingInfo[];
+  embeddedLocalImages: number;
+  blockedRemoteImages: number;
+  blockedLocalImages: number;
+  strippedRawHtmlCount: number;
+  warnings: string[];
+}
+
+export interface MarkdownToPdfRequest {
+  markdown: string;
+  sourceDir?: string | null;
+  outputPath: string;
+  overwrite: boolean;
+  theme: MarkdownTheme;
+  paperSize: MarkdownPaperSize;
+  marginPreset: MarkdownMarginPreset;
+  headerText?: string | null;
+  footerText?: string | null;
+  showPageNumbers: boolean;
+  includeBookmarks: boolean;
+  locale?: string | null;
+}
+
+export interface MarkdownToPdfResult {
+  outputPath: string;
+  byteLength: number;
+  pageCount: number;
+  bookmarkCount: number;
+  embeddedLocalImages: number;
+  blockedRemoteImages: number;
+  blockedLocalImages: number;
+  strippedRawHtmlCount: number;
+  hasTextLayer: boolean;
+  warnings: string[];
+}
+
+export async function compressPdf(
+  taskId: string,
+  request: CompressPdfRequest,
+): Promise<CompressPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<CompressPdfResult>("compress_pdf", { taskId, request });
+}
+
+export async function renderMarkdownPreview(
+  request: MarkdownPreviewRequest,
+): Promise<MarkdownPreviewResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<MarkdownPreviewResult>("render_markdown_preview", { request });
+}
+
+export async function exportMarkdownToPdf(
+  taskId: string,
+  request: MarkdownToPdfRequest,
+): Promise<MarkdownToPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<MarkdownToPdfResult>("export_markdown_to_pdf", { taskId, request });
 }
