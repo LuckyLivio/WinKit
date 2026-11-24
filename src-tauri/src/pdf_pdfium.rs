@@ -616,7 +616,7 @@ mod win_impl {
         match code {
             FPDF_ERR_PASSWORD => AppError::new(
                 "PDF_PASSWORD_REQUIRED",
-                "This PDF is password-protected or encrypted. Password unlocking is not supported in this version.",
+                "This PDF requires a password to open. Use PDF Decrypt (P16) with the known password to create an unlocked copy.",
             ),
             FPDF_ERR_SECURITY => AppError::new(
                 "PDF_UNSUPPORTED_SECURITY",

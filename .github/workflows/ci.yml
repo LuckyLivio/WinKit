@@ -57,6 +57,9 @@ jobs:
       - name: Ensure verified Windows x64 PDFium runtime
         run: npm run ensure-pdfium
 
+      - name: Ensure verified Windows x64 QPDF runtime
+        run: npm run ensure-qpdf
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
@@ -130,6 +133,15 @@ jobs:
           $pdfiumNotice = Get-Item "$env:LOCALAPPDATA/WinKit/licenses/pdfium-notices.txt"
           if ($pdfiumNotice.Length -lt 1024) {
             throw "Bundled PDFium license notices file is missing or unexpectedly small: $($pdfiumNotice.Length) B"
+          }
+          $bundledQpdf = Get-Item "$env:LOCALAPPDATA/WinKit/qpdf/qpdf30.dll"
+          $qpdfHash = (Get-FileHash -Algorithm SHA256 $bundledQpdf.FullName).Hash.ToLowerInvariant()
+          if ($bundledQpdf.Length -ne 7448064 -or $qpdfHash -ne '8812952678de93e0750308a113aa650e9161af466f9770679ea9673adeb61041') {
+            throw "Bundled QPDF DLL mismatch: $($bundledQpdf.Length) B / $qpdfHash"
+          }
+          $qpdfNotice = Get-Item "$env:LOCALAPPDATA/WinKit/licenses/qpdf-notices.txt"
+          if ($qpdfNotice.Length -lt 1024) {
+            throw "Bundled QPDF license notices file is missing or unexpectedly small: $($qpdfNotice.Length) B"
           }
 
           $desktopCheck = 'No interactive main window on runner'

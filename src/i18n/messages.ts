@@ -122,6 +122,9 @@ export interface Messages {
     AUDIO_DEVICE_NOT_FOUND: string;
     EMPTY_RECORDING: string;
     PDF_PASSWORD_REQUIRED: string;
+    PDF_WRONG_PASSWORD: string;
+    PDF_NOT_ENCRYPTED: string;
+    PDF_ALREADY_ENCRYPTED: string;
     PDF_UNSUPPORTED_SECURITY: string;
     PDF_CORRUPT_OR_INVALID: string;
     PDF_PAGE_ERROR: string;
@@ -129,6 +132,11 @@ export interface Messages {
     PDF_ENGINE_MISSING: string;
     PDF_ENGINE_INVALID: string;
     PDF_ENGINE_LOAD_FAILED: string;
+    PDF_QPDF_UNAVAILABLE: string;
+    PDF_QPDF_INVALID: string;
+    PDF_ENCRYPT_VERIFY_FAILED: string;
+    PDF_DECRYPT_VERIFY_FAILED: string;
+    PDF_WORKER_TIMEOUT: string;
     PDF_WORKER_CRASHED: string;
     PDF_WORKER_ERROR: string;
     PDF_WRITE_FAILED: string;
@@ -1109,14 +1117,27 @@ export const MESSAGES: Record<Locale, Messages> = {
       AUDIO_DEVICE_NOT_FOUND: "找不到所选音频设备，请刷新设备列表后重新选择。",
       EMPTY_RECORDING: "停止前未采集到有效音频帧，未生成空录音文件。",
       PDF_PASSWORD_REQUIRED:
-        "该 PDF 已加密或受密码保护。当前版本暂不支持输入密码解锁或编辑加密 PDF。",
-      PDF_UNSUPPORTED_SECURITY: "该 PDF 使用了暂不支持的安全加密策略。",
+        "该 PDF 受打开密码保护。请使用「PDF 解除密码 (P16)」输入已知密码导出无密码副本后再预览或编辑。",
+      PDF_WRONG_PASSWORD: "密码不正确，请检查大小写、空格及输入法状态后重试。",
+      PDF_NOT_ENCRYPTED: "该 PDF 未加密，无需解除密码。",
+      PDF_ALREADY_ENCRYPTED:
+        "该 PDF 已处于加密状态，请先使用「PDF 解除密码 (P16)」解除原有密码后再重新加密。",
+      PDF_UNSUPPORTED_SECURITY:
+        "该 PDF 使用了非标准安全处理器（例如证书或 DRM 加密），暂不支持通过密码解锁。",
       PDF_CORRUPT_OR_INVALID: "所选文件不是有效的 PDF 文档，或内部结构已损坏。",
       PDF_PAGE_ERROR: "PDF 页面对象缺失或无法读取。",
       PDF_RENDER_FAILED: "PDF 页面渲染失败，请降低缩放倍率或检查文件。",
       PDF_ENGINE_MISSING: "安装目录中缺少内置 PDF 渲染组件（pdfium.dll），请重新安装 WinKit。",
       PDF_ENGINE_INVALID: "内置 PDF 渲染组件校验未通过，请重新安装官方安装包。",
       PDF_ENGINE_LOAD_FAILED: "内置 PDF 渲染组件加载失败。",
+      PDF_QPDF_UNAVAILABLE:
+        "安装目录中缺少内置 PDF 安全处理组件（qpdf30.dll），请重新安装官方安装包。",
+      PDF_QPDF_INVALID: "内置 PDF 安全处理组件完整性校验未通过，请重新安装官方安装包。",
+      PDF_ENCRYPT_VERIFY_FAILED: "加密结果独立校验未通过，未写入最终输出文件，请重试。",
+      PDF_DECRYPT_VERIFY_FAILED:
+        "解密结果独立校验未通过（输出仍需要密码或无法读取），未写入最终文件。",
+      PDF_WORKER_TIMEOUT:
+        "隔离 PDF 处理进程超时并已终止，主界面未受影响，请检查文件是否过大或损坏。",
       PDF_WORKER_CRASHED: "隔离 PDF 处理子进程异常中断（文件可能损坏或结构异常），主界面未受影响。",
       PDF_WORKER_ERROR: "PDF 后台处理进程通信失败，请重试。",
       PDF_WRITE_FAILED: "写入目标 PDF 文件失败，请检查磁盘空间与目录权限。",
@@ -2229,8 +2250,14 @@ export const MESSAGES: Record<Locale, Messages> = {
         "The selected audio device is no longer available. Refresh the list and select another device.",
       EMPTY_RECORDING: "No audio frames were captured before stopping.",
       PDF_PASSWORD_REQUIRED:
-        "This PDF is password-protected or encrypted. Unlocking encrypted PDFs is not supported in this version.",
-      PDF_UNSUPPORTED_SECURITY: "This PDF uses an unsupported security handler.",
+        "This PDF requires an open password. Use PDF Decrypt (P16) with the known password to save an unlocked copy first.",
+      PDF_WRONG_PASSWORD:
+        "The password is incorrect. Check letter case, leading/trailing spaces, and keyboard layout.",
+      PDF_NOT_ENCRYPTED: "This PDF is not encrypted and does not require decryption.",
+      PDF_ALREADY_ENCRYPTED:
+        "This PDF is already encrypted. Remove existing protection with PDF Decrypt (P16) before re-encrypting.",
+      PDF_UNSUPPORTED_SECURITY:
+        "This PDF uses an unsupported security handler (such as certificate or DRM encryption) and cannot be unlocked by password.",
       PDF_CORRUPT_OR_INVALID:
         "This file is not a valid PDF document or its structure is corrupted.",
       PDF_PAGE_ERROR: "PDF page data is missing or unreadable.",
@@ -2240,6 +2267,16 @@ export const MESSAGES: Record<Locale, Messages> = {
       PDF_ENGINE_INVALID:
         "Bundled offline PDF engine failed integrity verification. Please reinstall WinKit.",
       PDF_ENGINE_LOAD_FAILED: "Failed to load the bundled offline PDF engine.",
+      PDF_QPDF_UNAVAILABLE:
+        "Bundled offline PDF security engine (qpdf30.dll) is missing. Please reinstall WinKit.",
+      PDF_QPDF_INVALID:
+        "Bundled offline PDF security engine failed integrity verification. Please reinstall WinKit.",
+      PDF_ENCRYPT_VERIFY_FAILED:
+        "Independent post-encryption verification failed. No final output file was written.",
+      PDF_DECRYPT_VERIFY_FAILED:
+        "Independent post-decryption verification failed (output could not be opened without a password). No final output file was written.",
+      PDF_WORKER_TIMEOUT:
+        "The isolated PDF worker timed out and was terminated safely. The main window remains unaffected.",
       PDF_WORKER_CRASHED:
         "Isolated PDF worker exited unexpectedly (the file may be corrupted). The main window remains safe.",
       PDF_WORKER_ERROR: "Isolated PDF worker communication error. Please retry.",

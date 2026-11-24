@@ -39,9 +39,11 @@ pub mod organize_downloads;
 pub mod password_gen;
 pub mod pdf_annotate;
 pub mod pdf_core;
+pub mod pdf_crypto;
 pub mod pdf_export_images;
 pub mod pdf_ops;
 pub mod pdf_pdfium;
+pub mod pdf_qpdf;
 pub mod pdf_worker;
 mod qr;
 pub mod screen_capture;
@@ -202,6 +204,10 @@ use crate::pdf_annotate::{
 use crate::pdf_core::{
     PdfDocumentInspection, PdfRenderRequest, PdfSessionManager, RenderedPdfPagePayload,
     PDF_TASK_PROGRESS_EVENT,
+};
+use crate::pdf_crypto::{
+    decrypt_pdf_impl, encrypt_pdf_impl, inspect_pdf_security_impl, DecryptPdfRequest,
+    DecryptPdfResult, EncryptPdfRequest, EncryptPdfResult, PdfSecurityStatus,
 };
 use crate::pdf_export_images::{
     pdf_to_images_impl, preview_pdf_to_images_plan_impl, PdfToImagesPlanPreview,
@@ -4931,6 +4937,183 @@ async fn watermark_pdf(
 }
 
 #[tauri::command]
+async fn inspect_pdf_security(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    path: String,
+) -> Result<PdfSecurityStatus, AppError> {
+    registry.ensure_not_shutting_down()?;
+    if let Ok(res_dir) = app.path().resource_dir() {
+        pdf.set_resource_dir(res_dir);
+    }
+    let session = pdf.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || inspect_pdf_security_impl(&session, &path))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF security inspect worker failed."))?
+}
+
+#[tauri::command]
+async fn encrypt_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    task_id: String,
+    request: EncryptPdfRequest,
+) -> Result<EncryptPdfResult, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid PDF encrypt task ID."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        pdf.set_resource_dir(res_dir);
+    }
+    let tid = trimmed_id.to_string();
+    let guard = registry.register_checked(&tid, "P15", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let session = pdf.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P15".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = encrypt_pdf_impl(&session, &request, &tid, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P15".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P15",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P15", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF encrypt worker failed."))?
+}
+
+#[tauri::command]
+async fn decrypt_pdf(
+    app: AppHandle,
+    registry: State<'_, TaskRegistry>,
+    pdf: State<'_, PdfSessionManager>,
+    task_id: String,
+    request: DecryptPdfRequest,
+) -> Result<DecryptPdfResult, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid PDF decrypt task ID."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        pdf.set_resource_dir(res_dir);
+    }
+    let tid = trimmed_id.to_string();
+    let guard = registry.register_checked(&tid, "P16", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let session = pdf.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload {
+            task_id: tid.clone(),
+            tool_id: "P16".into(),
+            state: crate::tasks::TaskLifecycleState::Running,
+            processed_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+            error_code: None,
+            error_message: None,
+        },
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = decrypt_pdf_impl(&session, &request, &tid, &cancel_flag, |ev| {
+            let _ = app.emit(PDF_TASK_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "P16".into(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.current as u64,
+                    total_bytes: Some(ev.total as u64),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(done) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "P16",
+                        done.byte_length,
+                        Some(done.byte_length),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "P16", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF decrypt worker failed."))?
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -5161,6 +5344,9 @@ pub fn run() {
             detect_pdf_white_margins,
             crop_pdf,
             watermark_pdf,
+            inspect_pdf_security,
+            encrypt_pdf,
+            decrypt_pdf,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

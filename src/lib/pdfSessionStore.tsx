@@ -1,7 +1,9 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import type {
   CropPdfResult,
+  DecryptPdfResult,
   DeletePdfPagesResult,
+  EncryptPdfResult,
   ExtractPdfPagesResult,
   ImagesToPdfResult,
   MergePdfsResult,
@@ -12,9 +14,12 @@ import type {
   PdfExportImageFormat,
   PdfExportPageScope,
   PdfExtractMode,
+  PdfModifyPermission,
   PdfPageOrientation,
   PdfPageSizePreset,
+  PdfPrintPermission,
   PdfSearchResult,
+  PdfSecurityStatus,
   PdfSplitMode,
   PdfTaskProgressPayload,
   PdfToImagesPlanPreview,
@@ -34,6 +39,7 @@ export interface PdfReaderSessionState {
   activePath: string | null;
   inspection: PdfDocumentInspection | null;
   loading: boolean;
+  errorCode: string | null;
   errorMessage: string | null;
   currentPage: number;
   zoomMode: PdfZoomMode;
@@ -265,6 +271,37 @@ export interface PdfWatermarkSessionState {
   errorMessage: string | null;
 }
 
+/** Non-secret session metadata only — passwords are NEVER stored in session context. */
+export interface PdfEncryptSessionState {
+  sourcePath: string | null;
+  securityStatus: PdfSecurityStatus | null;
+  inspectLoading: boolean;
+  printPermission: PdfPrintPermission;
+  allowCopy: boolean;
+  allowModify: PdfModifyPermission;
+  encryptMetadata: boolean;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: EncryptPdfResult | null;
+  errorMessage: string | null;
+}
+
+/** Non-secret session metadata only — passwords are NEVER stored in session context. */
+export interface PdfDecryptSessionState {
+  sourcePath: string | null;
+  securityStatus: PdfSecurityStatus | null;
+  inspectLoading: boolean;
+  outputPath: string;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: PdfTaskProgressPayload | null;
+  lastResult: DecryptPdfResult | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
 export interface PdfSessionRoot {
   reader: PdfReaderSessionState;
   merge: PdfMergeSessionState;
@@ -277,6 +314,8 @@ export interface PdfSessionRoot {
   sign: PdfSignSessionState;
   crop: PdfCropSessionState;
   pdfWatermark: PdfWatermarkSessionState;
+  encrypt: PdfEncryptSessionState;
+  decrypt: PdfDecryptSessionState;
 }
 
 const INITIAL_PDF_SESSION: PdfSessionRoot = {
@@ -284,6 +323,7 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     activePath: null,
     inspection: null,
     loading: false,
+    errorCode: null,
     errorMessage: null,
     currentPage: 1,
     zoomMode: "fit_width",
@@ -456,9 +496,37 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  encrypt: {
+    sourcePath: null,
+    securityStatus: null,
+    inspectLoading: false,
+    printPermission: "full",
+    allowCopy: true,
+    allowModify: "none",
+    encryptMetadata: true,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorMessage: null,
+  },
+  decrypt: {
+    sourcePath: null,
+    securityStatus: null,
+    inspectLoading: false,
+    outputPath: "",
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastResult: null,
+    errorCode: null,
+    errorMessage: null,
+  },
 };
 
-export type PdfTargetToolId = "P06" | "P07" | "P08" | "P09" | "P10" | "P11" | "P13" | "P17" | "I13";
+export type PdfTargetToolId =
+  "P06" | "P07" | "P08" | "P09" | "P10" | "P11" | "P13" | "P15" | "P16" | "P17" | "I13";
 
 export interface PdfSessionContextValue {
   pdfSession: PdfSessionRoot;
@@ -481,6 +549,8 @@ export interface PdfSessionContextValue {
   updatePdfWatermarkSession: (
     updater: (prev: PdfWatermarkSessionState) => PdfWatermarkSessionState,
   ) => void;
+  updateEncryptSession: (updater: (prev: PdfEncryptSessionState) => PdfEncryptSessionState) => void;
+  updateDecryptSession: (updater: (prev: PdfDecryptSessionState) => PdfDecryptSessionState) => void;
   openInPdfReader: (path: string) => void;
   sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
   pendingReaderPath: string | null;
@@ -584,6 +654,20 @@ export function PdfSessionProvider({
     [],
   );
 
+  const updateEncryptSession = useCallback(
+    (updater: (prev: PdfEncryptSessionState) => PdfEncryptSessionState) => {
+      setPdfSession((prev) => ({ ...prev, encrypt: updater(prev.encrypt) }));
+    },
+    [],
+  );
+
+  const updateDecryptSession = useCallback(
+    (updater: (prev: PdfDecryptSessionState) => PdfDecryptSessionState) => {
+      setPdfSession((prev) => ({ ...prev, decrypt: updater(prev.decrypt) }));
+    },
+    [],
+  );
+
   const openInPdfReader = useCallback(
     (path: string) => {
       setPendingReaderPath(path);
@@ -623,6 +707,8 @@ export function PdfSessionProvider({
         updateSignSession,
         updateCropSession,
         updatePdfWatermarkSession,
+        updateEncryptSession,
+        updateDecryptSession,
         openInPdfReader,
         sendPdfToTool,
         pendingReaderPath,

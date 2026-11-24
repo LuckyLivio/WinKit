@@ -174,4 +174,23 @@ describe("C08 PdfReaderView", () => {
       expect(screen.getByText(/扫描件或纯图片页面/)).toBeInTheDocument();
     });
   });
+
+  it("offers one-click P16 handoff when opening a password-protected PDF", async () => {
+    const user = userEvent.setup();
+    const onNavTool = vi.fn();
+    vi.mocked(bridge.pickSingleFile).mockResolvedValue("C:\\Samples\\locked.pdf");
+    vi.mocked(bridge.inspectPdfDocument).mockRejectedValue({
+      code: "PDF_PASSWORD_REQUIRED",
+      message: "This PDF requires a password to open.",
+    });
+
+    renderReader(onNavTool);
+    await user.click(screen.getAllByRole("button", { name: /打开 PDF/ })[0]!);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/受打开密码保护/);
+    });
+    await user.click(screen.getByRole("button", { name: /使用 P16 输入密码解锁/ }));
+    expect(onNavTool).toHaveBeenCalledWith("P16");
+  });
 });

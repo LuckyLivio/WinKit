@@ -1,0 +1,222 @@
+.pdf-crypto-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 16px;
+}
+
+.pdf-crypto-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(320px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 820px) {
+  .pdf-crypto-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pdf-crypto-card {
+  background: var(--surface-card, var(--bg-elevated));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pdf-crypto-card h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.pdf-crypto-drop {
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 18px 14px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-subtle);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.pdf-crypto-drop.is-hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pdf-crypto-file-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.pdf-crypto-file-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.pdf-crypto-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+}
+
+.pdf-crypto-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.pdf-crypto-pill.is-ok {
+  border-color: var(--status-success-border, rgba(22, 163, 74, 0.35));
+  color: var(--status-success-fg, #15803d);
+}
+
+.pdf-crypto-pill.is-warn {
+  border-color: var(--status-warn-border, rgba(217, 119, 6, 0.4));
+  color: var(--status-warn-fg, #b45309);
+}
+
+.pdf-crypto-pill.is-error {
+  border-color: var(--status-error-border, rgba(220, 38, 38, 0.4));
+  color: var(--status-error-fg, #b91c1c);
+}
+
+.pdf-crypto-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pdf-crypto-field label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.pdf-crypto-pw-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.pdf-crypto-pw-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pdf-crypto-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.pdf-crypto-hint.is-error {
+  color: var(--status-error-fg, #b91c1c);
+}
+
+.pdf-crypto-perm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.pdf-crypto-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.pdf-crypto-output-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pdf-crypto-output-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pdf-crypto-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.pdf-crypto-result {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.pdf-crypto-result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pdf-crypto-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pdf-crypto-disclosure {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}

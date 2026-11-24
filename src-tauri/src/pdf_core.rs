@@ -172,6 +172,10 @@ impl PdfSessionManager {
         &self.worker
     }
 
+    pub fn resource_dir(&self) -> Option<PathBuf> {
+        self.worker.resource_dir()
+    }
+
     pub fn clear_cache(&self) {
         if let Ok(mut guard) = self.cache.lock() {
             guard.clear();
@@ -704,7 +708,11 @@ impl AtomicPdfOutput {
         ))
     }
 
-    pub fn write_and_commit(mut self, bytes: &[u8]) -> Result<(PathBuf, u64), AppError> {
+    pub fn temp_path(&self) -> &Path {
+        &self.tmp_path
+    }
+
+    pub fn write_and_commit(self, bytes: &[u8]) -> Result<(PathBuf, u64), AppError> {
         let mut tmp_file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -717,6 +725,14 @@ impl AtomicPdfOutput {
             .and_then(|()| tmp_file.flush())
             .map_err(|e| AppError::from_io(e, "Failed while writing temporary PDF file"))?;
         drop(tmp_file);
+        self.commit_existing_tmp()
+    }
+
+    /// Atomically commit a temporary PDF file already written to `self.temp_path()`.
+    pub fn commit_existing_tmp(mut self) -> Result<(PathBuf, u64), AppError> {
+        let byte_len = fs::metadata(&self.tmp_path)
+            .map_err(|e| AppError::from_io(e, "Temporary PDF output was not produced"))?
+            .len();
 
         if !self.overwrite {
             match fs::hard_link(&self.tmp_path, &self.final_path) {
@@ -740,7 +756,7 @@ impl AtomicPdfOutput {
         }
 
         self.committed = true;
-        Ok((self.final_path.clone(), bytes.len() as u64))
+        Ok((self.final_path.clone(), byte_len))
     }
 }
 

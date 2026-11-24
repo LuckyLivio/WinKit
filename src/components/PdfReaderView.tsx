@@ -28,6 +28,7 @@ import {
   formatLocalizedError,
   getPdfPageText,
   inspectPdfDocument,
+  parseBackendError,
   pickSingleFile,
   renderPdfPage,
   searchPdfText,
@@ -143,6 +144,7 @@ export function PdfReaderView() {
         ...prev,
         activePath: path,
         loading: true,
+        errorCode: null,
         errorMessage: null,
         currentPage: 1,
         searchResult: null,
@@ -158,15 +160,18 @@ export function PdfReaderView() {
           activePath: info.path,
           inspection: info,
           loading: false,
+          errorCode: null,
           errorMessage: null,
           currentPage: 1,
         }));
       } catch (err) {
         if (docGenerationRef.current !== gen) return;
+        const parsed = parseBackendError(err);
         updateReaderSession((prev) => ({
           ...prev,
           inspection: null,
           loading: false,
+          errorCode: parsed.code,
           errorMessage: formatLocalizedError(err, t),
         }));
       }
@@ -759,6 +764,14 @@ export function PdfReaderView() {
             <button
               type="button"
               className="btn"
+              onClick={() => sendPdfToTool(info.path, info.isEncrypted ? "P16" : "P15")}
+              title={info.isEncrypted ? "P16" : "P15"}
+            >
+              <span>{info.isEncrypted ? "P16" : "P15"}</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
               onClick={() => sendPdfToTool(info.path, "P08")}
               title={pm.reader.sendToSplit}
             >
@@ -891,7 +904,29 @@ export function PdfReaderView() {
       {state.errorMessage && (
         <div className="pdf-banner pdf-banner-error" role="alert">
           <AlertTriangle size={16} strokeWidth={1.75} aria-hidden="true" />
-          <span>{state.errorMessage}</span>
+          <span style={{ flex: 1 }}>{state.errorMessage}</span>
+          {state.errorCode === "PDF_PASSWORD_REQUIRED" && state.activePath && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => sendPdfToTool(state.activePath!, "P16")}
+            >
+              {locale === "zh-CN" ? "使用 P16 输入密码解锁" : "Unlock in P16"}
+            </button>
+          )}
+        </div>
+      )}
+      {info?.isEncrypted && (
+        <div className="pdf-banner pdf-banner-info" role="status">
+          <Info size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span style={{ flex: 1 }}>
+            {locale === "zh-CN"
+              ? "此 PDF 带有权限加密限制（可无密码打开）。如需导出无限制副本，请使用「PDF 解除密码 (P16)」。"
+              : "This PDF has owner permission restrictions (opens without password). Use PDF Decrypt (P16) to save an unrestricted copy."}
+          </span>
+          <button type="button" className="btn" onClick={() => sendPdfToTool(info.path, "P16")}>
+            {locale === "zh-CN" ? "前往 P16" : "Open P16"}
+          </button>
         </div>
       )}
       {info?.isLikelyScanned && (

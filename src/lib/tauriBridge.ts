@@ -3724,3 +3724,98 @@ export async function watermarkPdf(request: WatermarkPdfRequest): Promise<Waterm
   assertFrontendNotShuttingDown();
   return invoke<WatermarkPdfResult>("watermark_pdf", { request });
 }
+
+// ---------- Phase 5B PR 2: P15 PDF Encrypt & P16 PDF Decrypt ----------
+
+export type PdfSecurityStatusKind =
+  | "unencrypted"
+  | "encrypted_password_required"
+  | "encrypted_owner_only"
+  | "unsupported_security"
+  | "corrupt_or_invalid";
+
+export interface PdfSecurityStatus {
+  path: string;
+  fileName: string;
+  byteLength: number;
+  status: PdfSecurityStatusKind;
+  isEncrypted: boolean;
+  requiresOpenPassword: boolean;
+  hasOwnerRestrictions: boolean;
+  encryptionRevision: number | null;
+  encryptionLabel: string | null;
+  printPermission: string | null;
+  allowCopy: boolean | null;
+  allowModify: boolean | null;
+  pageCount: number | null;
+  hasSignatures: boolean;
+  signatureCount: number;
+  warnings: string[];
+}
+
+export type PdfPrintPermission = "none" | "low" | "full";
+export type PdfModifyPermission = "none" | "annotate" | "all";
+
+export interface EncryptPdfRequest {
+  inputPath: string;
+  outputPath: string;
+  overwrite: boolean;
+  userPassword: string;
+  ownerPassword?: string | null;
+  printPermission: PdfPrintPermission;
+  allowCopy: boolean;
+  allowModify: PdfModifyPermission;
+  encryptMetadata?: boolean;
+}
+
+export interface EncryptPdfResult {
+  outputPath: string;
+  byteLength: number;
+  pageCount: number;
+  algorithm: string;
+  hasOpenPassword: boolean;
+  usedGeneratedOwnerPassword: boolean;
+  printPermission: PdfPrintPermission;
+  allowCopy: boolean;
+  allowModify: PdfModifyPermission;
+  signatureInvalidated: boolean;
+  warnings: string[];
+}
+
+export interface DecryptPdfRequest {
+  inputPath: string;
+  outputPath: string;
+  overwrite: boolean;
+  password: string;
+}
+
+export interface DecryptPdfResult {
+  outputPath: string;
+  byteLength: number;
+  pageCount: number;
+  originalEncryption: string | null;
+  verifiedOpenWithoutPassword: boolean;
+  hasTextLayer: boolean;
+  warnings: string[];
+}
+
+export async function inspectPdfSecurity(path: string): Promise<PdfSecurityStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<PdfSecurityStatus>("inspect_pdf_security", { path });
+}
+
+export async function encryptPdf(
+  taskId: string,
+  request: EncryptPdfRequest,
+): Promise<EncryptPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<EncryptPdfResult>("encrypt_pdf", { taskId, request });
+}
+
+export async function decryptPdf(
+  taskId: string,
+  request: DecryptPdfRequest,
+): Promise<DecryptPdfResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<DecryptPdfResult>("decrypt_pdf", { taskId, request });
+}

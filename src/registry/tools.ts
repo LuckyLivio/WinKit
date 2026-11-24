@@ -63,6 +63,8 @@ import { ImagesToPdfWorkspace } from "../tools/pdf-images-to-pdf/ImagesToPdfWork
 import { PdfToImagesWorkspace } from "../tools/pdf-to-images/PdfToImagesWorkspace";
 import { PdfSignWorkspace } from "../tools/pdf-sign/PdfSignWorkspace";
 import { PdfCropWorkspace } from "../tools/pdf-crop/PdfCropWorkspace";
+import { PdfEncryptWorkspace } from "../tools/pdf-encrypt/PdfEncryptWorkspace";
+import { PdfDecryptWorkspace } from "../tools/pdf-decrypt/PdfDecryptWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -128,7 +130,9 @@ export type ToolIconName =
   | "pdf-images-to-pdf"
   | "pdf-to-images"
   | "pdf-sign"
-  | "pdf-crop";
+  | "pdf-crop"
+  | "pdf-encrypt"
+  | "pdf-decrypt";
 
 export interface RegisteredTool {
   id: string;
@@ -1947,6 +1951,63 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "pdf-crop",
     implementationStatus: "full",
     component: PdfCropWorkspace,
+  },
+  {
+    id: "P15",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 加密",
+      "en-US": "Encrypt PDF",
+    },
+    summary: {
+      "zh-CN":
+        "使用 AES-256（PDF 2.0 R6）离线为 PDF 设置打开密码、独立权限密码及打印/复制/修改权限，自动独立校验并保护原文件",
+      "en-US":
+        "Encrypt PDFs offline with AES-256 (PDF 2.0 R6), open & separate owner passwords, and print/copy/modify permissions with independent verification",
+    },
+    keywords: [
+      "pdf",
+      "encrypt",
+      "password",
+      "protect",
+      "aes-256",
+      "lock",
+      "permissions",
+      "pdf加密",
+      "添加密码",
+      "加密pdf",
+      "密码保护",
+    ],
+    icon: "pdf-encrypt",
+    implementationStatus: "full",
+    component: PdfEncryptWorkspace,
+  },
+  {
+    id: "P16",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 解除密码",
+      "en-US": "Decrypt PDF",
+    },
+    summary: {
+      "zh-CN":
+        "输入已知密码本地离线移除 PDF 密码与权限限制，支持 RC4/AES-128/AES-256 并独立校验输出可无密码打开",
+      "en-US":
+        "Remove password protection from PDFs offline using your known password (RC4/AES-128/AES-256) with independent verification that the copy opens unlocked",
+    },
+    keywords: [
+      "pdf",
+      "decrypt",
+      "unlock",
+      "remove password",
+      "pdf解密",
+      "解除密码",
+      "移除密码",
+      "解锁pdf",
+    ],
+    icon: "pdf-decrypt",
+    implementationStatus: "full",
+    component: PdfDecryptWorkspace,
   },
   {
     id: "P17",
