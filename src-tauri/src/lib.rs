@@ -1052,7 +1052,8 @@ async fn capture_screen_region<R: Runtime>(
     if trimmed_id.is_empty() || trimmed_id.len() > 64 {
         return Err(AppError::invalid_param("Invalid capture task ID."));
     }
-    let guard = registry.register_checked(trimmed_id, "I01", true)?;
+    let resolved_tool = sanitize_tool_id(req.tool_id.as_deref(), "I01")?;
+    let guard = registry.register_checked(trimmed_id, &resolved_tool, true)?;
     let store = asset_store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let tid = guard.task_id().to_string();
@@ -5332,6 +5333,7 @@ async fn inspect_ocr_sources<R: Runtime>(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn ocr_extract_batch<R: Runtime>(
     app: AppHandle<R>,
     registry: State<'_, TaskRegistry>,
@@ -5340,17 +5342,19 @@ async fn ocr_extract_batch<R: Runtime>(
     asset_store: State<'_, ImageAssetStore>,
     task_id: String,
     request: OcrBatchRequest,
+    tool_id: Option<String>,
 ) -> Result<OcrBatchResult, AppError> {
     let trimmed_id = task_id.trim();
     if trimmed_id.is_empty() {
         return Err(AppError::invalid_param("Task ID must not be empty."));
     }
+    let resolved_tool = sanitize_tool_id(tool_id.as_deref(), "T03")?;
     if let Ok(res_dir) = app.path().resource_dir() {
         ocr.set_resource_dir(res_dir.clone());
         pdf.set_resource_dir(res_dir);
     }
     let tid = trimmed_id.to_string();
-    let guard = registry.register_checked(&tid, "T03", false)?;
+    let guard = registry.register_checked(&tid, &resolved_tool, false)?;
     let cancel_flag = guard.cancel_flag();
     let ocr_session = ocr.inner().clone();
     let pdf_session = pdf.inner().clone();
@@ -5359,7 +5363,7 @@ async fn ocr_extract_batch<R: Runtime>(
         TASK_PROGRESS_EVENT,
         TaskProgressPayload {
             task_id: tid.clone(),
-            tool_id: "T03".into(),
+            tool_id: resolved_tool.clone(),
             state: crate::tasks::TaskLifecycleState::Running,
             processed_bytes: 0,
             total_bytes: Some(request.items.len() as u64),
@@ -5382,7 +5386,7 @@ async fn ocr_extract_batch<R: Runtime>(
                     TASK_PROGRESS_EVENT,
                     TaskProgressPayload {
                         task_id: tid.clone(),
-                        tool_id: "T03".into(),
+                        tool_id: resolved_tool.clone(),
                         state: crate::tasks::TaskLifecycleState::Running,
                         processed_bytes: ev.current_item as u64,
                         total_bytes: Some(ev.total_items as u64),
@@ -5400,7 +5404,7 @@ async fn ocr_extract_batch<R: Runtime>(
                     TASK_PROGRESS_EVENT,
                     TaskProgressPayload::failed_or_cancelled(
                         &tid,
-                        "T03",
+                        &resolved_tool,
                         done.completed_count as u64,
                         Some(request.items.len() as u64),
                         &err,
@@ -5412,7 +5416,7 @@ async fn ocr_extract_batch<R: Runtime>(
                     TASK_PROGRESS_EVENT,
                     TaskProgressPayload::completed(
                         &tid,
-                        "T03",
+                        &resolved_tool,
                         done.completed_count as u64,
                         Some(request.items.len() as u64),
                     ),
@@ -5421,7 +5425,7 @@ async fn ocr_extract_batch<R: Runtime>(
             Err(err) => {
                 let _ = app.emit(
                     TASK_PROGRESS_EVENT,
-                    TaskProgressPayload::failed_or_cancelled(&tid, "T03", 0, None, err),
+                    TaskProgressPayload::failed_or_cancelled(&tid, &resolved_tool, 0, None, err),
                 );
             }
         }

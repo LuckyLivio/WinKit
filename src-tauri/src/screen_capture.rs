@@ -94,6 +94,111 @@ pub struct CaptureRegionRequest {
     pub explicit_rect: Option<CaptureRect>,
     /// Whether to hide WinKit's main window during capture (default true).
     pub hide_main_window: Option<bool>,
+    /// Optional custom instruction text rendered on the interactive selection overlay (e.g. T04).
+    #[serde(default)]
+    pub prompt_text: Option<String>,
+    /// Optional tool ID recorded in TaskRegistry (defaults to "I01", e.g. "T04" for Capture Text).
+    #[serde(default)]
+    pub tool_id: Option<String>,
+}
+
+/// Maps client drag coordinates from a virtual-desktop overlay window (whose actual Win32 origin is
+/// `win_origin`) into exact physical screen coordinates and relative crop bounds inside the frozen
+/// virtual-desktop frame `virt`. Handles negative monitor coordinates, reverse drags, and mixed-DPI
+/// window-origin adjustments deterministically.
+pub fn map_virtual_selection_to_capture_rect(
+    virt: CaptureRect,
+    win_origin: (i32, i32),
+    start_client: (i32, i32),
+    end_client: (i32, i32),
+) -> Option<(CaptureRect, (u32, u32, u32, u32))> {
+    if virt.width == 0 || virt.height == 0 {
+        return None;
+    }
+    let virt_max_x = virt.x.saturating_add(virt.width as i32);
+    let virt_max_y = virt.y.saturating_add(virt.height as i32);
+
+    let sx0 = win_origin
+        .0
+        .saturating_add(start_client.0)
+        .clamp(virt.x, virt_max_x);
+    let sy0 = win_origin
+        .1
+        .saturating_add(start_client.1)
+        .clamp(virt.y, virt_max_y);
+    let sx1 = win_origin
+        .0
+        .saturating_add(end_client.0)
+        .clamp(virt.x, virt_max_x);
+    let sy1 = win_origin
+        .1
+        .saturating_add(end_client.1)
+        .clamp(virt.y, virt_max_y);
+
+    let left = sx0.min(sx1);
+    let top = sy0.min(sy1);
+    let right = sx0.max(sx1);
+    let bottom = sy0.max(sy1);
+
+    let rw = (right - left).max(0) as u32;
+    let rh = (bottom - top).max(0) as u32;
+    if rw < 8 || rh < 8 {
+        return None;
+    }
+
+    let rel_x = (left - virt.x).max(0) as u32;
+    let rel_y = (top - virt.y).max(0) as u32;
+    let cw = rw.min(virt.width.saturating_sub(rel_x));
+    let ch = rh.min(virt.height.saturating_sub(rel_y));
+    if cw < 8 || ch < 8 {
+        return None;
+    }
+
+    Some((
+        CaptureRect {
+            x: left,
+            y: top,
+            width: cw,
+            height: ch,
+        },
+        (rel_x, rel_y, cw, ch),
+    ))
+}
+
+/// Computes the client-relative `(x, y)` origin for the overlay instruction pill so it centers near
+/// the top of the monitor currently holding the cursor (falling back to the primary monitor), never
+/// splitting across a dual-monitor bezel.
+pub fn compute_instruction_pill_origin(
+    virt: CaptureRect,
+    monitors: &[CaptureMonitorInfo],
+    cursor_screen: (i32, i32),
+    pill_w: i32,
+    pill_h: i32,
+) -> (i32, i32) {
+    let target = monitors
+        .iter()
+        .find(|m| {
+            cursor_screen.0 >= m.x
+                && cursor_screen.0 < m.x.saturating_add(m.width as i32)
+                && cursor_screen.1 >= m.y
+                && cursor_screen.1 < m.y.saturating_add(m.height as i32)
+        })
+        .or_else(|| monitors.iter().find(|m| m.is_primary))
+        .or_else(|| monitors.first());
+
+    let max_x = (virt.width as i32 - pill_w - 8).max(8);
+    let max_y = (virt.height as i32 - pill_h - 8).max(8);
+
+    if let Some(mon) = target {
+        let mon_rel_x = mon.x - virt.x;
+        let mon_rel_y = mon.y - virt.y;
+        let px = (mon_rel_x + (mon.width as i32 - pill_w) / 2).clamp(8, max_x);
+        let py = (mon_rel_y + 28).clamp(8, max_y);
+        (px, py)
+    } else {
+        let px = ((virt.width as i32 - pill_w) / 2).clamp(8, max_x);
+        (px, 28.clamp(8, max_y))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -686,25 +791,55 @@ mod win_impl {
         GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    use windows::Win32::UI::HiDpi::{
+        GetDpiForMonitor, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, MDT_EFFECTIVE_DPI,
+    };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, ReleaseCapture, SendInput, SetCapture, INPUT, INPUT_0, INPUT_MOUSE,
         MOUSEEVENTF_WHEEL, MOUSEINPUT, VK_ESCAPE,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx, EnumWindows,
-        GetCursorInfo, GetIconInfo, GetMessageW, GetSystemMetrics, GetWindowDisplayAffinity,
-        GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, KillTimer, LoadCursorW,
-        PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SetCursorPos, SetTimer,
-        SetWindowDisplayAffinity, SetWindowLongPtrW, ShowWindow, TranslateMessage, WindowFromPoint,
-        CS_HREDRAW, CS_VREDRAW, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, GWLP_USERDATA, GWL_EXSTYLE,
-        ICONINFO, IDC_ARROW, IDC_CROSS, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOW, SW_SHOWNA, WDA_EXCLUDEFROMCAPTURE,
-        WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-        WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_APPWINDOW,
-        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+        GetCursorInfo, GetCursorPos, GetIconInfo, GetMessageW, GetSystemMetrics,
+        GetWindowDisplayAffinity, GetWindowLongPtrW, GetWindowLongW, GetWindowRect,
+        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
+        IsWindowVisible, KillTimer, LoadCursorW, PeekMessageW, PostMessageW, PostQuitMessage,
+        RegisterClassExW, SetCursorPos, SetTimer, SetWindowDisplayAffinity, SetWindowLongPtrW,
+        SetWindowPos, ShowWindow, TranslateMessage, WindowFromPoint, CS_HREDRAW, CS_VREDRAW,
+        CURSORINFO, CURSOR_SHOWING, DI_NORMAL, GWLP_USERDATA, GWL_EXSTYLE, HWND_TOPMOST, ICONINFO,
+        IDC_ARROW, IDC_CROSS, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SW_SHOW, SW_SHOWNA,
+        WDA_EXCLUDEFROMCAPTURE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN,
+        WM_TIMER, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        WS_POPUP,
     };
+
+    /// RAII guard pinning the current worker thread to Per-Monitor DPI Aware v2 so all virtual
+    /// desktop metrics, GDI captures, and overlay coordinates stay in exact physical pixels across
+    /// mixed-DPI multi-monitor topologies.
+    pub(super) struct PerMonitorV2DpiGuard {
+        prev: DPI_AWARENESS_CONTEXT,
+    }
+
+    impl PerMonitorV2DpiGuard {
+        pub(super) fn enter() -> Self {
+            let prev =
+                unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+            Self { prev }
+        }
+    }
+
+    impl Drop for PerMonitorV2DpiGuard {
+        fn drop(&mut self) {
+            if !self.prev.is_invalid() {
+                unsafe {
+                    let _ = SetThreadDpiAwarenessContext(self.prev);
+                }
+            }
+        }
+    }
 
     const PW_RENDERFULLCONTENT_FLAG: u32 = 0x0000_0002;
     const MONITORINFOF_PRIMARY_FLAG: u32 = 0x0000_0001;
@@ -913,6 +1048,7 @@ mod win_impl {
     }
 
     pub fn virtual_screen_rect() -> CaptureRect {
+        let _dpi_guard = PerMonitorV2DpiGuard::enter();
         unsafe {
             let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
             let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -1186,6 +1322,7 @@ mod win_impl {
         rect: CaptureRect,
         include_cursor: bool,
     ) -> Result<RgbaImage, AppError> {
+        let _dpi_guard = PerMonitorV2DpiGuard::enter();
         if rect.width == 0 || rect.height == 0 {
             return Err(AppError::invalid_param(
                 "Capture region must have positive width and height.",
@@ -1804,6 +1941,7 @@ mod win_impl {
         result: Option<CaptureRect>,
         cancelled: bool,
         prompt_text: String,
+        pill_origin: (i32, i32),
     }
 
     unsafe fn make_dib_from_rgba(rgba: &RgbaImage, dim_factor: f32) -> Option<HBITMAP> {
@@ -1864,6 +2002,8 @@ mod win_impl {
 
         match msg {
             WM_ERASEBKGND => LRESULT(1),
+            // Keep exact physical virtual-desktop geometry when spanning mixed-DPI monitors.
+            WM_DPICHANGED => LRESULT(0),
             WM_KEYDOWN => {
                 if wparam.0 == usize::from(VK_ESCAPE.0) {
                     st.cancelled = true;
@@ -1902,19 +2042,31 @@ mod win_impl {
                 if st.dragging {
                     st.dragging = false;
                     let _ = ReleaseCapture();
-                    let x1 = st.start_pt.x.min(st.curr_pt.x).clamp(0, st.width);
-                    let y1 = st.start_pt.y.min(st.curr_pt.y).clamp(0, st.height);
-                    let x2 = st.start_pt.x.max(st.curr_pt.x).clamp(0, st.width);
-                    let y2 = st.start_pt.y.max(st.curr_pt.y).clamp(0, st.height);
-                    let rw = (x2 - x1).max(0) as u32;
-                    let rh = (y2 - y1).max(0) as u32;
-                    if rw >= 8 && rh >= 8 {
-                        st.result = Some(CaptureRect {
-                            x: st.virt_x + x1,
-                            y: st.virt_y + y1,
-                            width: rw,
-                            height: rh,
-                        });
+                    let up_x = (lparam.0 & 0xFFFF) as i16 as i32;
+                    let up_y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                    st.curr_pt = POINT {
+                        x: up_x.clamp(0, st.width),
+                        y: up_y.clamp(0, st.height),
+                    };
+                    let mut wrc = RECT::default();
+                    let win_origin = if GetWindowRect(hwnd, &mut wrc).is_ok() {
+                        (wrc.left, wrc.top)
+                    } else {
+                        (st.virt_x, st.virt_y)
+                    };
+                    let virt = CaptureRect {
+                        x: st.virt_x,
+                        y: st.virt_y,
+                        width: st.width.max(0) as u32,
+                        height: st.height.max(0) as u32,
+                    };
+                    if let Some((rect, _)) = map_virtual_selection_to_capture_rect(
+                        virt,
+                        win_origin,
+                        (st.start_pt.x, st.start_pt.y),
+                        (st.curr_pt.x, st.curr_pt.y),
+                    ) {
+                        st.result = Some(rect);
                         let _ = DestroyWindow(hwnd);
                     } else {
                         let _ = InvalidateRect(Some(hwnd), None, false);
@@ -2020,15 +2172,15 @@ mod win_impl {
                         );
                     }
                 } else {
-                    // Instruction pill at top center of screen
-                    let pill_w = 420;
+                    // Instruction pill centered on the active monitor (never split across bezels)
+                    let pill_w = 460;
                     let pill_h = 40;
-                    let px = (st.width - pill_w) / 2;
+                    let (px, py) = st.pill_origin;
                     let mut prc = RECT {
                         left: px,
-                        top: 28,
+                        top: py,
                         right: px + pill_w,
-                        bottom: 28 + pill_h,
+                        bottom: py + pill_h,
                     };
                     let bg = CreateSolidBrush(COLORREF(0x0024_1E18));
                     FillRect(mem_dc, &prc, bg);
@@ -2073,6 +2225,7 @@ mod win_impl {
         prompt_text: &str,
         cancel_flag: &AtomicBool,
     ) -> Result<CaptureRect, AppError> {
+        let _dpi_guard = PerMonitorV2DpiGuard::enter();
         unsafe {
             let hinst = GetModuleHandleW(None).map_err(|_| {
                 AppError::new("CAPTURE_UNAVAILABLE", "Unable to query module handle.")
@@ -2100,6 +2253,17 @@ mod win_impl {
                 )
             })?;
 
+            let monitors = list_monitors();
+            let mut cursor_pt = POINT::default();
+            let _ = GetCursorPos(&mut cursor_pt);
+            let pill_origin = compute_instruction_pill_origin(
+                virt,
+                &monitors,
+                (cursor_pt.x, cursor_pt.y),
+                460,
+                40,
+            );
+
             let mut state = Box::new(SelectorState {
                 virt_x: virt.x,
                 virt_y: virt.y,
@@ -2113,6 +2277,7 @@ mod win_impl {
                 result: None,
                 cancelled: false,
                 prompt_text: prompt_text.to_string(),
+                pill_origin,
             });
 
             let hwnd = CreateWindowExW(
@@ -2140,6 +2305,16 @@ mod win_impl {
             };
 
             let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+            // Enforce exact physical virtual-desktop span across mixed-DPI multi-monitor layouts.
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                virt.x,
+                virt.y,
+                virt.width as i32,
+                virt.height as i32,
+                SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
             SetWindowLongPtrW(
                 hwnd,
                 GWLP_USERDATA,
@@ -2478,6 +2653,8 @@ where
             });
         })?;
 
+        // Ensure Per-Monitor V2 DPI awareness across both explicit-rect and interactive captures.
+        let _dpi_guard = win_impl::PerMonitorV2DpiGuard::enter();
         if let Some(explicit) = req.explicit_rect {
             let rgba = win_impl::capture_screen_rect(explicit, req.include_cursor)?;
             let asset = store.insert_rgba(&rgba, "screenshot_region.png".into())?;
@@ -2503,12 +2680,13 @@ where
             frame_count: 0,
             stitched_height: 0,
         });
-        let selected = win_impl::select_region_over_frozen(
-            &frozen,
-            virt,
-            "拖动框选截图区域 · 按 Esc 或右键取消",
-            cancel_flag,
-        )?;
+        let prompt = req
+            .prompt_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("拖动框选截图区域 · 按 Esc 或右键取消");
+        let selected = win_impl::select_region_over_frozen(&frozen, virt, prompt, cancel_flag)?;
         let rel_x = (selected.x - virt.x).max(0) as u32;
         let rel_y = (selected.y - virt.y).max(0) as u32;
         let cw = selected.width.min(frozen.width().saturating_sub(rel_x));
@@ -2882,5 +3060,101 @@ mod tests {
             }
             assert_ne!(pid, self_pid, "Own process window leaked into capture list");
         }
+    }
+
+    #[test]
+    fn multi_monitor_negative_coords_and_mixed_dpi_selection_mapping_stays_exact() {
+        // Left secondary monitor: (-1920, 0) 1920x1080 @ 100% DPI
+        // Primary 4K monitor:     (0, -240)  3840x2160 @ 150% DPI
+        // Combined virtual desktop: (-1920, -240) 5760x2160
+        let virt = CaptureRect {
+            x: -1920,
+            y: -240,
+            width: 5760,
+            height: 2160,
+        };
+
+        // 1. Reverse drag (bottom-right -> top-left) strictly inside negative-X left monitor
+        let (rect_left, crop_left) =
+            map_virtual_selection_to_capture_rect(virt, (virt.x, virt.y), (620, 540), (120, 340))
+                .expect("valid left-monitor selection");
+        assert_eq!(
+            rect_left,
+            CaptureRect {
+                x: -1800,
+                y: 100,
+                width: 500,
+                height: 200,
+            }
+        );
+        assert_eq!(crop_left, (120, 340, 500, 200));
+
+        // 2. Selection spanning across the 100% left monitor into the 150% primary monitor
+        let (rect_span, crop_span) =
+            map_virtual_selection_to_capture_rect(virt, (virt.x, virt.y), (1720, 300), (2320, 620))
+                .expect("valid cross-monitor selection");
+        assert_eq!(
+            rect_span,
+            CaptureRect {
+                x: -200,
+                y: 60,
+                width: 600,
+                height: 320,
+            }
+        );
+        assert_eq!(crop_span, (1720, 300, 600, 320));
+
+        // 3. Mixed-DPI OS origin shift compensation: if Windows nudged overlay origin by (+4, -2),
+        //    physical coordinates still resolve identically from win_origin + client_pt
+        let (rect_shifted, crop_shifted) = map_virtual_selection_to_capture_rect(
+            virt,
+            (virt.x + 4, virt.y - 2),
+            (116, 342),
+            (616, 542),
+        )
+        .expect("compensated selection");
+        assert_eq!(rect_shifted, rect_left);
+        assert_eq!(crop_shifted, crop_left);
+
+        // 4. Tiny accidental click (< 8x8 px) is rejected cleanly
+        assert!(map_virtual_selection_to_capture_rect(
+            virt,
+            (virt.x, virt.y),
+            (300, 300),
+            (305, 305),
+        )
+        .is_none());
+
+        // 5. Instruction pill centers on the monitor under the cursor rather than splitting the bezel
+        let monitors = vec![
+            CaptureMonitorInfo {
+                id: "mon-left".into(),
+                device_name: r"\\.\DISPLAY2".into(),
+                is_primary: false,
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                scale_percent: 100,
+            },
+            CaptureMonitorInfo {
+                id: "mon-primary".into(),
+                device_name: r"\\.\DISPLAY1".into(),
+                is_primary: true,
+                x: 0,
+                y: -240,
+                width: 3840,
+                height: 2160,
+                scale_percent: 150,
+            },
+        ];
+        // Cursor on left monitor -> pill centered inside [0, 1920] relative X
+        let (lx, ly) = compute_instruction_pill_origin(virt, &monitors, (-1000, 400), 460, 40);
+        assert_eq!(lx, (1920 - 460) / 2);
+        assert_eq!(ly, 240 + 28);
+        // Cursor on primary 4K monitor -> pill centered inside [1920, 5760] relative X
+        let (px, py) = compute_instruction_pill_origin(virt, &monitors, (1200, 500), 460, 40);
+        assert_eq!(px, 1920 + (3840 - 460) / 2);
+        assert_eq!(py, 28);
     }
 }

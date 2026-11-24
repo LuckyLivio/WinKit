@@ -68,6 +68,7 @@ import { PdfDecryptWorkspace } from "../tools/pdf-decrypt/PdfDecryptWorkspace";
 import { PdfCompressWorkspace } from "../tools/pdf-compress/PdfCompressWorkspace";
 import { PdfMarkdownWorkspace } from "../tools/pdf-markdown/PdfMarkdownWorkspace";
 import { ExtractTextWorkspace } from "../tools/extract-text/ExtractTextWorkspace";
+import { CaptureTextWorkspace } from "../tools/capture-text/CaptureTextWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -83,6 +84,7 @@ export type ToolIconName =
   | "link"
   | "compass"
   | "scan-text"
+  | "capture-text"
   | "text-quote"
   | "lock-keyhole"
   | "table-2"
@@ -629,6 +631,36 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "scan-text",
     implementationStatus: "full",
     component: ExtractTextWorkspace,
+  },
+  {
+    id: "T04",
+    category: "text",
+    name: {
+      "zh-CN": "屏幕区域取字",
+      "en-US": "Capture Text",
+    },
+    summary: {
+      "zh-CN":
+        "多屏与混合 DPI 屏幕框选后直接在内存中调用离线 RapidOCR 提取中英文文本，支持预览框、Esc/任务取消与一键复制",
+      "en-US":
+        "Select any area across multi-monitor and mixed-DPI screens, extract text offline in memory via RapidOCR, preview boxes, and copy with one click",
+    },
+    keywords: [
+      "capture text",
+      "screen ocr",
+      "ocr",
+      "snip text",
+      "copy text from screen",
+      "region ocr",
+      "屏幕取字",
+      "屏幕区域取字",
+      "框选取字",
+      "截图识字",
+      "屏幕识字",
+    ],
+    icon: "capture-text",
+    implementationStatus: "full",
+    component: CaptureTextWorkspace,
   },
   {
     id: "T08",

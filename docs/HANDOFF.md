@@ -1,5 +1,17 @@
 # WinKit 阶段交接说明
 
+## 阶段 6（进行中：T03 已合入，T04 独立 PR 待审核，P04 留后续 PR）
+
+`src/registry/tools.ts` 当前已收录 **68 个**真实可用工具入口（新增 `T03`「图片与扫描件文字提取」与 `T04`「屏幕区域取字」；另含侧栏共用能力 `C08`「PDF 快速预览」）。
+
+- **PR #37（已合入 `main`：`626b1db`）｜`T03` 图片与扫描件文字提取 + 离线 RapidOCR 基础设施**：
+  - 经同组中英混排截图与扫描件实测选定 **RapidOCR `PP-OCRv4 mobile`（`Apache-2.0`）+ 微软官方签名 `onnxruntime.dll 1.23.2`（`MIT`，Authenticode `Valid`）**，通过 `scripts/ensure-ocr-runtime.mjs` 校验拉取不入源码库，纯 Rust 动态加载 ONNX Runtime C ABI v17 运行于独立 `--ocr-worker`（Windows Job Object 2 GiB 限额、单进程与取消/退出即时回收）。
+  - 输出可供 `T04` 与 `P04` 复用的结构化 `OcrPageResult`（每行含 `quadPx`/`quadNorm`/`bboxPx`/`bboxNorm`/`angleDeg`/`rotated180` 及 CTC 词级 `spans`，每页含像素尺寸、请求 DPI 与 PDF 页面点尺寸）；支持队列全源文件 `forbiddenSourcePaths` 防覆盖导出、手工校对内容保留与显式重新识别，并在 Windows CI 上以随仓样张 `src-tauri/tests/fixtures/ocr_bilingual_sample.png` 实际执行 RapidOCR 与 PDFium 200 DPI 渲染扫描 PDF 集成测试。
+- **阶段 6 PR 2（`feat/phase-6-pr2-t04-capture-text`）｜`T04` 屏幕区域取字**：
+  - 复用 `I01` 屏幕框选（补强 `PerMonitorV2DpiGuard`、`SetWindowPos`、`WM_DPICHANGED` 忽略、窗口原点偏移补偿的 `map_virtual_selection_to_capture_rect` 以及按鼠标所在屏居中的 `compute_instruction_pill_origin`）、`ImageAssetStore` 内存零落盘传递、`T03` `--ocr-worker` 与原生剪贴板，提供「框选 → 离线识别 → 识别框预览/校对 → 一键复制 / 取消后重新识别」闭环。
+- **后续 `P04`（扫描版 PDF 转可搜索）已知交接注意项**：
+  - **大页渲染像素上限导致的 DPI 差异**：当超大尺寸 PDF 页面经 `--pdf-worker` 渲染并触发像素边长上限（`max_side_cap = 4096`）时，实际渲染像素对应的有效 DPI（`imageWidthPx / (sourceWidthPt / 72)` 与 `imageHeightPx / (sourceHeightPt / 72)`）会低于请求参数 `renderDpi`。后续 `P04` 写入透明 PDF 文字层前，**必须使用实际渲染像素尺寸与 `sourceWidthPt` / `sourceHeightPt`（或直接将归一化坐标 `quadNorm` / `bboxNorm` 映射到页面点尺寸）验证坐标变换**，不得直接按请求的 `renderDpi` 推算缩放比例。
+
 ## v0.18.0 · 阶段 5B（进阶 PDF 处理与文档水印）
 
 `src/registry/tools.ts` 收录 **66 个**真实可用工具入口（文档与 PDF 分类增至 `13` 项：`P06–P17` 与 `P23`；既有 `I13` 同步补齐 PDF 水印模式并升级为 `待验收`，沿用同一入口不重复计数；侧栏共用能力 `C08`「PDF 快速预览」不计入 102 项工具条目数）。本轮按三个连续独立 PR（PR #33、PR #34、PR #35）顺序交付，完成真实 Windows 11 `150%` 缩放安装版全链路串联实测与单版本正式发布 `v0.18.0`。

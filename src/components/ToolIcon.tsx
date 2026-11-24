@@ -44,6 +44,7 @@ import {
   Regex,
   RotateCw,
   ScanFace,
+  ScanLine,
   Scaling,
   ScanText,
   Scissors,
@@ -93,6 +94,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <Compass size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "scan-text":
       return <ScanText size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "capture-text":
+      return <ScanLine size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "text-quote":
       return <TextQuote size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "lock-keyhole":
