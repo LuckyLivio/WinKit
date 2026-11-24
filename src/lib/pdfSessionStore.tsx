@@ -12,6 +12,9 @@ import type {
   MarkdownTheme,
   MarkdownToPdfResult,
   MergePdfsResult,
+  OcrBatchItemResult,
+  OcrEngineStatus,
+  OcrProgressPayload,
   OrganizePdfResult,
   PdfCompressMode,
   PdfCropScope,
@@ -340,6 +343,41 @@ export interface PdfMarkdownSessionState {
   errorMessage: string | null;
 }
 
+export interface OcrQueueEntry {
+  id: string;
+  kind: "image" | "pdf" | "clipboard";
+  path: string | null;
+  assetId: string | null;
+  fileName: string;
+  byteLength: number;
+  widthPx: number | null;
+  heightPx: number | null;
+  pageCount: number;
+  isLikelyScanned: boolean;
+  pageRange: string;
+  thumbnailDataUrl: string | null;
+  inspectError: string | null;
+}
+
+export interface OcrExtractSessionState {
+  engineStatus: OcrEngineStatus | null;
+  queue: OcrQueueEntry[];
+  pdfDpi: 150 | 200 | 250;
+  maxSideLen: 960 | 1280 | 1600;
+  showBoxes: boolean;
+  rightTab: "text" | "boxes";
+  activeItemId: string | null;
+  activePageNumber: number;
+  selectedLineIndex: number | null;
+  editedTexts: Record<string, string>;
+  resultsByItemId: Record<string, OcrBatchItemResult>;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  progress: OcrProgressPayload | null;
+  lastCancelled: boolean;
+  errorMessage: string | null;
+}
+
 export interface PdfSessionRoot {
   reader: PdfReaderSessionState;
   merge: PdfMergeSessionState;
@@ -356,6 +394,7 @@ export interface PdfSessionRoot {
   decrypt: PdfDecryptSessionState;
   compress: PdfCompressSessionState;
   markdown: PdfMarkdownSessionState;
+  extractText: OcrExtractSessionState;
 }
 
 const INITIAL_PDF_SESSION: PdfSessionRoot = {
@@ -593,6 +632,24 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  extractText: {
+    engineStatus: null,
+    queue: [],
+    pdfDpi: 200,
+    maxSideLen: 1280,
+    showBoxes: true,
+    rightTab: "text",
+    activeItemId: null,
+    activePageNumber: 1,
+    selectedLineIndex: null,
+    editedTexts: {},
+    resultsByItemId: {},
+    taskStatus: "idle",
+    activeTaskId: null,
+    progress: null,
+    lastCancelled: false,
+    errorMessage: null,
+  },
 };
 
 export type PdfTargetToolId =
@@ -608,7 +665,8 @@ export type PdfTargetToolId =
   | "P16"
   | "P17"
   | "P23"
-  | "I13";
+  | "I13"
+  | "T03";
 
 export interface PdfSessionContextValue {
   pdfSession: PdfSessionRoot;
@@ -638,6 +696,9 @@ export interface PdfSessionContextValue {
   ) => void;
   updateMarkdownSession: (
     updater: (prev: PdfMarkdownSessionState) => PdfMarkdownSessionState,
+  ) => void;
+  updateExtractTextSession: (
+    updater: (prev: OcrExtractSessionState) => OcrExtractSessionState,
   ) => void;
   openInPdfReader: (path: string) => void;
   sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
@@ -770,6 +831,13 @@ export function PdfSessionProvider({
     [],
   );
 
+  const updateExtractTextSession = useCallback(
+    (updater: (prev: OcrExtractSessionState) => OcrExtractSessionState) => {
+      setPdfSession((prev) => ({ ...prev, extractText: updater(prev.extractText) }));
+    },
+    [],
+  );
+
   const openInPdfReader = useCallback(
     (path: string) => {
       setPendingReaderPath(path);
@@ -813,6 +881,7 @@ export function PdfSessionProvider({
         updateDecryptSession,
         updateCompressSession,
         updateMarkdownSession,
+        updateExtractTextSession,
         openInPdfReader,
         sendPdfToTool,
         pendingReaderPath,

@@ -329,6 +329,10 @@ pub(crate) mod job_guard {
 
     impl WindowsJobGuard {
         pub fn attach(child: &Child) -> Option<Self> {
+            Self::attach_with_memory_limit(child, WORKER_MEMORY_LIMIT_BYTES)
+        }
+
+        pub fn attach_with_memory_limit(child: &Child, memory_limit_bytes: usize) -> Option<Self> {
             unsafe {
                 let job = CreateJobObjectW(None, None).ok()?;
                 let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
@@ -336,7 +340,7 @@ pub(crate) mod job_guard {
                     | JOB_OBJECT_LIMIT_PROCESS_MEMORY
                     | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
                 info.BasicLimitInformation.ActiveProcessLimit = 1;
-                info.ProcessMemoryLimit = WORKER_MEMORY_LIMIT_BYTES;
+                info.ProcessMemoryLimit = memory_limit_bytes;
 
                 // Try full resource-capped limits first; if a nested host job forbids memory/process
                 // overrides, fall back cleanly to deterministic lifecycle kill-on-close.

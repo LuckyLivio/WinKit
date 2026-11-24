@@ -12,6 +12,7 @@ src-tauri/gen/schemas/
 src-tauri/resources/models/
 src-tauri/resources/pdfium/
 src-tauri/resources/qpdf/
+src-tauri/resources/ocr/
 *.exe
 *.msi
 *.pdb

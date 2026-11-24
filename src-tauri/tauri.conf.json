@@ -43,7 +43,12 @@
       "resources/qpdf/msvcp140.dll": "qpdf/msvcp140.dll",
       "resources/qpdf/vcruntime140.dll": "qpdf/vcruntime140.dll",
       "resources/qpdf/vcruntime140_1.dll": "qpdf/vcruntime140_1.dll",
-      "resources/qpdf/LICENSE-qpdf.txt": "licenses/qpdf-notices.txt"
+      "resources/qpdf/LICENSE-qpdf.txt": "licenses/qpdf-notices.txt",
+      "resources/ocr/onnxruntime.dll": "ocr/onnxruntime.dll",
+      "resources/ocr/ch_PP-OCRv4_det_mobile.onnx": "ocr/ch_PP-OCRv4_det_mobile.onnx",
+      "resources/ocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx": "ocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+      "resources/ocr/ch_PP-OCRv4_rec_mobile.onnx": "ocr/ch_PP-OCRv4_rec_mobile.onnx",
+      "resources/ocr/LICENSE-ocr.txt": "licenses/ocr-notices.txt"
     },
     "publisher": "Livio",
     "copyright": "Copyright (c) 2026 Livio",

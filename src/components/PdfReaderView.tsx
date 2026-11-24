@@ -941,6 +941,14 @@ export function PdfReaderView() {
         <div className="pdf-banner pdf-banner-info" role="status">
           <Info size={16} strokeWidth={1.75} aria-hidden="true" />
           <span>{pm.reader.scannedBanner}</span>
+          <button
+            type="button"
+            className="btn"
+            style={{ marginLeft: "auto" }}
+            onClick={() => sendPdfToTool(info.path, "T03")}
+          >
+            {locale === "zh-CN" ? "识别文字 (T03)" : "Extract Text (T03)"}
+          </button>
         </div>
       )}
       {info?.hasSignatures && (

@@ -140,6 +140,12 @@ export interface Messages {
     PDF_WORKER_TIMEOUT: string;
     PDF_WORKER_CRASHED: string;
     PDF_WORKER_ERROR: string;
+    OCR_ENGINE_MISSING: string;
+    OCR_ENGINE_LOAD_FAILED: string;
+    OCR_INFERENCE_FAILED: string;
+    OCR_WORKER_TIMEOUT: string;
+    OCR_WORKER_CRASHED: string;
+    OCR_WORKER_ERROR: string;
     PDF_WRITE_FAILED: string;
     TASK_CANCELLED: string;
     INVALID_PARAMETER: string;
@@ -1143,6 +1149,13 @@ export const MESSAGES: Record<Locale, Messages> = {
         "隔离 PDF 处理进程超时并已终止，主界面未受影响，请检查文件是否过大或损坏。",
       PDF_WORKER_CRASHED: "隔离 PDF 处理子进程异常中断（文件可能损坏或结构异常），主界面未受影响。",
       PDF_WORKER_ERROR: "PDF 后台处理进程通信失败，请重试。",
+      OCR_ENGINE_MISSING: "离线 OCR 运行库或 RapidOCR 模型缺失，请重新安装官方安装包。",
+      OCR_ENGINE_LOAD_FAILED: "加载离线 OCR 运行库或模型失败，请确认安装目录完整。",
+      OCR_INFERENCE_FAILED: "本地离线 OCR 推理失败，请检查图片或扫描件是否损坏。",
+      OCR_WORKER_TIMEOUT:
+        "隔离 OCR 识别进程超时并已安全终止，请适当降低渲染 DPI 或缩小图片后重试。",
+      OCR_WORKER_CRASHED: "隔离 OCR 识别子进程异常中止，原文件未受影响，请重试。",
+      OCR_WORKER_ERROR: "OCR 后台识别进程通信失败，请重试。",
       PDF_WRITE_FAILED: "写入目标 PDF 文件失败，请检查磁盘空间与目录权限。",
       TASK_CANCELLED: "任务已按请求取消。",
       INVALID_PARAMETER: "输入参数或路径格式无效。",
@@ -2285,6 +2298,17 @@ export const MESSAGES: Record<Locale, Messages> = {
       PDF_WORKER_CRASHED:
         "Isolated PDF worker exited unexpectedly (the file may be corrupted). The main window remains safe.",
       PDF_WORKER_ERROR: "Isolated PDF worker communication error. Please retry.",
+      OCR_ENGINE_MISSING:
+        "The bundled offline OCR runtime or RapidOCR models are missing. Please reinstall WinKit.",
+      OCR_ENGINE_LOAD_FAILED:
+        "Failed to load the bundled offline OCR runtime or models. Verify the installation folder.",
+      OCR_INFERENCE_FAILED:
+        "Local offline OCR inference failed. Please verify the image or scanned PDF is intact.",
+      OCR_WORKER_TIMEOUT:
+        "The isolated OCR worker timed out and was terminated safely. Try lowering PDF DPI or image size.",
+      OCR_WORKER_CRASHED:
+        "Isolated OCR worker exited unexpectedly. Your source files remain untouched.",
+      OCR_WORKER_ERROR: "Isolated OCR worker communication error. Please retry.",
       PDF_WRITE_FAILED: "Failed to write output PDF file. Check disk space and folder permissions.",
       TASK_CANCELLED: "Operation cancelled.",
       INVALID_PARAMETER: "Invalid input parameter or file path.",

@@ -60,6 +60,9 @@ jobs:
       - name: Ensure verified Windows x64 QPDF runtime
         run: npm run ensure-qpdf
 
+      - name: Ensure verified Windows x64 OCR runtime & RapidOCR PP-OCRv4 models
+        run: npm run ensure-ocr-runtime
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
@@ -142,6 +145,30 @@ jobs:
           $qpdfNotice = Get-Item "$env:LOCALAPPDATA/WinKit/licenses/qpdf-notices.txt"
           if ($qpdfNotice.Length -lt 1024) {
             throw "Bundled QPDF license notices file is missing or unexpectedly small: $($qpdfNotice.Length) B"
+          }
+          $bundledOrt = Get-Item "$env:LOCALAPPDATA/WinKit/ocr/onnxruntime.dll"
+          $ortHash = (Get-FileHash -Algorithm SHA256 $bundledOrt.FullName).Hash.ToLowerInvariant()
+          if ($bundledOrt.Length -ne 15709728 -or $ortHash -ne '462ea8e85b881b26388c595f96b1b9b39e57565aa4725fe29136695c1ead179f') {
+            throw "Bundled ONNX Runtime DLL mismatch: $($bundledOrt.Length) B / $ortHash"
+          }
+          $ocrDet = Get-Item "$env:LOCALAPPDATA/WinKit/ocr/ch_PP-OCRv4_det_mobile.onnx"
+          $ocrDetHash = (Get-FileHash -Algorithm SHA256 $ocrDet.FullName).Hash.ToLowerInvariant()
+          if ($ocrDet.Length -ne 4745517 -or $ocrDetHash -ne 'd2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9') {
+            throw "Bundled OCR det model mismatch: $($ocrDet.Length) B / $ocrDetHash"
+          }
+          $ocrCls = Get-Item "$env:LOCALAPPDATA/WinKit/ocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+          $ocrClsHash = (Get-FileHash -Algorithm SHA256 $ocrCls.FullName).Hash.ToLowerInvariant()
+          if ($ocrCls.Length -ne 581639 -or $ocrClsHash -ne '70581b300b83babd9e0dd1d7d74c5b006869e8796da277a70c2e405bf9d77c82') {
+            throw "Bundled OCR cls model mismatch: $($ocrCls.Length) B / $ocrClsHash"
+          }
+          $ocrRec = Get-Item "$env:LOCALAPPDATA/WinKit/ocr/ch_PP-OCRv4_rec_mobile.onnx"
+          $ocrRecHash = (Get-FileHash -Algorithm SHA256 $ocrRec.FullName).Hash.ToLowerInvariant()
+          if ($ocrRec.Length -ne 10857958 -or $ocrRecHash -ne '48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b') {
+            throw "Bundled OCR rec model mismatch: $($ocrRec.Length) B / $ocrRecHash"
+          }
+          $ocrNotice = Get-Item "$env:LOCALAPPDATA/WinKit/licenses/ocr-notices.txt"
+          if ($ocrNotice.Length -lt 1024) {
+            throw "Bundled OCR license notices file is missing or unexpectedly small: $($ocrNotice.Length) B"
           }
 
           $desktopCheck = 'No interactive main window on runner'
