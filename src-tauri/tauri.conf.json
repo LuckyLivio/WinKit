@@ -38,7 +38,12 @@
       "../licenses/I02-yunet-mit.txt": "licenses/I02-yunet-mit.txt",
       "resources/models/face_detection_yunet_2023mar.onnx": "models/face_detection_yunet_2023mar.onnx",
       "resources/pdfium/pdfium.dll": "pdfium/pdfium.dll",
-      "resources/pdfium/LICENSE-pdfium.txt": "licenses/pdfium-notices.txt"
+      "resources/pdfium/LICENSE-pdfium.txt": "licenses/pdfium-notices.txt",
+      "resources/qpdf/qpdf30.dll": "qpdf/qpdf30.dll",
+      "resources/qpdf/msvcp140.dll": "qpdf/msvcp140.dll",
+      "resources/qpdf/vcruntime140.dll": "qpdf/vcruntime140.dll",
+      "resources/qpdf/vcruntime140_1.dll": "qpdf/vcruntime140_1.dll",
+      "resources/qpdf/LICENSE-qpdf.txt": "licenses/qpdf-notices.txt"
     },
     "publisher": "Livio",
     "copyright": "Copyright (c) 2026 Livio",

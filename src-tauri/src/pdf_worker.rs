@@ -288,7 +288,7 @@ pub fn run_pdf_worker_stdio_loop(resource_dir: Option<&Path>) -> i32 {
 }
 
 #[cfg(windows)]
-mod job_guard {
+pub(crate) mod job_guard {
     use super::WORKER_MEMORY_LIMIT_BYTES;
     use std::os::windows::io::AsRawHandle;
     use std::process::Child;
@@ -439,7 +439,7 @@ impl Drop for PdfWorkerClient {
     }
 }
 
-fn should_use_subprocess_worker() -> bool {
+pub(crate) fn should_use_subprocess_worker() -> bool {
     if cfg!(test) {
         return false;
     }

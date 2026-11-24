@@ -18,5 +18,19 @@ fn main() {
         std::process::exit(code);
     }
 
+    if args
+        .iter()
+        .any(|a| a == winkit_lib::pdf_qpdf::QPDF_WORKER_FLAG)
+    {
+        let mut resource_dir: Option<PathBuf> = None;
+        for pair in args.windows(2) {
+            if pair[0] == "--pdf-resource-dir" {
+                resource_dir = Some(PathBuf::from(&pair[1]));
+            }
+        }
+        let code = winkit_lib::pdf_qpdf::run_qpdf_worker_stdio(resource_dir.as_deref());
+        std::process::exit(code);
+    }
+
     winkit_lib::run();
 }

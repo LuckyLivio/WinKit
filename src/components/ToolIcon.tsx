@@ -32,7 +32,9 @@ import {
   KeyRound,
   LayoutGrid,
   Link2,
+  Lock,
   LockKeyhole,
+  LockOpen,
   Mic,
   Minimize2,
   Pencil,
@@ -183,5 +185,9 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <PenTool size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "pdf-crop":
       return <Crop size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-encrypt":
+      return <Lock size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-decrypt":
+      return <LockOpen size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }
