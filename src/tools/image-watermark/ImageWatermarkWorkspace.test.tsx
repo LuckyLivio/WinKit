@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { I18nContext } from "../../i18n/I18nContext";
 import { MESSAGES } from "../../i18n/messages";
 import { MediaSessionProvider } from "../../lib/mediaSessionStore";
+import { PdfSessionProvider } from "../../lib/pdfSessionStore";
 import { SessionStoreProvider } from "../../lib/sessionStore";
 import * as tauriBridge from "../../lib/tauriBridge";
 import { ImageWatermarkWorkspace } from "./ImageWatermarkWorkspace";
@@ -296,6 +297,93 @@ describe("I13 ImageWatermarkWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "导出水印视频" }));
     await waitFor(() => expect(wmVideoSpy).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(/原音频无损保留/)).toBeInTheDocument();
+
+    vi.restoreAllMocks();
+  });
+
+  it("supports PDF Watermark mode with page scope, rotation, and preserves selectable text notice", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(stampMod, "rasterizeTextWatermarkStamp").mockReturnValue({
+      dataUrl: SAMPLE_PNG_URL,
+      width: 400,
+      height: 120,
+    });
+    vi.spyOn(tauriBridge, "pickSingleFile").mockResolvedValueOnce("D:\\Docs\\brief.pdf");
+    vi.spyOn(tauriBridge, "inspectPdfDocument").mockResolvedValueOnce({
+      path: "D:\\Docs\\brief.pdf",
+      fileName: "brief.pdf",
+      byteLength: 32000,
+      pageCount: 3,
+      pages: [
+        { pageNumber: 1, widthPt: 595, heightPt: 842, rotation: 0, isOversized: false },
+        { pageNumber: 2, widthPt: 842, heightPt: 595, rotation: 90, isOversized: false },
+        { pageNumber: 3, widthPt: 595, heightPt: 842, rotation: 0, isOversized: false },
+      ],
+      hasTextLayer: true,
+      sampledTextPages: 3,
+      isLikelyScanned: false,
+      hasOutlines: false,
+      outlines: [],
+      hasAcroform: false,
+      hasSignatures: false,
+      signatureCount: 0,
+      isEncrypted: false,
+      title: null,
+      author: null,
+      subject: null,
+      creator: null,
+      producer: null,
+      warnings: [],
+    });
+    vi.spyOn(tauriBridge, "suggestSafeSiblingPath").mockResolvedValueOnce(
+      "D:\\Docs\\brief_watermarked.pdf",
+    );
+    vi.spyOn(tauriBridge, "renderPdfPage").mockResolvedValue({
+      meta: {
+        pageNumber: 1,
+        widthPx: 920,
+        heightPx: 1300,
+        pageWidthPt: 595,
+        pageHeightPt: 842,
+        rotation: 0,
+        capped: false,
+      },
+      dataUrl: SAMPLE_PNG_URL,
+      fromCache: false,
+    });
+    const pdfWmSpy = vi.spyOn(tauriBridge, "watermarkPdf").mockResolvedValueOnce({
+      outputPath: "D:\\Docs\\brief_watermarked.pdf",
+      byteLength: 36000,
+      totalPages: 3,
+      watermarkedPageCount: 2,
+      signatureInvalidated: false,
+      warnings: [],
+    });
+
+    render(
+      <I18nContext.Provider value={{ locale: "zh-CN", t: MESSAGES["zh-CN"], setLocale: () => {} }}>
+        <SessionStoreProvider>
+          <PdfSessionProvider onNavigateToReader={() => {}} onNavigateToTool={() => {}}>
+            <ImageWatermarkWorkspace />
+          </PdfSessionProvider>
+        </SessionStoreProvider>
+      </I18nContext.Provider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "PDF 水印" }));
+    await user.click(screen.getAllByRole("button", { name: "选择 PDF…" })[0]!);
+    await waitFor(() => {
+      expect(screen.getByText("1 / 3")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "奇数页" }));
+    await user.click(screen.getByRole("button", { name: "导出水印 PDF" }));
+
+    await waitFor(() => {
+      expect(pdfWmSpy).toHaveBeenCalledTimes(1);
+    });
+    expect(pdfWmSpy.mock.calls[0]?.[0].scope).toBe("odd");
+    expect(screen.getByText(/PDF 水印导出完成：已叠加 2\/3 页/)).toBeInTheDocument();
 
     vi.restoreAllMocks();
   });

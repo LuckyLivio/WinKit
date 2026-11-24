@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 60 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
+  it("registers all 62 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -148,14 +148,31 @@ describe("WinKit desktop workbench shell", () => {
       "A03",
       "A04",
       "A05",
+      "P06",
       "P07",
       "P08",
       "P09",
       "P10",
       "P11",
       "P12",
+      "P13",
       "P17",
     ]);
+    for (const query of ["PDF签名", "sign pdf", "手绘签名"]) {
+      expect(filterTools(REGISTERED_TOOLS, { query, category: "all" }).map((t) => t.id)).toContain(
+        "P06",
+      );
+    }
+    for (const query of ["PDF裁剪", "crop pdf", "快递面单"]) {
+      expect(filterTools(REGISTERED_TOOLS, { query, category: "all" }).map((t) => t.id)).toContain(
+        "P13",
+      );
+    }
+    for (const query of ["pdf水印", "pdf watermark"]) {
+      expect(filterTools(REGISTERED_TOOLS, { query, category: "all" }).map((t) => t.id)).toContain(
+        "I13",
+      );
+    }
     for (const query of ["图片合成 PDF", "images to pdf", "图片转pdf"]) {
       expect(
         filterTools(REGISTERED_TOOLS, { query, category: "pdf" }).map((tool) => tool.id),

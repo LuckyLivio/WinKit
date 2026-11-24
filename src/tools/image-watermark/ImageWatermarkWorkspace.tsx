@@ -1,8 +1,13 @@
 import {
+  AlertTriangle,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ClipboardPaste,
   Copy,
   Download,
+  Eye,
+  FileText,
   Film,
   FolderOpen,
   ImagePlus,
@@ -17,14 +22,17 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { MediaToolsSetupPanel } from "../../components/MediaToolsSetupPanel";
 import { useI18n } from "../../i18n/I18nContext";
 import { useOptionalMediaSession } from "../../lib/mediaSessionStore";
+import { useOptionalPdfSession } from "../../lib/pdfSessionStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import {
   bindDisposableListener,
+  cancelBackendTask,
   copyImageAssetToClipboard,
   extractMediaPosterDataUrl,
   formatLocalizedError,
   inspectBatchImages,
   inspectBeautifierSourceImage,
+  inspectPdfDocument,
   loadFileAsImageAsset,
   openLocalDirectory,
   parseBackendError,
@@ -35,11 +43,15 @@ import {
   pickSingleFile,
   probeMediaInfo,
   readClipboardImageAsAsset,
+  renderPdfPage,
   renderWatermarkedAsset,
   saveImageAssetFile,
   subscribeFileDrop,
+  subscribePdfTaskProgress,
   suggestSafeSiblingPath,
+  watermarkPdf,
   type MediaToolsStatus,
+  type PdfWatermarkScope,
   type SaveAssetFormat,
   type WatermarkPlacement,
   type WatermarkStyleConfig,
@@ -79,8 +91,31 @@ const copy = {
     batchMode: "批量图片",
     singleMode: "单图水印",
     videoMode: "视频水印",
+    pdfMode: "PDF 水印",
     openSingle: "选择单图",
     openVideo: "选择视频…",
+    openPdf: "选择 PDF…",
+    emptyPdf:
+      "选择或拖入本地 PDF，在横竖混排或旋转页面上实时预览水印位置，保留可选文字、矢量与原有链接导出新文件。",
+    pdfScopeLabel: "作用页面范围",
+    pdfScopeAll: "全部页面",
+    pdfScopeCurrent: "仅当前页",
+    pdfScopeOdd: "奇数页",
+    pdfScopeEven: "偶数页",
+    pdfScopeRange: "指定范围",
+    pdfRangePlaceholder: "例如 1-3, 5",
+    pdfSingleAngle: "单水印旋转角度",
+    pdfOutLabel: "输出 PDF 文件（绝不覆盖源文件）",
+    runPdf: "导出水印 PDF",
+    runningPdf: "正在写入 PDF 水印…",
+    cancelPdf: "取消导出",
+    openInReader: "在内置预览中打开",
+    pdfNotice:
+      "水印以独立对象叠加在页面上，保留文字可选性、矢量清晰度与原链接；水印不是永久涂黑，也不保证无法移除。",
+    pdfSigWarn: (n: number) =>
+      `此 PDF 包含 ${n} 个数字签名字段：添加水印导出的新副本会使原有密码学签名失效。`,
+    pdfDoneSummary: (n: number, total: number, bytes: number) =>
+      `PDF 水印导出完成：已叠加 ${n}/${total} 页（${(bytes / 1024).toFixed(1)} KiB）`,
     paste: "粘贴图片",
     addFiles: "添加图片",
     addFolders: "添加文件夹",
@@ -132,7 +167,7 @@ const copy = {
     copiedOk: "已复制带水印的原分辨率图片到 Windows 剪贴板",
     savedOk: (p: string, w: number, h: number) => `已导出 (${w}×${h} px)：${p}`,
     scopeNote:
-      "支持图片（单图/批量，保留透明 PNG 通道）与视频水印（横竖屏及 90° 旋转画面一致并保留原音频）；PDF 水印按阶段 5 单独跟踪。",
+      "统一支持图片（单图/批量，保留透明 PNG）、视频（90° 竖拍一致并保留原音频）与 PDF 水印（保留可选文字与矢量；非永久涂黑）。",
     overwriteTitle: "覆盖已有文件？",
     overwriteBody: (p: string) => `目标文件已存在：${p}\n确认覆盖吗？`,
     overwriteConfirm: "确认覆盖",
@@ -142,8 +177,31 @@ const copy = {
     batchMode: "Batch Images",
     singleMode: "Single Image",
     videoMode: "Video",
+    pdfMode: "PDF",
     openSingle: "Open image",
     openVideo: "Open video...",
+    openPdf: "Open PDF...",
+    emptyPdf:
+      "Open or drop a local PDF to preview exact watermark placement across portrait, landscape, and rotated pages while preserving selectable text and links.",
+    pdfScopeLabel: "Target pages",
+    pdfScopeAll: "All pages",
+    pdfScopeCurrent: "Current page",
+    pdfScopeOdd: "Odd pages",
+    pdfScopeEven: "Even pages",
+    pdfScopeRange: "Custom range",
+    pdfRangePlaceholder: "e.g. 1-3, 5",
+    pdfSingleAngle: "Rotation angle",
+    pdfOutLabel: "Output PDF File (Never Overwrites Source)",
+    runPdf: "Export Watermarked PDF",
+    runningPdf: "Applying PDF Watermark...",
+    cancelPdf: "Cancel",
+    openInReader: "Open in Preview",
+    pdfNotice:
+      "Watermarks are overlaid as PDF objects preserving selectable text, vectors, and links. Watermarks are NOT permanent redaction and may be removable.",
+    pdfSigWarn: (n: number) =>
+      `This PDF contains ${n} digital signature field(s). Exporting a watermarked copy invalidates original signatures.`,
+    pdfDoneSummary: (n: number, total: number, bytes: number) =>
+      `Watermarked ${n}/${total} PDF page(s) (${(bytes / 1024).toFixed(1)} KiB)`,
     paste: "Paste",
     addFiles: "Add images",
     addFolders: "Add folders",
@@ -196,7 +254,7 @@ const copy = {
     copiedOk: "Copied watermarked full-resolution image to Windows clipboard",
     savedOk: (p: string, w: number, h: number) => `Exported (${w}×${h} px): ${p}`,
     scopeNote:
-      "Supports image (single/batch, preserving PNG alpha) and video watermarking (consistent across landscape, portrait & 90° rotation with audio preserved); PDF watermarking is tracked in Phase 5.",
+      "Supports image (single/batch, preserving PNG alpha), video (consistent across portrait/90° rotation with audio preserved), and PDF watermarking (preserves selectable text & vectors; not permanent redaction).",
     overwriteTitle: "Overwrite existing file?",
     overwriteBody: (p: string) => `Target file already exists: ${p}\nOverwrite it?`,
     overwriteConfirm: "Overwrite",
@@ -214,9 +272,12 @@ export function ImageWatermarkWorkspace() {
     cancelImageWatermarkBatch,
   } = useSessionStore();
   const mediaCtx = useOptionalMediaSession();
+  const pdfCtx = useOptionalPdfSession();
   const st = session.imageWatermark;
   const videoSt = mediaCtx?.mediaSession.videoWatermark ?? null;
   const videoRunning = videoSt?.taskStatus === "running";
+  const pdfSt = pdfCtx?.pdfSession.pdfWatermark ?? null;
+  const pdfRunning = pdfSt?.taskStatus === "running";
 
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const baseImgRef = useRef<HTMLImageElement | null>(null);
@@ -228,6 +289,9 @@ export function ImageWatermarkWorkspace() {
   const [busy, setBusy] = useState(false);
   const [mediaToolsStatus, setMediaToolsStatus] = useState<MediaToolsStatus | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [pdfPreviewPageUrl, setPdfPreviewPageUrl] = useState<string | null>(null);
+  const [pdfPreviewDims, setPdfPreviewDims] = useState<{ w: number; h: number } | null>(null);
+  const [pdfOverwritePending, setPdfOverwritePending] = useState<string | null>(null);
   const [pendingOverwrite, setPendingOverwrite] = useState<{
     path: string;
     format: SaveAssetFormat;
@@ -243,29 +307,37 @@ export function ImageWatermarkWorkspace() {
   const videoStream = videoSt?.videoProbe?.videoStreams[0] ?? null;
 
   const activePreviewUrl =
-    st.mode === "video"
-      ? (videoSt?.posterUrl ?? null)
-      : st.mode === "batch"
-        ? (selectedBatchItem?.thumbnailDataUrl ?? null)
-        : st.previewDataUrl;
+    st.mode === "pdf"
+      ? pdfPreviewPageUrl
+      : st.mode === "video"
+        ? (videoSt?.posterUrl ?? null)
+        : st.mode === "batch"
+          ? (selectedBatchItem?.thumbnailDataUrl ?? null)
+          : st.previewDataUrl;
   const activeWidth =
-    st.mode === "video"
-      ? (videoStream?.displayWidth ?? videoStream?.codedWidth ?? null)
-      : st.mode === "batch"
-        ? (selectedBatchItem?.displayWidth ?? null)
-        : st.sourceWidth;
+    st.mode === "pdf"
+      ? (pdfPreviewDims?.w ?? null)
+      : st.mode === "video"
+        ? (videoStream?.displayWidth ?? videoStream?.codedWidth ?? null)
+        : st.mode === "batch"
+          ? (selectedBatchItem?.displayWidth ?? null)
+          : st.sourceWidth;
   const activeHeight =
-    st.mode === "video"
-      ? (videoStream?.displayHeight ?? videoStream?.codedHeight ?? null)
-      : st.mode === "batch"
-        ? (selectedBatchItem?.displayHeight ?? null)
-        : st.sourceHeight;
+    st.mode === "pdf"
+      ? (pdfPreviewDims?.h ?? null)
+      : st.mode === "video"
+        ? (videoStream?.displayHeight ?? videoStream?.codedHeight ?? null)
+        : st.mode === "batch"
+          ? (selectedBatchItem?.displayHeight ?? null)
+          : st.sourceHeight;
   const activeFileName =
-    st.mode === "video"
-      ? (videoSt?.videoProbe?.fileName ?? null)
-      : st.mode === "batch"
-        ? (selectedBatchItem?.fileName ?? null)
-        : st.sourceFileName;
+    st.mode === "pdf"
+      ? (pdfSt?.inspection?.fileName ?? null)
+      : st.mode === "video"
+        ? (videoSt?.videoProbe?.fileName ?? null)
+        : st.mode === "batch"
+          ? (selectedBatchItem?.fileName ?? null)
+          : st.sourceFileName;
 
   // Rasterize crisp text stamp whenever text options change
   const textStamp = useMemo(() => {
@@ -356,6 +428,7 @@ export function ImageWatermarkWorkspace() {
         opacityPercent: st.opacityPercent,
         tileAngleDeg: st.tileAngleDeg,
         tileSpacingPercent: st.tileSpacingPercent,
+        singleAngleDeg: st.mode === "pdf" ? (pdfSt?.singleAngleDeg ?? 0) : 0,
       });
     }
     ctx.restore();
@@ -365,11 +438,13 @@ export function ImageWatermarkWorkspace() {
     baseImgVersion,
     stampImgVersion,
     st.marginPercent,
+    st.mode,
     st.opacityPercent,
     st.placement,
     st.scalePercent,
     st.tileAngleDeg,
     st.tileSpacingPercent,
+    pdfSt?.singleAngleDeg,
   ]);
 
   const buildStyleConfig = (): WatermarkStyleConfig | null => {
@@ -504,6 +579,176 @@ export function ImageWatermarkWorkspace() {
     [locale, mediaCtx, t, updateImageWatermarkSession, videoRunning],
   );
 
+  const loadPdfPath = useCallback(
+    async (filePath: string) => {
+      if (!pdfCtx || pdfRunning) return;
+      setErrorText(null);
+      setBusy(true);
+      updateImageWatermarkSession({ mode: "pdf" });
+      pdfCtx.updatePdfWatermarkSession((prev) => ({
+        ...prev,
+        inspectLoading: true,
+        errorMessage: null,
+        lastResult: null,
+      }));
+      try {
+        const info = await inspectPdfDocument(filePath);
+        const suggested =
+          (await suggestSafeSiblingPath(info.path, "_watermarked", ".pdf").catch(() => null)) ??
+          `${info.path.replace(/\.pdf$/i, "")}_watermarked.pdf`;
+        pdfCtx.updatePdfWatermarkSession((prev) => ({
+          ...prev,
+          sourcePath: info.path,
+          inspection: info,
+          inspectLoading: false,
+          currentPage: 1,
+          outputPath: suggested,
+          lastResult: null,
+          errorMessage: null,
+        }));
+      } catch (err) {
+        const msg = formatLocalizedError(err, t);
+        setErrorText(msg);
+        pdfCtx.updatePdfWatermarkSession((prev) => ({
+          ...prev,
+          inspectLoading: false,
+          errorMessage: msg,
+        }));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [pdfCtx, pdfRunning, t, updateImageWatermarkSession],
+  );
+
+  // Consume PDF handoff from C08
+  useEffect(() => {
+    if (pdfCtx?.pendingToolIntake?.toolId === "I13") {
+      const target = pdfCtx.pendingToolIntake.path;
+      pdfCtx.clearPendingToolIntake();
+      void loadPdfPath(target);
+    }
+  }, [pdfCtx, loadPdfPath]);
+
+  // Subscribe to PDF progress for I13 PDF mode
+  useEffect(() => {
+    if (!pdfCtx) return;
+    return bindDisposableListener(
+      () =>
+        subscribePdfTaskProgress((ev) => {
+          if (ev.toolId !== "I13") return;
+          pdfCtx.updatePdfWatermarkSession((prev) =>
+            prev.activeTaskId === ev.taskId ? { ...prev, progress: ev } : prev,
+          );
+        }),
+      "i13-pdf-progress",
+    );
+  }, [pdfCtx]);
+
+  // Render active PDF page into preview canvas
+  useEffect(() => {
+    if (st.mode !== "pdf" || !pdfSt?.inspection) {
+      setPdfPreviewPageUrl(null);
+      setPdfPreviewDims(null);
+      return;
+    }
+    let cancelled = false;
+    void renderPdfPage({
+      path: pdfSt.inspection.path,
+      pageNumber: pdfSt.currentPage,
+      targetWidthPx: 920,
+    })
+      .then((res) => {
+        if (!cancelled) {
+          setPdfPreviewPageUrl(res.dataUrl);
+          setPdfPreviewDims({ w: res.meta.widthPx, h: res.meta.heightPx });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [st.mode, pdfSt?.inspection, pdfSt?.currentPage]);
+
+  const handlePickPdf = async () => {
+    const picked = await pickSingleFile({
+      title: c.openPdf,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (picked) await loadPdfPath(picked);
+  };
+
+  const handlePickPdfOutput = async () => {
+    if (!pdfCtx || !pdfSt?.sourcePath) return;
+    const chosen = await pickSaveFilePath({
+      title: c.pdfOutLabel,
+      defaultPath: pdfSt.outputPath || `${pdfSt.sourcePath.replace(/\.pdf$/i, "")}_watermarked.pdf`,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (chosen) {
+      pdfCtx.updatePdfWatermarkSession((prev) => ({
+        ...prev,
+        outputPath: chosen,
+        lastResult: null,
+      }));
+    }
+  };
+
+  const handleRunPdfWatermark = async (overwrite: boolean) => {
+    if (!pdfCtx || !pdfSt?.sourcePath || !pdfSt.outputPath.trim()) return;
+    const style = buildStyleConfig();
+    if (!style) return;
+    setErrorText(null);
+    const taskId = `i13-pdf-${Date.now()}`;
+    pdfCtx.updatePdfWatermarkSession((prev) => ({
+      ...prev,
+      taskStatus: "running",
+      activeTaskId: taskId,
+      progress: null,
+      errorMessage: null,
+      lastResult: null,
+    }));
+    try {
+      const res = await watermarkPdf({
+        taskId,
+        path: pdfSt.sourcePath,
+        outputPath: pdfSt.outputPath.trim(),
+        overwrite,
+        scope: pdfSt.scope,
+        currentPage: pdfSt.currentPage,
+        pageRange: pdfSt.scope === "range" ? pdfSt.pageRange : undefined,
+        style,
+        singleAngleDeg: pdfSt.singleAngleDeg,
+      });
+      pdfCtx.updatePdfWatermarkSession((prev) => ({
+        ...prev,
+        taskStatus: "idle",
+        activeTaskId: null,
+        lastResult: res,
+        errorMessage: null,
+      }));
+    } catch (err) {
+      const parsed = parseBackendError(err);
+      if (parsed?.code === "TARGET_ALREADY_EXISTS" && !overwrite) {
+        setPdfOverwritePending(pdfSt.outputPath.trim());
+        pdfCtx.updatePdfWatermarkSession((prev) => ({
+          ...prev,
+          taskStatus: "idle",
+          activeTaskId: null,
+        }));
+        return;
+      }
+      const msg = formatLocalizedError(err, t);
+      setErrorText(msg);
+      pdfCtx.updatePdfWatermarkSession((prev) => ({
+        ...prev,
+        taskStatus: "idle",
+        activeTaskId: null,
+        errorMessage: msg,
+      }));
+    }
+  };
+
   useEffect(() => {
     if (!mediaCtx) return;
     const handed = mediaCtx.consumePendingHandoff("I13");
@@ -521,7 +766,9 @@ export function ImageWatermarkWorkspace() {
             setDropHover(false);
             if (paths.length === 0) return;
             const firstExt = getFileStemAndExt(paths[0]!).ext.toLowerCase();
-            if (VIDEO_EXTENSIONS.includes(firstExt) || st.mode === "video") {
+            if (firstExt === "pdf" || st.mode === "pdf") {
+              void loadPdfPath(paths[0]!);
+            } else if (VIDEO_EXTENSIONS.includes(firstExt) || st.mode === "video") {
               void loadVideoPath(paths[0]!);
             } else if (st.mode === "single" && paths.length === 1) {
               void loadSinglePath(paths[0]!);
@@ -532,7 +779,7 @@ export function ImageWatermarkWorkspace() {
         }),
       "i13-watermark-file-drop",
     );
-  }, [addBatchPaths, loadSinglePath, loadVideoPath, st.mode]);
+  }, [addBatchPaths, loadPdfPath, loadSinglePath, loadVideoPath, st.mode]);
 
   const handlePickVideo = async () => {
     const picked = await pickSingleFile({
@@ -747,9 +994,67 @@ export function ImageWatermarkWorkspace() {
               <Film size={13} strokeWidth={1.75} aria-hidden="true" />
               <span>{c.videoMode}</span>
             </button>
+            <button
+              type="button"
+              className={`segmented-btn ${st.mode === "pdf" ? "is-selected" : ""}`}
+              onClick={() => updateImageWatermarkSession({ mode: "pdf" })}
+            >
+              <FileText size={13} strokeWidth={1.75} aria-hidden="true" />
+              <span>{c.pdfMode}</span>
+            </button>
           </div>
 
-          {st.mode === "video" ? (
+          {st.mode === "pdf" ? (
+            <>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || pdfRunning}
+                onClick={() => void handlePickPdf()}
+              >
+                <FileText size={14} strokeWidth={1.75} aria-hidden="true" />
+                <span>{c.openPdf}</span>
+              </button>
+              {pdfCtx && pdfSt?.inspection && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-icon"
+                    disabled={pdfSt.currentPage <= 1}
+                    aria-label="Prev PDF page"
+                    onClick={() =>
+                      pdfCtx.updatePdfWatermarkSession((prev) => ({
+                        ...prev,
+                        currentPage: Math.max(1, prev.currentPage - 1),
+                      }))
+                    }
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <span className="mono" style={{ fontSize: 12.5 }}>
+                    {pdfSt.currentPage} / {pdfSt.inspection.pageCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-icon"
+                    disabled={pdfSt.currentPage >= pdfSt.inspection.pageCount}
+                    aria-label="Next PDF page"
+                    onClick={() =>
+                      pdfCtx.updatePdfWatermarkSession((prev) => ({
+                        ...prev,
+                        currentPage: Math.min(
+                          prev.inspection?.pageCount ?? 1,
+                          prev.currentPage + 1,
+                        ),
+                      }))
+                    }
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </>
+              )}
+            </>
+          ) : st.mode === "video" ? (
             <button
               type="button"
               className="btn"
@@ -868,10 +1173,24 @@ export function ImageWatermarkWorkspace() {
           <span>{st.kind === "text" ? c.textMissing : c.logoMissing}</span>
         </div>
       )}
-      {(errorText || st.batchErrorMessage || (st.mode === "video" && videoSt?.errorMessage)) && (
+      {st.mode === "pdf" && pdfSt?.inspection?.hasSignatures && (
+        <div className="status-banner is-err" role="alert">
+          <AlertTriangle size={15} aria-hidden="true" />
+          <span>{c.pdfSigWarn(pdfSt.inspection.signatureCount || 1)}</span>
+        </div>
+      )}
+      {(errorText ||
+        st.batchErrorMessage ||
+        (st.mode === "video" && videoSt?.errorMessage) ||
+        (st.mode === "pdf" && pdfSt?.errorMessage)) && (
         <div className="status-banner is-err" role="alert">
           <span>
-            {errorText ?? (st.mode === "video" ? videoSt?.errorMessage : st.batchErrorMessage)}
+            {errorText ??
+              (st.mode === "pdf"
+                ? pdfSt?.errorMessage
+                : st.mode === "video"
+                  ? videoSt?.errorMessage
+                  : st.batchErrorMessage)}
           </span>
         </div>
       )}
@@ -936,13 +1255,24 @@ export function ImageWatermarkWorkspace() {
             ) : (
               <div className="empty-state" style={{ maxWidth: 420 }}>
                 <p style={{ margin: "0 0 12px", fontSize: 12.5 }}>
-                  {st.mode === "video"
-                    ? c.emptyVideo
-                    : st.mode === "batch"
-                      ? c.emptyBatch
-                      : c.emptySingle}
+                  {st.mode === "pdf"
+                    ? c.emptyPdf
+                    : st.mode === "video"
+                      ? c.emptyVideo
+                      : st.mode === "batch"
+                        ? c.emptyBatch
+                        : c.emptySingle}
                 </p>
-                {st.mode === "video" ? (
+                {st.mode === "pdf" ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void handlePickPdf()}
+                  >
+                    <FileText size={14} strokeWidth={1.75} aria-hidden="true" />
+                    <span>{c.openPdf}</span>
+                  </button>
+                ) : st.mode === "video" ? (
                   <button
                     type="button"
                     className="btn btn-primary"
@@ -1302,6 +1632,132 @@ export function ImageWatermarkWorkspace() {
             </div>
           )}
 
+          {st.mode === "pdf" && pdfSt && pdfCtx && (
+            <div
+              className="field-stack"
+              style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: 10, gap: 8 }}
+            >
+              {st.placement !== "diagonal_tile" && (
+                <div className="field-stack">
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                    <span className="field-label">{c.pdfSingleAngle}</span>
+                    <span className="mono">{pdfSt.singleAngleDeg}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={-180}
+                    max={180}
+                    step={5}
+                    value={pdfSt.singleAngleDeg}
+                    onChange={(e) =>
+                      pdfCtx.updatePdfWatermarkSession((prev) => ({
+                        ...prev,
+                        singleAngleDeg: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </div>
+              )}
+
+              <span className="field-label">{c.pdfScopeLabel}</span>
+              <div className="segmented" style={{ flexWrap: "wrap" }}>
+                {(
+                  [
+                    ["all", c.pdfScopeAll],
+                    ["current", c.pdfScopeCurrent],
+                    ["odd", c.pdfScopeOdd],
+                    ["even", c.pdfScopeEven],
+                    ["range", c.pdfScopeRange],
+                  ] as Array<[PdfWatermarkScope, string]>
+                ).map(([sc, lbl]) => (
+                  <button
+                    key={sc}
+                    type="button"
+                    className={`segmented-btn ${pdfSt.scope === sc ? "is-selected" : ""}`}
+                    onClick={() =>
+                      pdfCtx.updatePdfWatermarkSession((prev) => ({ ...prev, scope: sc }))
+                    }
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+              {pdfSt.scope === "range" && (
+                <input
+                  type="text"
+                  className="text-input mono"
+                  placeholder={c.pdfRangePlaceholder}
+                  value={pdfSt.pageRange}
+                  onChange={(e) =>
+                    pdfCtx.updatePdfWatermarkSession((prev) => ({
+                      ...prev,
+                      pageRange: e.target.value,
+                    }))
+                  }
+                />
+              )}
+
+              <p className="field-hint" style={{ margin: 0, fontSize: 11.5 }}>
+                {c.pdfNotice}
+              </p>
+
+              <span className="field-label">{c.pdfOutLabel}</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  id="i13-pdf-output-path"
+                  type="text"
+                  className="text-input mono"
+                  style={{ flex: 1, minWidth: 0 }}
+                  value={pdfSt.outputPath}
+                  disabled={pdfRunning}
+                  onChange={(e) =>
+                    pdfCtx.updatePdfWatermarkSession((prev) => ({
+                      ...prev,
+                      outputPath: e.target.value,
+                    }))
+                  }
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={pdfRunning || !pdfSt.sourcePath}
+                  onClick={() => void handlePickPdfOutput()}
+                >
+                  <Save size={13} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{c.videoOutSaveAs}</span>
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ flex: 1, justifyContent: "center" }}
+                  disabled={
+                    pdfRunning || !watermarkReady || !pdfSt.sourcePath || !pdfSt.outputPath.trim()
+                  }
+                  onClick={() => void handleRunPdfWatermark(false)}
+                >
+                  <Download size={14} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{pdfRunning ? c.runningPdf : c.runPdf}</span>
+                </button>
+                {pdfRunning && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      if (pdfSt.activeTaskId) void cancelBackendTask(pdfSt.activeTaskId);
+                    }}
+                  >
+                    {c.cancelPdf}
+                  </button>
+                )}
+              </div>
+              {pdfRunning && pdfSt.progress && (
+                <progress max={100} value={pdfSt.progress.percent} style={{ width: "100%" }} />
+              )}
+            </div>
+          )}
+
           {st.mode === "batch" && (
             <div
               className="field-stack"
@@ -1360,6 +1816,56 @@ export function ImageWatermarkWorkspace() {
           )}
         </div>
       </div>
+
+      {/* Bottom PDF Watermark Result */}
+      {st.mode === "pdf" && pdfSt?.lastResult && pdfCtx && (
+        <section className="img-batch-queue-card">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <CheckCircle2 size={17} aria-hidden="true" />
+              <strong style={{ fontSize: 13 }}>
+                {c.pdfDoneSummary(
+                  pdfSt.lastResult.watermarkedPageCount,
+                  pdfSt.lastResult.totalPages,
+                  pdfSt.lastResult.byteLength,
+                )}
+              </strong>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => pdfCtx.openInPdfReader(pdfSt.lastResult!.outputPath)}
+              >
+                <Eye size={13} aria-hidden="true" />
+                <span>{c.openInReader}</span>
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void openLocalDirectory(getParentDir(pdfSt.lastResult!.outputPath))}
+              >
+                <FolderOpen size={13} aria-hidden="true" />
+                <span>{c.openOutDir}</span>
+              </button>
+            </div>
+          </div>
+          <div
+            className="field-hint"
+            style={{ fontSize: 12, marginTop: 4, wordBreak: "break-all" }}
+          >
+            {pdfSt.lastResult.outputPath}
+          </div>
+        </section>
+      )}
 
       {/* Bottom Video Watermark Result */}
       {st.mode === "video" && videoSt?.lastResult && mediaCtx && (
@@ -1527,6 +2033,19 @@ export function ImageWatermarkWorkspace() {
           )}
         </section>
       )}
+
+      <ConfirmDialog
+        open={pdfOverwritePending !== null}
+        title={c.overwriteTitle}
+        body={c.overwriteBody(pdfOverwritePending ?? "")}
+        confirmLabel={c.overwriteConfirm}
+        cancelLabel={c.cancel}
+        onCancel={() => setPdfOverwritePending(null)}
+        onConfirm={async () => {
+          setPdfOverwritePending(null);
+          await handleRunPdfWatermark(true);
+        }}
+      />
 
       <ConfirmDialog
         open={pendingOverwrite !== null}

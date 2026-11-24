@@ -73,7 +73,7 @@ pub struct WatermarkImagesBatchRequest {
     pub style: WatermarkStyleConfig,
 }
 
-fn load_stamp_rgba(style: &WatermarkStyleConfig) -> Result<RgbaImage, AppError> {
+pub(crate) fn load_stamp_rgba(style: &WatermarkStyleConfig) -> Result<RgbaImage, AppError> {
     if let Some(raw_url) = style
         .stamp_png_data_url
         .as_deref()

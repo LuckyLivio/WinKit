@@ -61,6 +61,8 @@ import { PdfDeleteWorkspace } from "../tools/pdf-delete/PdfDeleteWorkspace";
 import { PdfExtractWorkspace } from "../tools/pdf-extract/PdfExtractWorkspace";
 import { ImagesToPdfWorkspace } from "../tools/pdf-images-to-pdf/ImagesToPdfWorkspace";
 import { PdfToImagesWorkspace } from "../tools/pdf-to-images/PdfToImagesWorkspace";
+import { PdfSignWorkspace } from "../tools/pdf-sign/PdfSignWorkspace";
+import { PdfCropWorkspace } from "../tools/pdf-crop/PdfCropWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -124,7 +126,9 @@ export type ToolIconName =
   | "pdf-delete"
   | "pdf-extract"
   | "pdf-images-to-pdf"
-  | "pdf-to-images";
+  | "pdf-to-images"
+  | "pdf-sign"
+  | "pdf-crop";
 
 export interface RegisteredTool {
   id: string;
@@ -1003,16 +1007,17 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
   {
     id: "I13",
     category: "image",
-    name: { "zh-CN": "图片与视频水印", "en-US": "Image & Video Watermark" },
+    name: { "zh-CN": "图片 / PDF / 视频水印", "en-US": "Watermark (Images, PDF & Video)" },
     summary: {
       "zh-CN":
-        "为单张/批量图片及横竖屏或 90° 旋转视频添加中英文文字水印与透明 PNG Logo，支持九宫格定位、边距、大小、不透明度与斜向平铺，输出新副本并保留原音频",
+        "为单张/批量图片、本地 PDF 文档及横竖屏或 90° 旋转视频添加中英文文字水印与透明 PNG Logo，支持九宫格定位、旋转、不透明度与斜向平铺，输出新副本并保留原文字/矢量/音频",
       "en-US":
-        "Add Chinese/English text or transparent PNG logo watermarks to images (single/batch) and videos (landscape/portrait/90°-rotated) with 9-point placement, scale, opacity, and diagonal tiling",
+        "Add Chinese/English text or transparent PNG logo watermarks to images (single/batch), PDFs (preserving selectable text & vectors), and videos with 9-point placement, rotation, opacity, and diagonal tiling",
     },
     keywords: [
       "watermark",
       "video watermark",
+      "pdf watermark",
       "logo",
       "text watermark",
       "tile",
@@ -1023,12 +1028,14 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
       "水印",
       "图片水印",
       "视频水印",
+      "pdf水印",
+      "文档水印",
       "平铺",
       "版权",
       "徽标",
     ],
     icon: "image-watermark",
-    implementationStatus: "partial",
+    implementationStatus: "full",
     component: ImageWatermarkWorkspace,
   },
   {
@@ -1742,6 +1749,34 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     component: AudioConvertWorkspace,
   },
   {
+    id: "P06",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 签名",
+      "en-US": "Sign PDF",
+    },
+    summary: {
+      "zh-CN":
+        "手绘、键入样式或上传透明 PNG 可视签名，在 PDF 页面上直接拖动缩放旋转定位，支持会话复用与主动保存本地模板",
+      "en-US":
+        "Draw, type, or upload transparent PNG visual signatures, drag/resize/rotate on PDF pages with session reuse and opt-in local templates",
+    },
+    keywords: [
+      "pdf",
+      "sign",
+      "signature",
+      "handwriting",
+      "stamp",
+      "pdf签名",
+      "电子签名",
+      "手绘签名",
+      "签字",
+    ],
+    icon: "pdf-sign",
+    implementationStatus: "full",
+    component: PdfSignWorkspace,
+  },
+  {
     id: "P07",
     category: "pdf",
     name: {
@@ -1883,6 +1918,35 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "pdf-images-to-pdf",
     implementationStatus: "full",
     component: ImagesToPdfWorkspace,
+  },
+  {
+    id: "P13",
+    category: "pdf",
+    name: {
+      "zh-CN": "PDF 页面裁剪",
+      "en-US": "Crop PDF",
+    },
+    summary: {
+      "zh-CN":
+        "可视化拖拽或四边数值非破坏性裁剪 PDF 页面，支持 A4/Letter/快递面单预设与自动检测白边预览，保留可选文字与矢量",
+      "en-US":
+        "Non-destructively crop PDF pages visually or by exact margins with A4/Letter/shipping-label presets and auto white-margin preview",
+    },
+    keywords: [
+      "pdf",
+      "crop",
+      "trim",
+      "margins",
+      "shipping label",
+      "white space",
+      "pdf裁剪",
+      "页面裁剪",
+      "快递面单",
+      "去白边",
+    ],
+    icon: "pdf-crop",
+    implementationStatus: "full",
+    component: PdfCropWorkspace,
   },
   {
     id: "P17",

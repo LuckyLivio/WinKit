@@ -36,6 +36,7 @@ import {
   Mic,
   Minimize2,
   Pencil,
+  PenTool,
   Pipette,
   QrCode,
   Regex,
@@ -178,5 +179,9 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <FileImage size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "pdf-to-images":
       return <Images size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-sign":
+      return <PenTool size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "pdf-crop":
+      return <Crop size={size} strokeWidth={1.75} aria-hidden="true" />;
   }
 }

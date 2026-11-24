@@ -116,6 +116,7 @@ export interface PreviewWatermarkParams {
   opacityPercent: number;
   tileAngleDeg: number;
   tileSpacingPercent: number;
+  singleAngleDeg?: number;
 }
 
 /**
@@ -216,6 +217,13 @@ export function drawWatermarkOverlayOnCanvas(
       break;
   }
 
-  ctx.drawImage(stampImg, ox, oy, tw, th);
+  const singleRot = params.singleAngleDeg ?? 0;
+  if (Math.abs(singleRot) > 0.01) {
+    ctx.translate(ox + tw / 2, oy + th / 2);
+    ctx.rotate((singleRot * Math.PI) / 180);
+    ctx.drawImage(stampImg, -tw / 2, -th / 2, tw, th);
+  } else {
+    ctx.drawImage(stampImg, ox, oy, tw, th);
+  }
   ctx.restore();
 }
