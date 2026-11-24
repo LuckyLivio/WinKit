@@ -38,6 +38,15 @@ const GRAPH_OPTIMIZATION_ENABLE_ALL: c_int = 99;
 const ORT_ARENA_ALLOCATOR: c_int = 1;
 const ORT_MEM_TYPE_DEFAULT: c_int = 0;
 const ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT: c_int = 1;
+const ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32: c_int = 6;
+const ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64: c_int = 7;
+
+/// Typed CPU tensor input for multi-input ONNX Runtime inference (`Silero VAD v5`, `SenseVoiceSmall`).
+pub enum OrtInput<'a> {
+    F32(&'a [i64], &'a [f32]),
+    I32(&'a [i64], &'a [i32]),
+    I64(&'a [i64], &'a [i64]),
+}
 
 // Verified append-only OrtApi vtable indices (stable since ONNX Runtime 1.1..1.23+).
 const IDX_GET_ERROR_MESSAGE: usize = 2;
@@ -163,6 +172,51 @@ pub struct ResolvedOcrAssets {
     pub cls_model_path: PathBuf,
     pub rec_model_path: PathBuf,
     pub qpdf_crt_dir: Option<PathBuf>,
+}
+
+/// Resolves the bundled `onnxruntime.dll` (and optional app-local MSVC CRT directory) for reuse
+/// across both OCR (`T03`/`T04`/`P04`) and offline ASR (`T01`).
+pub fn resolve_ort_dll_path(
+    resource_dir: Option<&Path>,
+) -> Result<(PathBuf, Option<PathBuf>), AppError> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = resource_dir {
+        candidates.push(dir.join("ocr"));
+        candidates.push(dir.join("resources").join("ocr"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("ocr"));
+            candidates.push(parent.join("resources").join("ocr"));
+            if let Some(grand) = parent.parent() {
+                candidates.push(grand.join("resources").join("ocr"));
+                if let Some(great) = grand.parent() {
+                    candidates.push(great.join("resources").join("ocr"));
+                }
+            }
+        }
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("ocr"),
+    );
+
+    for ocr_dir in candidates {
+        let dll = ocr_dir.join(ORT_DLL_NAME);
+        if dll.is_file() {
+            let qpdf_crt_dir = ocr_dir
+                .parent()
+                .map(|p| p.join("qpdf"))
+                .filter(|p| p.join("msvcp140.dll").is_file());
+            return Ok((dll, qpdf_crt_dir));
+        }
+    }
+
+    Err(AppError::new(
+        "ORT_RUNTIME_MISSING",
+        "Bundled ONNX Runtime (onnxruntime.dll) was not found. Run `npm run ensure-ocr-runtime` or reinstall WinKit.",
+    ))
 }
 
 pub fn resolve_ocr_assets(resource_dir: Option<&Path>) -> Result<ResolvedOcrAssets, AppError> {
@@ -604,6 +658,8 @@ impl OrtRuntime {
     }
 }
 
+pub type OrtTensorF32 = (Vec<i64>, Vec<f32>);
+
 pub struct OrtSession<'a> {
     runtime: &'a OrtRuntime,
     session: *mut c_void,
@@ -814,5 +870,197 @@ impl OrtSession<'_> {
         };
 
         Ok((dims, data))
+    }
+
+    /// Executes a multi-input (`f32`/`i32`/`i64`), multi-output (`f32`) ONNX Runtime pass.
+    pub fn run_multi_f32_outputs(
+        &self,
+        inputs: &[(&str, OrtInput<'_>)],
+        output_names: &[&str],
+    ) -> Result<Vec<OrtTensorF32>, AppError> {
+        struct ValueListGuard {
+            ptrs: Vec<*mut c_void>,
+            release: ReleasePtrFn,
+        }
+        impl Drop for ValueListGuard {
+            fn drop(&mut self) {
+                for ptr in self.ptrs.drain(..) {
+                    if !ptr.is_null() {
+                        unsafe { (self.release)(ptr) };
+                    }
+                }
+            }
+        }
+        struct ShapeGuard {
+            ptr: *mut c_void,
+            release: ReleasePtrFn,
+        }
+        impl Drop for ShapeGuard {
+            fn drop(&mut self) {
+                if !self.ptr.is_null() {
+                    unsafe { (self.release)(self.ptr) };
+                }
+            }
+        }
+
+        let api = &self.runtime.api;
+        let mut in_cnames: Vec<CString> = Vec::with_capacity(inputs.len());
+        let mut in_guard = ValueListGuard {
+            ptrs: Vec::with_capacity(inputs.len()),
+            release: api.release_value,
+        };
+
+        for (name, tensor) in inputs {
+            let cname = CString::new(*name)
+                .map_err(|_| AppError::invalid_param("ONNX input name contains null byte."))?;
+            in_cnames.push(cname);
+
+            let (shape, data_ptr, byte_len, elem_type, elem_count) = match tensor {
+                OrtInput::F32(s, d) => (
+                    *s,
+                    d.as_ptr() as *mut c_void,
+                    std::mem::size_of_val(*d),
+                    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+                    d.len(),
+                ),
+                OrtInput::I32(s, d) => (
+                    *s,
+                    d.as_ptr() as *mut c_void,
+                    std::mem::size_of_val(*d),
+                    ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32,
+                    d.len(),
+                ),
+                OrtInput::I64(s, d) => (
+                    *s,
+                    d.as_ptr() as *mut c_void,
+                    std::mem::size_of_val(*d),
+                    ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
+                    d.len(),
+                ),
+            };
+
+            let expected_elems: usize = shape
+                .iter()
+                .try_fold(1usize, |acc, &d| {
+                    usize::try_from(d).ok().and_then(|u| acc.checked_mul(u))
+                })
+                .ok_or_else(|| AppError::invalid_param("Invalid ONNX input tensor shape."))?;
+            if expected_elems != elem_count {
+                return Err(AppError::invalid_param(format!(
+                    "ONNX input '{name}' length mismatch: shape expects {expected_elems}, got {elem_count}."
+                )));
+            }
+
+            let mut val: *mut c_void = ptr::null_mut();
+            unsafe {
+                let st = (api.create_tensor_with_data)(
+                    self.runtime.cpu_mem_info,
+                    data_ptr,
+                    byte_len,
+                    shape.as_ptr(),
+                    shape.len(),
+                    elem_type,
+                    &mut val,
+                );
+                api.check_status(st, &format!("CreateTensorWithData failed for '{name}'"))?;
+            }
+            in_guard.ptrs.push(val);
+        }
+
+        let mut out_cnames: Vec<CString> = Vec::with_capacity(output_names.len());
+        for name in output_names {
+            let cname = CString::new(*name)
+                .map_err(|_| AppError::invalid_param("ONNX output name contains null byte."))?;
+            out_cnames.push(cname);
+        }
+
+        let in_name_ptrs: Vec<*const c_char> = in_cnames.iter().map(|s| s.as_ptr()).collect();
+        let in_val_ptrs: Vec<*const c_void> =
+            in_guard.ptrs.iter().map(|&p| p as *const c_void).collect();
+        let out_name_ptrs: Vec<*const c_char> = out_cnames.iter().map(|s| s.as_ptr()).collect();
+        let mut out_guard = ValueListGuard {
+            ptrs: vec![ptr::null_mut(); output_names.len()],
+            release: api.release_value,
+        };
+
+        unsafe {
+            let st = (api.run)(
+                self.session,
+                ptr::null(),
+                in_name_ptrs.as_ptr(),
+                in_val_ptrs.as_ptr(),
+                in_name_ptrs.len(),
+                out_name_ptrs.as_ptr(),
+                out_name_ptrs.len(),
+                out_guard.ptrs.as_mut_ptr(),
+            );
+            api.check_status(st, "OrtRun (multi-io) failed")?;
+        }
+
+        let mut results: Vec<(Vec<i64>, Vec<f32>)> = Vec::with_capacity(output_names.len());
+        for (idx, &out_val) in out_guard.ptrs.iter().enumerate() {
+            if out_val.is_null() {
+                return Err(AppError::new(
+                    "ASR_INFERENCE_FAILED",
+                    format!(
+                        "ONNX Runtime returned null output tensor for '{}'.",
+                        output_names[idx]
+                    ),
+                ));
+            }
+            let mut shape_info: *mut c_void = ptr::null_mut();
+            unsafe {
+                let st = (api.get_tensor_type_and_shape)(out_val, &mut shape_info);
+                api.check_status(st, "GetTensorTypeAndShape failed")?;
+            }
+            let _shape_guard = ShapeGuard {
+                ptr: shape_info,
+                release: api.release_tensor_shape_info,
+            };
+
+            let mut ndim: usize = 0;
+            unsafe {
+                let st = (api.get_dimensions_count)(shape_info, &mut ndim);
+                api.check_status(st, "GetDimensionsCount failed")?;
+            }
+            let mut dims = vec![0i64; ndim];
+            if ndim > 0 {
+                unsafe {
+                    let st = (api.get_dimensions)(shape_info, dims.as_mut_ptr(), ndim);
+                    api.check_status(st, "GetDimensions failed")?;
+                }
+            }
+            let out_elems: usize = dims
+                .iter()
+                .try_fold(1usize, |acc, &d| {
+                    usize::try_from(d).ok().and_then(|u| acc.checked_mul(u))
+                })
+                .ok_or_else(|| {
+                    AppError::new(
+                        "ASR_INFERENCE_FAILED",
+                        "Invalid ONNX output tensor dimensions.",
+                    )
+                })?;
+
+            let mut data_ptr: *mut c_void = ptr::null_mut();
+            unsafe {
+                let st = (api.get_tensor_mutable_data)(out_val, &mut data_ptr);
+                api.check_status(st, "GetTensorMutableData failed")?;
+            }
+            if data_ptr.is_null() && out_elems > 0 {
+                return Err(AppError::new(
+                    "ASR_INFERENCE_FAILED",
+                    "ONNX Runtime returned null output tensor data pointer.",
+                ));
+            }
+            let data = if out_elems == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(data_ptr as *const f32, out_elems).to_vec() }
+            };
+            results.push((dims, data));
+        }
+
+        Ok(results)
     }
 }

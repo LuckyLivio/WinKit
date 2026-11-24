@@ -20,14 +20,20 @@ import {
   cropRotateVideo,
   extractAudioBatch,
   extractVideoFrames,
+  inspectTranscribeMedia,
   mergeVideos,
   muteVideosBatch,
+  registerMediaPreviewPath,
   replaceVideoAudio,
   resizeVideosBatch,
+  subscribeAsrProgress,
   subscribeMediaTaskProgress,
+  transcribeMedia,
   trimAudioFile,
   trimVideoFile,
   watermarkVideo,
+  type AsrLanguage,
+  type AsrProgressPayload,
   type AudioBitDepthOption,
   type AudioConvertFormat,
   type AudioDenoiseLevel,
@@ -83,6 +89,11 @@ import {
   type ResizeVideosBatchRequest,
   type ResizeVideosBatchResponse,
   type ShortAudioBehavior,
+  type TranscribeMediaInspectResult,
+  type TranscribeMediaRequest,
+  type TranscribeMediaResult,
+  type TranscriptExportFormat,
+  type TranscriptSegment,
   type TrimAudioRequest,
   type TrimAudioResult,
   type TrimKeyframeAnalysis,
@@ -428,6 +439,27 @@ export interface VideoWatermarkSessionState {
   errorMessage: string | null;
 }
 
+export interface TranscribeMediaSessionState {
+  sourcePath: string | null;
+  sourceGeneration: number;
+  inspectLoading: boolean;
+  inspect: TranscribeMediaInspectResult | null;
+  previewUrl: string | null;
+  language: AsrLanguage;
+  useItn: boolean;
+  includeTxtTimestamps: boolean;
+  taskStatus: "idle" | "running";
+  activeTaskId: string | null;
+  liveProgress: AsrProgressPayload | null;
+  lastResult: TranscribeMediaResult | null;
+  segments: TranscriptSegment[];
+  hasManualEdits: boolean;
+  lastExportedPath: string | null;
+  lastExportedFormat: TranscriptExportFormat | null;
+  lastExportedSourcePath: string | null;
+  errorMessage: string | null;
+}
+
 export interface MediaSessionRoot {
   mediaInfo: MediaInfoSessionState;
   videoTrim: VideoTrimSessionState;
@@ -447,6 +479,7 @@ export interface MediaSessionRoot {
   videoReplaceAudio: VideoReplaceAudioSessionState;
   videoSubtitles: VideoSubtitlesSessionState;
   videoWatermark: VideoWatermarkSessionState;
+  transcribeMedia: TranscribeMediaSessionState;
 }
 
 const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
@@ -737,6 +770,26 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastResult: null,
     errorMessage: null,
   },
+  transcribeMedia: {
+    sourcePath: null,
+    sourceGeneration: 0,
+    inspectLoading: false,
+    inspect: null,
+    previewUrl: null,
+    language: "auto",
+    useItn: true,
+    includeTxtTimestamps: false,
+    taskStatus: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    lastResult: null,
+    segments: [],
+    hasManualEdits: false,
+    lastExportedPath: null,
+    lastExportedFormat: null,
+    lastExportedSourcePath: null,
+    errorMessage: null,
+  },
 };
 
 export interface MediaSessionContextValue {
@@ -868,6 +921,20 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<WatermarkVideoResult | null>;
   cancelVideoWatermarkTask: () => Promise<void>;
+  updateTranscribeMediaSession: (
+    updater: (prev: TranscribeMediaSessionState) => TranscribeMediaSessionState,
+  ) => void;
+  loadTranscribeMediaFile: (
+    filePath: string,
+    formatError: (err: unknown) => string,
+    noAudioMessage: string,
+  ) => Promise<void>;
+  clearTranscribeMedia: () => void;
+  startTranscribeMediaTask: (
+    req: TranscribeMediaRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<TranscribeMediaResult | null>;
+  cancelTranscribeMediaTask: () => Promise<void>;
   handoffMediaFileToTool: (toolId: string, filePath: string) => void;
   pendingHandoff: { toolId: string; path: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
@@ -907,8 +974,26 @@ export function MediaSessionProvider({
   const activeVideoReplaceAudioTaskRef = useRef<string | null>(null);
   const activeVideoSubtitlesTaskRef = useRef<string | null>(null);
   const activeVideoWatermarkTaskRef = useRef<string | null>(null);
+  const activeTranscribeTaskRef = useRef<string | null>(null);
+  const transcribeLoadSeqRef = useRef(0);
+  const transcribeGenRef = useRef(0);
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
+
+  useEffect(() => {
+    return bindDisposableListener(
+      () =>
+        subscribeAsrProgress((payload) => {
+          if (payload.taskId === activeTranscribeTaskRef.current) {
+            setMediaSession((prev) => ({
+              ...prev,
+              transcribeMedia: { ...prev.transcribeMedia, liveProgress: payload },
+            }));
+          }
+        }),
+      "winkit://asr-progress",
+    );
+  }, []);
 
   useEffect(() => {
     return bindDisposableListener(
@@ -2308,6 +2393,193 @@ export function MediaSessionProvider({
     if (tid) await cancelBackendTask(tid);
   }, []);
 
+  const updateTranscribeMediaSession = useCallback(
+    (updater: (prev: TranscribeMediaSessionState) => TranscribeMediaSessionState) => {
+      setMediaSession((prev) => ({ ...prev, transcribeMedia: updater(prev.transcribeMedia) }));
+    },
+    [],
+  );
+
+  const loadTranscribeMediaFile = useCallback(
+    async (
+      filePath: string,
+      formatError: (err: unknown) => string,
+      noAudioMessage: string,
+    ): Promise<void> => {
+      if (activeTranscribeTaskRef.current) return;
+      const loadId = ++transcribeLoadSeqRef.current;
+      const gen = ++transcribeGenRef.current;
+      setMediaSession((prev) => ({
+        ...prev,
+        transcribeMedia: {
+          ...prev.transcribeMedia,
+          sourcePath: filePath,
+          sourceGeneration: gen,
+          inspectLoading: true,
+          inspect: null,
+          previewUrl: null,
+          lastResult: null,
+          segments: [],
+          hasManualEdits: false,
+          lastExportedPath: null,
+          lastExportedFormat: null,
+          lastExportedSourcePath: null,
+          errorMessage: null,
+        },
+      }));
+
+      try {
+        const inspected = await inspectTranscribeMedia(filePath);
+        if (transcribeLoadSeqRef.current !== loadId) return;
+        const preview = await registerMediaPreviewPath(inspected.path).catch(() => null);
+        if (transcribeLoadSeqRef.current !== loadId) return;
+        setMediaSession((prev) => {
+          if (prev.transcribeMedia.sourceGeneration !== gen) return prev;
+          return {
+            ...prev,
+            transcribeMedia: {
+              ...prev.transcribeMedia,
+              sourcePath: inspected.path,
+              inspectLoading: false,
+              inspect: inspected,
+              previewUrl: preview?.url ?? null,
+              errorMessage: inspected.hasAudio ? null : noAudioMessage,
+            },
+          };
+        });
+      } catch (err) {
+        if (transcribeLoadSeqRef.current !== loadId) return;
+        setMediaSession((prev) => {
+          if (prev.transcribeMedia.sourceGeneration !== gen) return prev;
+          return {
+            ...prev,
+            transcribeMedia: {
+              ...prev.transcribeMedia,
+              inspectLoading: false,
+              inspect: null,
+              previewUrl: null,
+              errorMessage: formatError(err),
+            },
+          };
+        });
+      }
+    },
+    [],
+  );
+
+  const clearTranscribeMedia = useCallback(() => {
+    if (activeTranscribeTaskRef.current) return;
+    transcribeLoadSeqRef.current += 1;
+    const gen = ++transcribeGenRef.current;
+    setMediaSession((prev) => ({
+      ...prev,
+      transcribeMedia: {
+        ...prev.transcribeMedia,
+        sourcePath: null,
+        sourceGeneration: gen,
+        inspectLoading: false,
+        inspect: null,
+        previewUrl: null,
+        lastResult: null,
+        segments: [],
+        hasManualEdits: false,
+        lastExportedPath: null,
+        lastExportedFormat: null,
+        lastExportedSourcePath: null,
+        errorMessage: null,
+      },
+    }));
+  }, []);
+
+  const startTranscribeMediaTask = useCallback(
+    async (
+      req: TranscribeMediaRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<TranscribeMediaResult | null> => {
+      if (activeTranscribeTaskRef.current) return null;
+      const taskId = `t01-asr-${Date.now()}-${taskSeqRef.current++}`;
+      const genAtStart = transcribeGenRef.current;
+      activeTranscribeTaskRef.current = taskId;
+      setMediaSession((prev) => ({
+        ...prev,
+        transcribeMedia: {
+          ...prev.transcribeMedia,
+          taskStatus: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            phase: "decoding",
+            currentSegment: 0,
+            totalSegments: 0,
+            percent: 0,
+            detail: "",
+          },
+          errorMessage: null,
+        },
+      }));
+      try {
+        const result = await transcribeMedia(taskId, req);
+        if (activeTranscribeTaskRef.current !== taskId) return null;
+        activeTranscribeTaskRef.current = null;
+        setMediaSession((prev) => {
+          if (
+            prev.transcribeMedia.sourceGeneration !== genAtStart ||
+            prev.transcribeMedia.sourcePath !== req.inputPath
+          ) {
+            return {
+              ...prev,
+              transcribeMedia: {
+                ...prev.transcribeMedia,
+                taskStatus: "idle",
+                activeTaskId: null,
+                liveProgress: null,
+              },
+            };
+          }
+          return {
+            ...prev,
+            transcribeMedia: {
+              ...prev.transcribeMedia,
+              taskStatus: "idle",
+              activeTaskId: null,
+              liveProgress: null,
+              lastResult: result,
+              segments: result.segments.map((s) => ({ ...s })),
+              hasManualEdits: false,
+              lastExportedPath: null,
+              lastExportedFormat: null,
+              lastExportedSourcePath: null,
+              errorMessage: null,
+            },
+          };
+        });
+        return result;
+      } catch (err) {
+        if (activeTranscribeTaskRef.current === taskId) {
+          activeTranscribeTaskRef.current = null;
+        }
+        // Preserve existing lastResult, manual segment edits, and lastExportedPath on failure or cancel.
+        setMediaSession((prev) => ({
+          ...prev,
+          transcribeMedia: {
+            ...prev.transcribeMedia,
+            taskStatus: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            errorMessage: formatError(err),
+          },
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelTranscribeMediaTask = useCallback(async () => {
+    const tid = activeTranscribeTaskRef.current;
+    if (tid) await cancelBackendTask(tid);
+  }, []);
+
   const handoffMediaFileToTool = useCallback(
     (toolId: string, filePath: string) => {
       const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
@@ -2384,6 +2656,11 @@ export function MediaSessionProvider({
         updateVideoWatermarkSession,
         startVideoWatermarkTask,
         cancelVideoWatermarkTask,
+        updateTranscribeMediaSession,
+        loadTranscribeMediaFile,
+        clearTranscribeMedia,
+        startTranscribeMediaTask,
+        cancelTranscribeMediaTask,
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,

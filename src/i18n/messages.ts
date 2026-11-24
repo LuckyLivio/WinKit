@@ -146,6 +146,14 @@ export interface Messages {
     OCR_WORKER_TIMEOUT: string;
     OCR_WORKER_CRASHED: string;
     OCR_WORKER_ERROR: string;
+    ASR_MODEL_MISSING: string;
+    ASR_MODEL_INVALID: string;
+    ASR_ENGINE_LOAD_FAILED: string;
+    ASR_INFERENCE_FAILED: string;
+    ASR_WORKER_TIMEOUT: string;
+    ASR_WORKER_CRASHED: string;
+    ASR_WORKER_ERROR: string;
+    ORT_RUNTIME_MISSING: string;
     PDF_WRITE_FAILED: string;
     TASK_CANCELLED: string;
     INVALID_PARAMETER: string;
@@ -1156,6 +1164,15 @@ export const MESSAGES: Record<Locale, Messages> = {
         "隔离 OCR 识别进程超时并已安全终止，请适当降低渲染 DPI 或缩小图片后重试。",
       OCR_WORKER_CRASHED: "隔离 OCR 识别子进程异常中止，原文件未受影响，请重试。",
       OCR_WORKER_ERROR: "OCR 后台识别进程通信失败，请重试。",
+      ASR_MODEL_MISSING:
+        "尚未安装离线语音识别模型（SenseVoiceSmall INT8 + Silero VAD v5），请先在上方点击下载或指定本地模型目录。",
+      ASR_MODEL_INVALID: "离线语音模型文件不完整或元数据无效，请重新下载或核对目录。",
+      ASR_ENGINE_LOAD_FAILED: "加载离线语音识别模型失败，请检查模型文件是否完整以及内存是否充足。",
+      ASR_INFERENCE_FAILED: "本地离线语音转写推理失败，请确认音视频文件未损坏。",
+      ASR_WORKER_TIMEOUT: "隔离语音转写进程长时间无进展并已安全终止，请检查输入文件后重试。",
+      ASR_WORKER_CRASHED: "隔离语音转写子进程异常退出，原音视频文件未受影响，请重试。",
+      ASR_WORKER_ERROR: "离线语音转写进程通信失败，请重试。",
+      ORT_RUNTIME_MISSING: "内置 ONNX Runtime 运行库缺失，请重新安装官方安装包。",
       PDF_WRITE_FAILED: "写入目标 PDF 文件失败，请检查磁盘空间与目录权限。",
       TASK_CANCELLED: "任务已按请求取消。",
       INVALID_PARAMETER: "输入参数或路径格式无效。",
@@ -2309,6 +2326,21 @@ export const MESSAGES: Record<Locale, Messages> = {
       OCR_WORKER_CRASHED:
         "Isolated OCR worker exited unexpectedly. Your source files remain untouched.",
       OCR_WORKER_ERROR: "Isolated OCR worker communication error. Please retry.",
+      ASR_MODEL_MISSING:
+        "The offline speech model (SenseVoiceSmall INT8 + Silero VAD v5) is not installed yet. Click Download above or select a local model folder.",
+      ASR_MODEL_INVALID:
+        "Offline speech model files are incomplete or invalid. Please re-download or verify the folder.",
+      ASR_ENGINE_LOAD_FAILED:
+        "Failed to load the offline speech model. Check model file integrity and available memory.",
+      ASR_INFERENCE_FAILED:
+        "Offline speech recognition inference failed. Verify the audio/video file is intact.",
+      ASR_WORKER_TIMEOUT:
+        "The isolated transcription worker made no progress and was terminated safely. Please retry.",
+      ASR_WORKER_CRASHED:
+        "Isolated transcription worker exited unexpectedly. Your source media remains untouched.",
+      ASR_WORKER_ERROR: "Isolated transcription worker communication error. Please retry.",
+      ORT_RUNTIME_MISSING:
+        "The bundled ONNX Runtime (onnxruntime.dll) is missing. Please reinstall WinKit.",
       PDF_WRITE_FAILED: "Failed to write output PDF file. Check disk space and folder permissions.",
       TASK_CANCELLED: "Operation cancelled.",
       INVALID_PARAMETER: "Invalid input parameter or file path.",

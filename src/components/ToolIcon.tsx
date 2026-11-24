@@ -36,6 +36,7 @@ import {
   Lock,
   LockKeyhole,
   LockOpen,
+  MessageSquareText,
   Mic,
   Minimize2,
   Pencil,
@@ -97,6 +98,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <ScanText size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "capture-text":
       return <ScanLine size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "transcribe-media":
+      return <MessageSquareText size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "text-quote":
       return <TextQuote size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "lock-keyhole":

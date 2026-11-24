@@ -95,6 +95,20 @@ WinKit does **not** statically link FFmpeg or bundle FFmpeg or `yt-dlp` binaries
 - **yt-dlp Distribution (`V01` Video Downloader)**: `yt-dlp/yt-dlp` Official Windows x64 Release `2026.10.26` (`yt-dlp.exe`, `23,575,744` bytes, SHA-256 `f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d`, `https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.26`).
   - **License & Preservation**: `yt-dlp` upstream code is dedicated to the public domain under **The Unlicense**; the official standalone Windows x64 executable is packaged with PyInstaller and bundles the CPython runtime and open-source Python packages (`certifi`, `mutagen`, `pycryptodomex`, `requests`, `urllib3`, `websockets`, `brotli`) under their respective open-source licenses. Upon user-initiated install/update into `%LOCALAPPDATA%\com.luckylivio.winkit\media-tools\yt-dlp\active\`, WinKit verifies the SHA-256 digest and `--version` self-check before atomic activation (preserving any previously working binary if verification fails), writes `LICENSE-yt-dlp.txt` alongside `yt-dlp.exe`, and invokes `yt-dlp.exe` strictly as an external child process. Direct HTTP(S) media links work independently without `yt-dlp`.
 
+## Optional User-Downloaded Offline Speech Models (`T01` Transcribe Audio / Video)
+
+WinKit does **not** bundle speech recognition model weights inside the installer. `T01` reuses WinKit's already-bundled Microsoft-signed `onnxruntime.dll 1.23.2` (**MIT License**) inside an isolated `--asr-worker` child process and downloads the pinned offline models only when the user explicitly clicks "Download Offline Speech Model" (or points to an already-verified local folder), verifying exact byte lengths and SHA-256 digests before atomic activation:
+
+- **SenseVoiceSmall INT8 ONNX (`2024-07-17`)**:
+  - **Upstream Model**: `iic/SenseVoiceSmall` (FunAudioLLM / Alibaba Group).
+  - **Pinned Distribution Archive**: `k2-fsa/sherpa-onnx` `asr-models` release `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2` (`163,002,883` bytes, SHA-256 `7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e`, `https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models`).
+  - **Verified Extracted Files**: `model.int8.onnx` (`239,233,841` bytes, SHA-256 `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51`) and `tokens.txt` (`315,894` bytes, SHA-256 `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc`).
+  - **License & Preservation**: Model weights are licensed under the **FunASR Model Open Source License Agreement v1.1** (`Copyright (C) [2023-2028] [Alibaba Group]. All rights reserved.`, full bilingual English/Chinese text at `https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE`; the pinned archive's 71-byte `LICENSE` file contains `Ref to https://github.com/modelscope/FunASR?tab=readme-ov-file#license`); ONNX conversion and packaging by `k2-fsa/sherpa-onnx` (Xiaomi Corp.) under **Apache-2.0**. WinKit writes the complete verbatim bilingual FunASR Model License v1.1 together with provenance and packaging attribution to `LICENSE-sensevoice.txt` alongside the installed weights.
+- **Silero VAD v5 ONNX**:
+  - **Upstream Model**: `snakers4/silero-vad` (`https://github.com/snakers4/silero-vad`).
+  - **Pinned Distribution File**: `silero_vad_v5.onnx` (`2,313,101` bytes, SHA-256 `6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396`, `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad_v5.onnx`).
+  - **License & Preservation**: **MIT License** (`Copyright (c) 2020-present Silero Team`, upstream `https://github.com/snakers4/silero-vad/blob/master/LICENSE`). WinKit writes the complete verbatim MIT license text to `LICENSE-silero-vad.txt` alongside the installed weights.
+
 ## Application Icons & Visual Assets
 
 All WinKit icons (`src-tauri/icons/*`) and UI styles are original works created specifically for WinKit. No icons, brand marks, screenshots, or code were copied from any third-party reference application.

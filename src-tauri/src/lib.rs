@@ -1,4 +1,7 @@
 pub mod archive;
+pub mod asr_core;
+pub mod asr_models;
+pub mod asr_worker;
 pub mod audio_cleanup;
 pub mod audio_convert;
 pub mod audio_recorder;
@@ -69,6 +72,17 @@ use crate::archive::{
     ExtractArchivesBatchResponse, ExtractArchivesRequest, ARCHIVE_PROGRESS_EVENT,
     DEFAULT_MAX_EXTRACT_BYTES_PER_ARCHIVE,
 };
+use crate::asr_core::{
+    export_transcript_file_impl, inspect_transcribe_media_impl, ExportTranscriptRequest,
+    ExportTranscriptResult, TranscribeMediaInspectResult, TranscribeMediaRequest,
+    TranscribeMediaResult, ASR_PROGRESS_EVENT,
+};
+use crate::asr_models::{
+    get_asr_model_status_impl, install_managed_asr_model_impl, remove_managed_asr_model_impl,
+    resolve_asr_data_root, set_asr_model_custom_dir_impl, AsrModelStatus, ASR_SETUP_PROGRESS_EVENT,
+    ASR_TOTAL_DOWNLOAD_BYTES,
+};
+use crate::asr_worker::{transcribe_media_impl, AsrSessionManager};
 use crate::audio_cleanup::{
     clean_up_audio_impl, preview_audio_cleanup_impl, CleanUpAudioRequest, CleanUpAudioResult,
     PreviewAudioCleanupRequest, PreviewAudioCleanupResult,
@@ -5549,6 +5563,255 @@ async fn make_pdf_searchable<R: Runtime>(
     .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Searchable PDF OCR worker failed."))?
 }
 
+fn app_asr_root<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
+    let local_dir = app.path().app_local_data_dir().ok();
+    resolve_asr_data_root(local_dir.as_deref())
+}
+
+#[tauri::command]
+async fn get_asr_model_status<R: Runtime>(
+    app: AppHandle<R>,
+    asr: State<'_, AsrSessionManager>,
+) -> Result<AsrModelStatus, AppError> {
+    if let Ok(res_dir) = app.path().resource_dir() {
+        asr.set_resource_dir(res_dir);
+    }
+    let root = app_asr_root(&app);
+    let res_dir = asr.resource_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        get_asr_model_status_impl(&root, res_dir.as_deref())
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "ASR model status worker failed."))
+}
+
+#[tauri::command]
+async fn set_asr_model_custom_dir<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asr: State<'_, AsrSessionManager>,
+    dir: Option<String>,
+) -> Result<AsrModelStatus, AppError> {
+    registry.ensure_not_shutting_down()?;
+    if let Ok(res_dir) = app.path().resource_dir() {
+        asr.set_resource_dir(res_dir);
+    }
+    let root = app_asr_root(&app);
+    let asr_mgr = asr.inner().clone();
+    let res_dir = asr_mgr.resource_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        asr_mgr.shutdown_worker();
+        set_asr_model_custom_dir_impl(&root, res_dir.as_deref(), dir)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "ASR model config worker failed."))?
+}
+
+#[tauri::command]
+async fn remove_managed_asr_model<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asr: State<'_, AsrSessionManager>,
+) -> Result<AsrModelStatus, AppError> {
+    registry.ensure_not_shutting_down()?;
+    if let Ok(res_dir) = app.path().resource_dir() {
+        asr.set_resource_dir(res_dir);
+    }
+    let root = app_asr_root(&app);
+    let asr_mgr = asr.inner().clone();
+    let res_dir = asr_mgr.resource_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        asr_mgr.shutdown_worker();
+        remove_managed_asr_model_impl(&root, res_dir.as_deref())
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "ASR model removal worker failed."))?
+}
+
+#[tauri::command]
+async fn install_managed_asr_model<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asr: State<'_, AsrSessionManager>,
+    task_id: String,
+) -> Result<AsrModelStatus, AppError> {
+    let tid = task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid ASR setup task ID."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        asr.set_resource_dir(res_dir);
+    }
+    let guard = registry.register_checked(&tid, "asr-setup", true)?;
+    let root = app_asr_root(&app);
+    let asr_mgr = asr.inner().clone();
+    let res_dir = asr_mgr.resource_dir();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "asr-setup", Some(ASR_TOTAL_DOWNLOAD_BYTES)),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        asr_mgr.shutdown_worker();
+        let res =
+            install_managed_asr_model_impl(&tid, &root, res_dir.as_deref(), &cancel_flag, |ev| {
+                let _ = app.emit(ASR_SETUP_PROGRESS_EVENT, &ev);
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload {
+                        task_id: tid.clone(),
+                        tool_id: "asr-setup".into(),
+                        state: crate::tasks::TaskLifecycleState::Running,
+                        processed_bytes: ev.downloaded_bytes,
+                        total_bytes: Some(ev.total_bytes),
+                        percent: ev.percent,
+                        error_code: None,
+                        error_message: None,
+                    },
+                );
+            });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "asr-setup",
+                        ASR_TOTAL_DOWNLOAD_BYTES,
+                        Some(ASR_TOTAL_DOWNLOAD_BYTES),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(
+                        &tid,
+                        "asr-setup",
+                        0,
+                        Some(ASR_TOTAL_DOWNLOAD_BYTES),
+                        err,
+                    ),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "ASR model setup worker failed."))?
+}
+
+#[tauri::command]
+async fn inspect_transcribe_media<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    path: String,
+) -> Result<TranscribeMediaInspectResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let media_root = app_media_root(&app);
+    tauri::async_runtime::spawn_blocking(move || inspect_transcribe_media_impl(&media_root, &path))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Transcribe media inspect failed."))?
+}
+
+#[tauri::command]
+async fn transcribe_media<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    asr: State<'_, AsrSessionManager>,
+    task_id: String,
+    request: TranscribeMediaRequest,
+) -> Result<TranscribeMediaResult, AppError> {
+    let tid = task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid transcription task ID."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        asr.set_resource_dir(res_dir);
+    }
+    let guard = registry.register_checked(&tid, "T01", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let asr_root = app_asr_root(&app);
+    let media_root = app_media_root(&app);
+    let asr_mgr = asr.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "T01", None),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = transcribe_media_impl(
+            &tid,
+            &asr_root,
+            &media_root,
+            &asr_mgr,
+            &request,
+            &cancel_flag,
+            |ev| {
+                let _ = app.emit(ASR_PROGRESS_EVENT, &ev);
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload {
+                        task_id: tid.clone(),
+                        tool_id: "T01".into(),
+                        state: crate::tasks::TaskLifecycleState::Running,
+                        processed_bytes: ev.current_segment as u64,
+                        total_bytes: if ev.total_segments > 0 {
+                            Some(ev.total_segments as u64)
+                        } else {
+                            None
+                        },
+                        percent: Some(ev.percent),
+                        error_code: None,
+                        error_message: None,
+                    },
+                );
+            },
+        );
+        match &res {
+            Ok(done) => {
+                let count = done.segments.len() as u64;
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "T01", count, Some(count)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "T01", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Offline transcription worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn export_transcript_file(
+    registry: State<'_, TaskRegistry>,
+    request: ExportTranscriptRequest,
+) -> Result<ExportTranscriptResult, AppError> {
+    let tid = format!("t01-export-{}", uuid::Uuid::new_v4());
+    let guard = registry.register_checked(&tid, "T01", false)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = export_transcript_file_impl(&request);
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Transcript export worker failed."))?
+}
+
 #[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
@@ -5571,6 +5834,7 @@ fn request_window_close(
     screen_recorder: State<'_, ScreenRecorderManager>,
     pdf: State<'_, PdfSessionManager>,
     ocr: State<'_, OcrSessionManager>,
+    asr: State<'_, AsrSessionManager>,
 ) -> CloseRequestDecision {
     let decision = registry.evaluate_close_request();
     if decision.immediate_close_allowed {
@@ -5578,6 +5842,7 @@ fn request_window_close(
         screen_recorder.cleanup_on_exit();
         pdf.cleanup_on_exit();
         ocr.cleanup_on_exit();
+        asr.cleanup_on_exit();
     }
     decision
 }
@@ -5589,6 +5854,7 @@ async fn begin_graceful_shutdown(
     screen_recorder: State<'_, ScreenRecorderManager>,
     pdf: State<'_, PdfSessionManager>,
     ocr: State<'_, OcrSessionManager>,
+    asr: State<'_, AsrSessionManager>,
     timeout_ms: Option<u64>,
 ) -> Result<ShutdownDrainResult, AppError> {
     let reg = registry.inner().clone();
@@ -5596,6 +5862,7 @@ async fn begin_graceful_shutdown(
     let scr = screen_recorder.inner().clone();
     let pdf_mgr = pdf.inner().clone();
     let ocr_mgr = ocr.inner().clone();
+    let asr_mgr = asr.inner().clone();
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(8_000).clamp(100, 30_000));
     tauri::async_runtime::spawn_blocking(move || {
         let res = reg.begin_shutdown_and_drain(timeout);
@@ -5604,6 +5871,7 @@ async fn begin_graceful_shutdown(
             scr.cleanup_on_exit();
             pdf_mgr.cleanup_on_exit();
             ocr_mgr.cleanup_on_exit();
+            asr_mgr.cleanup_on_exit();
         }
         res
     })
@@ -5630,6 +5898,7 @@ pub fn run() {
         .manage(ScreenRecorderManager::new())
         .manage(PdfSessionManager::default())
         .manage(OcrSessionManager::default())
+        .manage(AsrSessionManager::default())
         .register_uri_scheme_protocol("winkitmedia", move |_ctx, request| {
             handle_winkit_media_protocol(&preview_registry_for_proto, request)
         })
@@ -5797,6 +6066,13 @@ pub fn run() {
             ocr_extract_batch,
             inspect_searchable_pdf_pages,
             make_pdf_searchable,
+            get_asr_model_status,
+            set_asr_model_custom_dir,
+            remove_managed_asr_model,
+            install_managed_asr_model,
+            inspect_transcribe_media,
+            transcribe_media,
+            export_transcript_file,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,
