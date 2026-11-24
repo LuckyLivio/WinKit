@@ -470,6 +470,8 @@ export interface CaptureRegionRequest {
   includeCursor: boolean;
   explicitRect?: CaptureRect | null;
   hideMainWindow?: boolean | null;
+  promptText?: string | null;
+  toolId?: string | null;
 }
 
 export interface CaptureMonitorRequest {
@@ -4091,9 +4093,13 @@ export async function inspectOcrSources(paths: string[]): Promise<OcrInspectSour
 export async function ocrExtractBatch(
   taskId: string,
   request: OcrBatchRequest,
+  toolId?: string,
 ): Promise<OcrBatchResult> {
   assertFrontendNotShuttingDown();
-  return invoke<OcrBatchResult>("ocr_extract_batch", { taskId, request });
+  return invoke<OcrBatchResult>(
+    "ocr_extract_batch",
+    toolId ? { taskId, request, toolId } : { taskId, request },
+  );
 }
 
 export async function subscribeOcrProgress(

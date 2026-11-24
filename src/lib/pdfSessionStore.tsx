@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import type {
+  CaptureProgressPayload,
+  CaptureResultPayload,
   CompressPdfResult,
   CropPdfResult,
   DecryptPdfResult,
@@ -14,6 +16,7 @@ import type {
   MergePdfsResult,
   OcrBatchItemResult,
   OcrEngineStatus,
+  OcrPageResult,
   OcrProgressPayload,
   OrganizePdfResult,
   PdfCompressMode,
@@ -378,6 +381,26 @@ export interface OcrExtractSessionState {
   errorMessage: string | null;
 }
 
+export interface CaptureTextSessionState {
+  engineStatus: OcrEngineStatus | null;
+  phase: "idle" | "capturing" | "recognizing";
+  activeTaskId: string | null;
+  hideMainWindow: boolean;
+  countdownSeconds: 0 | 2 | 3;
+  autoCopy: boolean;
+  maxSideLen: 1280 | 1600;
+  showBoxes: boolean;
+  rightTab: "text" | "boxes";
+  selectedLineIndex: number | null;
+  lastCapture: CaptureResultPayload | null;
+  lastPage: OcrPageResult | null;
+  editedText: string | null;
+  captureProgress: CaptureProgressPayload | null;
+  ocrProgress: OcrProgressPayload | null;
+  notice: string | null;
+  errorMessage: string | null;
+}
+
 export interface PdfSessionRoot {
   reader: PdfReaderSessionState;
   merge: PdfMergeSessionState;
@@ -395,6 +418,7 @@ export interface PdfSessionRoot {
   compress: PdfCompressSessionState;
   markdown: PdfMarkdownSessionState;
   extractText: OcrExtractSessionState;
+  captureText: CaptureTextSessionState;
 }
 
 const INITIAL_PDF_SESSION: PdfSessionRoot = {
@@ -650,6 +674,25 @@ const INITIAL_PDF_SESSION: PdfSessionRoot = {
     lastCancelled: false,
     errorMessage: null,
   },
+  captureText: {
+    engineStatus: null,
+    phase: "idle",
+    activeTaskId: null,
+    hideMainWindow: true,
+    countdownSeconds: 0,
+    autoCopy: false,
+    maxSideLen: 1280,
+    showBoxes: true,
+    rightTab: "text",
+    selectedLineIndex: null,
+    lastCapture: null,
+    lastPage: null,
+    editedText: null,
+    captureProgress: null,
+    ocrProgress: null,
+    notice: null,
+    errorMessage: null,
+  },
 };
 
 export type PdfTargetToolId =
@@ -699,6 +742,9 @@ export interface PdfSessionContextValue {
   ) => void;
   updateExtractTextSession: (
     updater: (prev: OcrExtractSessionState) => OcrExtractSessionState,
+  ) => void;
+  updateCaptureTextSession: (
+    updater: (prev: CaptureTextSessionState) => CaptureTextSessionState,
   ) => void;
   openInPdfReader: (path: string) => void;
   sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
@@ -838,6 +884,13 @@ export function PdfSessionProvider({
     [],
   );
 
+  const updateCaptureTextSession = useCallback(
+    (updater: (prev: CaptureTextSessionState) => CaptureTextSessionState) => {
+      setPdfSession((prev) => ({ ...prev, captureText: updater(prev.captureText) }));
+    },
+    [],
+  );
+
   const openInPdfReader = useCallback(
     (path: string) => {
       setPendingReaderPath(path);
@@ -882,6 +935,7 @@ export function PdfSessionProvider({
         updateCompressSession,
         updateMarkdownSession,
         updateExtractTextSession,
+        updateCaptureTextSession,
         openInPdfReader,
         sendPdfToTool,
         pendingReaderPath,
