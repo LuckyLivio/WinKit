@@ -1752,9 +1752,9 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     name: { "zh-CN": "录音机", "en-US": "Record Audio" },
     summary: {
       "zh-CN":
-        "选择麦克风查看实时输入电平，支持开始、暂停、继续、停止试听并保存为无损 WAV 或 M4A/AAC，保存后可一键送往 A03 剪切或 A01 降噪（离线转写留阶段 6）",
+        "选择麦克风查看实时输入电平，支持开始、暂停、继续、停止试听并保存为无损 WAV 或 M4A/AAC，保存后可一键「转写这段录音」送往 T01 离线语音转写，或送往 A03 剪切、A01 降噪",
       "en-US":
-        "Select a microphone with live input metering, record with pause/resume, audition, and save as WAV or M4A/AAC with one-click handoff to A03 Trim or A01 Clean Up (offline transcription in Phase 6)",
+        "Select a microphone with live input metering, record with pause/resume, audition, and save as WAV or M4A/AAC, then click 'Transcribe Recording' to hand off to T01 offline transcription or send to A03 Trim / A01 Clean Up",
     },
     keywords: [
       "a02",
@@ -1766,13 +1766,17 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
       "m4a",
       "aac",
       "wasapi",
+      "transcribe",
+      "speech to text",
       "录音",
       "录音机",
       "麦克风",
       "电平",
+      "转写",
+      "语音转文字",
     ],
     icon: "audio-record",
-    implementationStatus: "partial",
+    implementationStatus: "full",
     component: AudioRecorderWorkspace,
   },
   {

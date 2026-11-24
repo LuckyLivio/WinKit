@@ -134,6 +134,7 @@ export function TranscribeMediaWorkspace() {
   const [retranscribeConfirm, setRetranscribeConfirm] = useState<PendingRetranscribeConfirm | null>(
     null,
   );
+  const [handoffNotice, setHandoffNotice] = useState<string | null>(null);
   const [draftTimes, setDraftTimes] = useState<Record<string, string>>({});
 
   const mediaPlayerRef = useRef<HTMLMediaElement | null>(null);
@@ -160,6 +161,7 @@ export function TranscribeMediaWorkspace() {
     setExportError(null);
     setOverwritePending(null);
     setRetranscribeConfirm(null);
+    setHandoffNotice(null);
   }, [st.sourceGeneration]);
 
   // Invalidate any pending overwrite confirmation whenever source media, segments, or run state changes.
@@ -205,11 +207,20 @@ export function TranscribeMediaWorkspace() {
 
   // Clean handoff intake hook for A02 / media tools sending audio to T01.
   useEffect(() => {
+    if (!pendingHandoff || pendingHandoff.toolId !== "T01") return;
     const handed = consumePendingHandoff("T01");
-    if (handed) {
-      void loadMediaFile(handed);
+    if (!handed) return;
+    if (running) {
+      setHandoffNotice(
+        isZh
+          ? `当前有正在进行的离线转写任务，未中断现有处理；请等待完成或取消后再载入该录音：${handed}`
+          : `An offline transcription is already running and was kept intact. Wait for it to finish or cancel it before loading: ${handed}`,
+      );
+      return;
     }
-  }, [pendingHandoff, consumePendingHandoff, loadMediaFile]);
+    setHandoffNotice(null);
+    void loadMediaFile(handed);
+  }, [pendingHandoff, consumePendingHandoff, loadMediaFile, running, isZh]);
 
   // Drag & drop support
   useEffect(() => {
@@ -826,6 +837,12 @@ export function TranscribeMediaWorkspace() {
                     {st.liveProgress.detail}
                   </div>
                 )}
+              </div>
+            )}
+
+            {handoffNotice && (
+              <div className="status-banner" role="status" data-testid="t01-handoff-notice">
+                {handoffNotice}
               </div>
             )}
 
