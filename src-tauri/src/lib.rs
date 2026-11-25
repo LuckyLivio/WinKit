@@ -24,6 +24,9 @@ pub mod image_transform;
 pub mod image_watermark;
 pub mod iso_reader;
 pub mod jwt;
+pub mod matting_core;
+pub mod matting_models;
+pub mod matting_worker;
 pub mod media_compress;
 pub mod media_convert;
 pub mod media_core;
@@ -165,6 +168,18 @@ use crate::image_watermark::{
     WatermarkImagesBatchRequest,
 };
 use crate::jwt::{verify_jwt_hmac_token, JwtHmacVerifyRequest, JwtHmacVerifyResponse};
+use crate::matting_core::{
+    copy_matting_result_to_clipboard_impl, export_matting_result_impl, MattingCopyClipboardRequest,
+    MattingCopyClipboardResult, MattingExportRequest, MattingExportResult, RemoveBackgroundRequest,
+    RemoveBackgroundResult, MATTING_PROGRESS_EVENT,
+};
+use crate::matting_models::{
+    get_matting_model_status_impl, install_managed_matting_model_impl,
+    remove_managed_matting_model_impl, resolve_matting_data_root,
+    set_matting_model_custom_dir_impl, MattingModelStatus, MATTING_MODEL_BYTES,
+    MATTING_SETUP_PROGRESS_EVENT,
+};
+use crate::matting_worker::{remove_image_background_impl, MattingSessionManager};
 use crate::media_compress::{
     compress_videos_batch_impl, probe_video_encoders_impl, CompressVideosBatchRequest,
     CompressVideosBatchResponse, VideoEncoderCapabilities,
@@ -5812,6 +5827,265 @@ async fn export_transcript_file(
     .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Transcript export worker failed."))?
 }
 
+fn app_matting_root<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
+    let local_dir = app.path().app_local_data_dir().ok();
+    resolve_matting_data_root(local_dir.as_deref())
+}
+
+#[tauri::command]
+async fn get_matting_model_status<R: Runtime>(
+    app: AppHandle<R>,
+    matting: State<'_, MattingSessionManager>,
+) -> Result<MattingModelStatus, AppError> {
+    if let Ok(res_dir) = app.path().resource_dir() {
+        matting.set_resource_dir(res_dir);
+    }
+    let root = app_matting_root(&app);
+    let res_dir = matting.resource_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        get_matting_model_status_impl(&root, res_dir.as_deref())
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Matting model status worker failed."))
+}
+
+#[tauri::command]
+async fn set_matting_model_custom_dir<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    matting: State<'_, MattingSessionManager>,
+    dir: Option<String>,
+) -> Result<MattingModelStatus, AppError> {
+    registry.ensure_not_shutting_down()?;
+    if let Ok(res_dir) = app.path().resource_dir() {
+        matting.set_resource_dir(res_dir);
+    }
+    let root = app_matting_root(&app);
+    let mgr = matting.inner().clone();
+    let res_dir = mgr.resource_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        mgr.shutdown_worker();
+        set_matting_model_custom_dir_impl(&root, res_dir.as_deref(), dir)
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Matting model config worker failed."))?
+}
+
+#[tauri::command]
+async fn remove_managed_matting_model<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    matting: State<'_, MattingSessionManager>,
+) -> Result<MattingModelStatus, AppError> {
+    registry.ensure_not_shutting_down()?;
+    if let Ok(res_dir) = app.path().resource_dir() {
+        matting.set_resource_dir(res_dir);
+    }
+    let root = app_matting_root(&app);
+    let mgr = matting.inner().clone();
+    let res_dir = mgr.resource_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        mgr.shutdown_worker();
+        remove_managed_matting_model_impl(&root, res_dir.as_deref())
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Matting model removal worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn install_managed_matting_model<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    matting: State<'_, MattingSessionManager>,
+    task_id: String,
+) -> Result<MattingModelStatus, AppError> {
+    let tid = task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid matting setup task ID."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        matting.set_resource_dir(res_dir);
+    }
+    let guard = registry.register_checked(&tid, "matting-setup", true)?;
+    let root = app_matting_root(&app);
+    let mgr = matting.inner().clone();
+    let res_dir = mgr.resource_dir();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "matting-setup", Some(MATTING_MODEL_BYTES)),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let cancel_flag = guard.cancel_flag();
+        mgr.shutdown_worker();
+        let res = install_managed_matting_model_impl(
+            &tid,
+            &root,
+            res_dir.as_deref(),
+            &cancel_flag,
+            |ev| {
+                let _ = app.emit(MATTING_SETUP_PROGRESS_EVENT, &ev);
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload {
+                        task_id: tid.clone(),
+                        tool_id: "matting-setup".into(),
+                        state: crate::tasks::TaskLifecycleState::Running,
+                        processed_bytes: ev.downloaded_bytes,
+                        total_bytes: Some(ev.total_bytes),
+                        percent: ev.percent,
+                        error_code: None,
+                        error_message: None,
+                    },
+                );
+            },
+        );
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(
+                        &tid,
+                        "matting-setup",
+                        MATTING_MODEL_BYTES,
+                        Some(MATTING_MODEL_BYTES),
+                    ),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(
+                        &tid,
+                        "matting-setup",
+                        0,
+                        Some(MATTING_MODEL_BYTES),
+                        err,
+                    ),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Matting model setup worker failed."))?
+}
+
+#[tauri::command]
+async fn remove_image_background<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    matting: State<'_, MattingSessionManager>,
+    asset_store: State<'_, ImageAssetStore>,
+    task_id: String,
+    request: RemoveBackgroundRequest,
+) -> Result<RemoveBackgroundResult, AppError> {
+    let tid = task_id.trim().to_string();
+    if tid.is_empty() || tid.len() > 128 {
+        return Err(AppError::invalid_param("Invalid matting task ID."));
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        matting.set_resource_dir(res_dir);
+    }
+    let guard = registry.register_checked(&tid, "I04", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let root = app_matting_root(&app);
+    let mgr = matting.inner().clone();
+    let store = asset_store.inner().clone();
+    let _ = app.emit(
+        TASK_PROGRESS_EVENT,
+        TaskProgressPayload::running(&tid, "I04", None),
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let res =
+            remove_image_background_impl(&tid, &root, &mgr, &store, &request, &cancel_flag, |ev| {
+                let _ = app.emit(MATTING_PROGRESS_EVENT, &ev);
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload {
+                        task_id: tid.clone(),
+                        tool_id: "I04".into(),
+                        state: crate::tasks::TaskLifecycleState::Running,
+                        processed_bytes: ev.percent.round() as u64,
+                        total_bytes: Some(100),
+                        percent: Some(ev.percent),
+                        error_code: None,
+                        error_message: None,
+                    },
+                );
+            });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "I04", 100, Some(100)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "I04", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Offline background-removal worker failed.",
+        )
+    })?
+}
+
+#[tauri::command]
+async fn export_matting_result(
+    registry: State<'_, TaskRegistry>,
+    matting: State<'_, MattingSessionManager>,
+    request: MattingExportRequest,
+) -> Result<MattingExportResult, AppError> {
+    let tid = format!("i04-export-{}", uuid::Uuid::new_v4());
+    let guard = registry.register_checked(&tid, "I04", false)?;
+    let cancel_flag = guard.cancel_flag();
+    let store = matting.results().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = export_matting_result_impl(&store, &request, &cancel_flag);
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Matting export worker failed."))?
+}
+
+#[tauri::command]
+async fn copy_matting_result_to_clipboard(
+    registry: State<'_, TaskRegistry>,
+    matting: State<'_, MattingSessionManager>,
+    request: MattingCopyClipboardRequest,
+) -> Result<MattingCopyClipboardResult, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let store = matting.results().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        copy_matting_result_to_clipboard_impl(&store, &request)
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "INTERNAL_JOIN_ERROR",
+            "Matting clipboard copy worker failed.",
+        )
+    })?
+}
+
 #[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
@@ -5835,6 +6109,7 @@ fn request_window_close(
     pdf: State<'_, PdfSessionManager>,
     ocr: State<'_, OcrSessionManager>,
     asr: State<'_, AsrSessionManager>,
+    matting: State<'_, MattingSessionManager>,
 ) -> CloseRequestDecision {
     let decision = registry.evaluate_close_request();
     if decision.immediate_close_allowed {
@@ -5843,11 +6118,13 @@ fn request_window_close(
         pdf.cleanup_on_exit();
         ocr.cleanup_on_exit();
         asr.cleanup_on_exit();
+        matting.cleanup_on_exit();
     }
     decision
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn begin_graceful_shutdown(
     registry: State<'_, TaskRegistry>,
     recorder: State<'_, AudioRecorderManager>,
@@ -5855,6 +6132,7 @@ async fn begin_graceful_shutdown(
     pdf: State<'_, PdfSessionManager>,
     ocr: State<'_, OcrSessionManager>,
     asr: State<'_, AsrSessionManager>,
+    matting: State<'_, MattingSessionManager>,
     timeout_ms: Option<u64>,
 ) -> Result<ShutdownDrainResult, AppError> {
     let reg = registry.inner().clone();
@@ -5863,6 +6141,7 @@ async fn begin_graceful_shutdown(
     let pdf_mgr = pdf.inner().clone();
     let ocr_mgr = ocr.inner().clone();
     let asr_mgr = asr.inner().clone();
+    let matting_mgr = matting.inner().clone();
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(8_000).clamp(100, 30_000));
     tauri::async_runtime::spawn_blocking(move || {
         let res = reg.begin_shutdown_and_drain(timeout);
@@ -5872,6 +6151,7 @@ async fn begin_graceful_shutdown(
             pdf_mgr.cleanup_on_exit();
             ocr_mgr.cleanup_on_exit();
             asr_mgr.cleanup_on_exit();
+            matting_mgr.cleanup_on_exit();
         }
         res
     })
@@ -5899,6 +6179,7 @@ pub fn run() {
         .manage(PdfSessionManager::default())
         .manage(OcrSessionManager::default())
         .manage(AsrSessionManager::default())
+        .manage(MattingSessionManager::default())
         .register_uri_scheme_protocol("winkitmedia", move |_ctx, request| {
             handle_winkit_media_protocol(&preview_registry_for_proto, request)
         })
@@ -6073,6 +6354,13 @@ pub fn run() {
             inspect_transcribe_media,
             transcribe_media,
             export_transcript_file,
+            get_matting_model_status,
+            set_matting_model_custom_dir,
+            remove_managed_matting_model,
+            install_managed_matting_model,
+            remove_image_background,
+            export_matting_result,
+            copy_matting_result_to_clipboard,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

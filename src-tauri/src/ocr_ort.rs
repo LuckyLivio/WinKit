@@ -54,6 +54,8 @@ const IDX_CREATE_ENV: usize = 3;
 const IDX_CREATE_SESSION: usize = 7;
 const IDX_RUN: usize = 9;
 const IDX_CREATE_SESSION_OPTIONS: usize = 10;
+const IDX_DISABLE_MEM_PATTERN: usize = 17;
+const IDX_DISABLE_CPU_MEM_ARENA: usize = 19;
 const IDX_SET_GRAPH_OPT_LEVEL: usize = 23;
 const IDX_SET_INTRA_OP_THREADS: usize = 24;
 const IDX_SET_INTER_OP_THREADS: usize = 25;
@@ -117,6 +119,7 @@ type RunFn = unsafe extern "system" fn(
     outputs: *mut *mut c_void,
 ) -> *mut c_void;
 type CreateSessionOptionsFn = unsafe extern "system" fn(out: *mut *mut c_void) -> *mut c_void;
+type ToggleSessionOptionFn = unsafe extern "system" fn(options: *mut c_void) -> *mut c_void;
 type SetGraphOptLevelFn =
     unsafe extern "system" fn(options: *mut c_void, level: c_int) -> *mut c_void;
 type SetThreadsFn = unsafe extern "system" fn(options: *mut c_void, threads: c_int) -> *mut c_void;
@@ -276,6 +279,8 @@ struct OrtVtable {
     create_session: CreateSessionFn,
     run: RunFn,
     create_session_options: CreateSessionOptionsFn,
+    disable_mem_pattern: ToggleSessionOptionFn,
+    disable_cpu_mem_arena: ToggleSessionOptionFn,
     set_graph_opt_level: SetGraphOptLevelFn,
     set_intra_op_threads: SetThreadsFn,
     set_inter_op_threads: SetThreadsFn,
@@ -320,6 +325,8 @@ impl OrtVtable {
             create_session: fn_at(table, IDX_CREATE_SESSION)?,
             run: fn_at(table, IDX_RUN)?,
             create_session_options: fn_at(table, IDX_CREATE_SESSION_OPTIONS)?,
+            disable_mem_pattern: fn_at(table, IDX_DISABLE_MEM_PATTERN)?,
+            disable_cpu_mem_arena: fn_at(table, IDX_DISABLE_CPU_MEM_ARENA)?,
             set_graph_opt_level: fn_at(table, IDX_SET_GRAPH_OPT_LEVEL)?,
             set_intra_op_threads: fn_at(table, IDX_SET_INTRA_OP_THREADS)?,
             set_inter_op_threads: fn_at(table, IDX_SET_INTER_OP_THREADS)?,
@@ -562,10 +569,20 @@ impl OrtRuntime {
         model_path: &Path,
         intra_op_threads: i32,
     ) -> Result<OrtSession<'_>, AppError> {
+        self.create_session_with_options(model_path, intra_op_threads, false, false)
+    }
+
+    pub fn create_session_with_options(
+        &self,
+        model_path: &Path,
+        intra_op_threads: i32,
+        disable_cpu_mem_arena: bool,
+        disable_mem_pattern: bool,
+    ) -> Result<OrtSession<'_>, AppError> {
         if !model_path.is_file() {
             return Err(AppError::new(
                 "OCR_ENGINE_MISSING",
-                format!("OCR model file not found: {}", model_path.display()),
+                format!("ONNX model file not found: {}", model_path.display()),
             ));
         }
 
@@ -601,6 +618,15 @@ impl OrtRuntime {
             let st_inter = (self.api.set_inter_op_threads)(opts, 1);
             self.api
                 .check_status(st_inter, "SetInterOpNumThreads failed")?;
+            if disable_mem_pattern {
+                let st_pat = (self.api.disable_mem_pattern)(opts);
+                self.api.check_status(st_pat, "DisableMemPattern failed")?;
+            }
+            if disable_cpu_mem_arena {
+                let st_arena = (self.api.disable_cpu_mem_arena)(opts);
+                self.api
+                    .check_status(st_arena, "DisableCpuMemArena failed")?;
+            }
         }
 
         let mut session: *mut c_void = ptr::null_mut();

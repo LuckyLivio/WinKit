@@ -60,5 +60,20 @@ fn main() {
         std::process::exit(code);
     }
 
+    if args
+        .iter()
+        .any(|a| a == winkit_lib::matting_worker::MATTING_WORKER_FLAG)
+    {
+        let mut resource_dir: Option<PathBuf> = None;
+        for pair in args.windows(2) {
+            if pair[0] == "--matting-resource-dir" {
+                resource_dir = Some(PathBuf::from(&pair[1]));
+            }
+        }
+        let code =
+            winkit_lib::matting_worker::run_matting_worker_stdio_loop(resource_dir.as_deref());
+        std::process::exit(code);
+    }
+
     winkit_lib::run();
 }

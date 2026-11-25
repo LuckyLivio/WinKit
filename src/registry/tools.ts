@@ -33,6 +33,7 @@ import { ImageRedactWorkspace } from "../tools/image-redact/ImageRedactWorkspace
 import { ImageAnnotateWorkspace } from "../tools/image-annotate/ImageAnnotateWorkspace";
 import { ImageWatermarkWorkspace } from "../tools/image-watermark/ImageWatermarkWorkspace";
 import { BlurFacesWorkspace } from "../tools/blur-faces/BlurFacesWorkspace";
+import { RemoveBackgroundWorkspace } from "../tools/remove-background/RemoveBackgroundWorkspace";
 import { ColorPickerWorkspace } from "../tools/color-picker/ColorPickerWorkspace";
 import { MediaInfoWorkspace } from "../tools/media-info/MediaInfoWorkspace";
 import { VideoTrimWorkspace } from "../tools/video-trim/VideoTrimWorkspace";
@@ -101,6 +102,7 @@ export type ToolIconName =
   | "frame"
   | "screenshot"
   | "blur-faces"
+  | "remove-background"
   | "image-convert"
   | "image-compress"
   | "image-resize"
@@ -869,6 +871,40 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "frame",
     implementationStatus: "full",
     component: ScreenshotBeautifierWorkspace,
+  },
+  {
+    id: "I04",
+    category: "image",
+    name: {
+      "zh-CN": "图片抠图去背景",
+      "en-US": "Remove Background",
+    },
+    summary: {
+      "zh-CN":
+        "基于 BiRefNet_lite 512 FP16（MIT）的本地离线抠图，支持原图/抠图滑块对比、透明 PNG 与纯色换底导出、按主体紧凑裁切及原图半透明边缘保留",
+      "en-US":
+        "Local offline foreground matting powered by BiRefNet_lite 512 FP16 (MIT) with before/after slider, transparent PNG or solid-color export, tight subject crop, and alpha edge preservation",
+    },
+    keywords: [
+      "remove background",
+      "background removal",
+      "cutout",
+      "matting",
+      "transparent",
+      "alpha",
+      "png",
+      "birefnet",
+      "抠图",
+      "去背景",
+      "透明背景",
+      "人像抠图",
+      "商品抠图",
+      "换底色",
+      "证件照换底",
+    ],
+    icon: "remove-background",
+    implementationStatus: "full",
+    component: RemoveBackgroundWorkspace,
   },
   {
     id: "I05",
