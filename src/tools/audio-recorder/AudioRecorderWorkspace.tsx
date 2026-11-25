@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Captions,
   CheckCircle2,
   FolderOpen,
   Mic,
@@ -368,8 +369,8 @@ export function AudioRecorderWorkspace() {
       <div className="media-setup-compact">
         <span style={{ color: "var(--text-secondary)" }}>
           {isZh
-            ? "仅在你主动点击「启用电平监听」或「开始录音」后打开麦克风；停止或放弃立即释放设备。离线语音转写规划于阶段 6。"
-            : "Microphone capture starts only after you click Monitor or Record and is released immediately on Stop or Discard. Offline speech transcription is planned for Phase 6."}
+            ? "仅在你主动点击「启用电平监听」或「开始录音」后打开麦克风；停止或放弃立即释放设备。保存录音后可点击「转写这段录音」直接送入 T01 离线语音转写。"
+            : "Microphone capture starts only after you click Monitor or Record and is released immediately on Stop or Discard. After saving, click 'Transcribe Recording' to send it straight to T01 for offline transcription."}
         </span>
       </div>
 
@@ -791,6 +792,15 @@ export function AudioRecorderWorkspace() {
                 </div>
               </div>
               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => handoffMediaFileToTool("T01", lastSaved.outputPath)}
+                  data-testid="a02-handoff-t01"
+                >
+                  <Captions size={14} aria-hidden="true" />
+                  <span>{isZh ? "转写这段录音" : "Transcribe Recording"}</span>
+                </button>
                 <button
                   type="button"
                   className="btn"

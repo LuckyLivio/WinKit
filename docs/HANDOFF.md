@@ -1,8 +1,8 @@
 # WinKit 阶段交接说明
 
-## 阶段 6（进行中：T03、T04、P04 已合入，T01 独立 PR 待审核）
+## 阶段 6（进行中：T03、T04、P04、T01 已合入，A02 录音转写独立 PR 待审核）
 
-`src/registry/tools.ts` 当前已收录 **70 个**真实可用工具入口（阶段 6 新增 `T03`「图片与扫描件文字提取」、`T04`「屏幕区域取字」、`P04`「扫描版 PDF 转可搜索」与 `T01`「离线音视频转写」；另含侧栏共用能力 `C08`「PDF 快速预览」）。
+`src/registry/tools.ts` 当前已收录 **70 个**真实可用工具入口（阶段 6 新增 `T03`、`T04`、`P04`、`T01`，并将既有 `A02` 录音机补齐离线转写交接链路升级为 `待验收`，`待验收` 合计 `60` 项、`部分实现` 降至 `10` 项；另含侧栏共用能力 `C08`「PDF 快速预览」）。
 
 - **PR #37（已合入 `main`：`626b1db`）｜`T03` 图片与扫描件文字提取 + 离线 RapidOCR 基础设施**：
   - 经同组中英混排截图与扫描件实测选定 **RapidOCR `PP-OCRv4 mobile`（`Apache-2.0`）+ 微软官方签名 `onnxruntime.dll 1.23.2`（`MIT`，Authenticode `Valid`）**，通过 `scripts/ensure-ocr-runtime.mjs` 校验拉取不入源码库，纯 Rust 动态加载 ONNX Runtime C ABI v17 运行于独立 `--ocr-worker`（Windows Job Object 2 GiB 限额、单进程与取消/退出即时回收）。
@@ -13,10 +13,13 @@
   - 修正 `src-tauri/src/ocr_core.rs` 竖排条在 `rotate270` 后的词元回映射方向，并增补真实阅读方向四边形 `reading_quad_px`（基线 `read_BL→read_BR` + 上行 `read_BL→read_TL`，覆盖 0°/90° CW/180°/270° CW 四方向）同时保留 `T03`/`T04` 既有 `quad_px`/`bbox_px` 预览语义。
   - 在 `pdf_pdfium.rs` 新增 `FPDF_DeviceToPage` 精确仿射设备→页面变换及逐页文字层检测 `inspect_pages_text_status_with_pdfium`；在 `pdf_searchable.rs` 中以单 `TJ` 文本对象按行写入不可见 Unicode 文字层（修复 PDFium 在 180° 倒置扫描页上拆分重排相邻 Span 的选区问题），并在 `doc.save()` 写完 `.tmp` 之后、`commit_existing_tmp()` 之前二次检查取消标记保护已有目标文件。
   - 在 `src/tools/pdf-searchable/PdfSearchableWorkspace.tsx` 中将覆盖确认绑定至完整转换请求（输入/目标/参数变更即失效）并加入单调加载令牌防止快速切档或加载中清空后的迟到响应回写；通过 `C08` 检索高亮、Google Chrome 原生 PDF 查看器四方向旋转页实测拖选复制、独立 `pypdf` 复核及 `main` CI（[Actions #45373889738](https://github.com/LuckyLivio/WinKit/actions/runs/45373889738)）NSIS 安装包与随包资源核验。
-- **阶段 6 PR 4（`feat/phase-6-pr4-t01-transcribe`）｜`T01` 离线音视频转写**：
+- **PR #40（已合入 `main`：`e190bf5`）｜`T01` 离线音视频转写**：
   - 经 Windows x64 CPU 4 线程同语料（中英混排、~15 dB 粉红/棕噪背景、3.5–8.0 s 长停顿及真实人声）对比实测 `whisper.cpp b5907 (ggml-small-q5_1 + Silero VAD)` 与 `SenseVoiceSmall INT8 (2024-07-17) + Silero VAD v5`，选定复用 WinKit 已随包 `onnxruntime.dll 1.23.2`（MIT）的纯 Rust **SenseVoiceSmall INT8 + Silero VAD v5** 方案（零额外安装包 DLL 增量、中文 CER `0.00%`、英文 WER `8.75%`、时间偏差 MAE `110 ms`、纯 Rust 发布版 RTF `0.013–0.016`、`0` 静音幻觉，详见 `docs/VERIFICATION.md`）。
   - **`src-tauri/src/asr_models.rs` + `asr_core.rs` + `asr_worker.rs`**：用户主动触发一次性 HTTPS 下载固定版本并校验全部字节长度与 SHA-256（`157.66 MiB` 下载 / `230.66 MiB` 解压），完整原样保存 `LICENSE-sensevoice.txt`（FunASR Model Open Source License v1.1 英文 7 节 + 中文全文与版权行，附归档原 71 字节 `LICENSE` 引用说明）与 `LICENSE-silero-vad.txt`（MIT，`Copyright (c) 2020-present Silero Team`），并同步更新 `THIRD_PARTY_NOTICES.md`；支持校验指定本地自定义模型目录。WAV 检查与执行共享 `512 MiB` 原生直读判定与按 RIFF `data` 块长度计算的精确时长（忽略尾部元数据块），原生 WAV 以 1 MiB 块流式解码重采样降低峰值内存；其余音视频容器及 `>512 MiB` WAV 复用共享 `media_core` FFmpeg/ffprobe 并以 `-af aresample=async=1:first_pts=0` 统一时间轴（整容器非零起点归零至播放零点，同时精确保留仅音轨延迟与音轨中途 PTS 空洞）；前后端共用多行 SRT 清洗规则（保留正常多行并移除段内连续空行及纯空白/全角空白行）；全部推理隔离运行于 `winkit.exe --asr-worker`（Windows Job Object 2 GiB 限额、单进程与取消/关窗即时回收）。
   - **`src/tools/transcribe-media/` + `src/lib/mediaSessionStore.tsx`**：提供模型与 FFmpeg 状态栏（`>512 MiB` WAV 缺 FFmpeg 时给出明确引导并禁点开始）、音视频内嵌播放联动试听（通过 `resolvePreviewSeekTime` 适配 Chromium Matroska 非零容器起点）、分段时间戳/正文在线校对、手工修改后重转二次确认与转写期间锁定编辑（失败或取消保留原稿）、会话级加载与代数防串写（离开返回 `T01`、快速切档与延迟导出不会将旧媒体 `.srt` 挂至新媒体的 `V02` 移交按钮）、字幕顺序/重叠实时校验与一键修正、绑定完整请求的覆盖确认、源音视频强制防覆盖保护、TXT/SRT 统一规则复制与导出，并预留接收 `A02` 录音（`consumePendingHandoff("T01")`）与向 `V02` 移交导出 `.srt` 的解耦接口。
+- **阶段 6 PR 5（`feat/phase-6-pr5-a02-transcribe-handoff`）｜`A02` 录音机接入 `T01` 离线语音转写**：
+  - 在 `src/tools/audio-recorder/AudioRecorderWorkspace.tsx` 录音保存完成区新增主操作「转写这段录音 / Transcribe Recording」，复用 `handoffMediaFileToTool("T01", lastSaved.outputPath)` 将精确保存的 WAV/M4A 录音送入 `T01`，完整复用 `T01` 的模型状态与缺模型引导（绝不自动下载）、免 FFmpeg 原生 WAV 直读、离线 `--asr-worker`、时间轴对齐、分段校对与 TXT/SRT 导出。
+  - 在 `src/lib/mediaSessionStore.tsx` 与 `src/tools/transcribe-media/TranscribeMediaWorkspace.tsx` 补强交接保护：`T01` 运行中收到新录音交接时存入会话态 `pendingIncomingPath`（切页返回仍保留），待当前转写完成或取消后由用户决定点击「载入待处理录音」或「放弃」而不覆盖刚完成的转写结果；`T01` 已有手工校对时先弹明确确认框，并在切换会话前先检查新文件有效性及是否包含音轨，拒绝替换、文件移动或检查失败时完整保留原有校对稿、时间戳与试听状态。同步更新 `src/registry/tools.ts` 与 `docs/PARITY_MATRIX.md` 将 `A02` 状态由 `部分实现` 升格为 `待验收`（`60` 项 `待验收`、`10` 项 `部分实现`）。
 
 ## v0.18.0 · 阶段 5B（进阶 PDF 处理与文档水印）
 

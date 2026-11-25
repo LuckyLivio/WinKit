@@ -69,6 +69,13 @@ interface PendingRetranscribeConfirm {
   sourcePath: string;
 }
 
+interface PendingReplaceMediaConfirm {
+  targetPath: string;
+  sourceGeneration: number;
+  sourcePath: string | null;
+  fromPendingQueue: boolean;
+}
+
 function getPhaseLabel(phase: string, isZh: boolean): string {
   switch (phase) {
     case "decoding":
@@ -134,6 +141,7 @@ export function TranscribeMediaWorkspace() {
   const [retranscribeConfirm, setRetranscribeConfirm] = useState<PendingRetranscribeConfirm | null>(
     null,
   );
+  const [replaceConfirm, setReplaceConfirm] = useState<PendingReplaceMediaConfirm | null>(null);
   const [draftTimes, setDraftTimes] = useState<Record<string, string>>({});
 
   const mediaPlayerRef = useRef<HTMLMediaElement | null>(null);
@@ -160,6 +168,7 @@ export function TranscribeMediaWorkspace() {
     setExportError(null);
     setOverwritePending(null);
     setRetranscribeConfirm(null);
+    setReplaceConfirm(null);
   }, [st.sourceGeneration]);
 
   // Invalidate any pending overwrite confirmation whenever source media, segments, or run state changes.
@@ -181,35 +190,113 @@ export function TranscribeMediaWorkspace() {
   useEffect(() => {
     if (running) {
       setRetranscribeConfirm(null);
+      setReplaceConfirm(null);
       setDraftTimes({});
     }
   }, [running]);
 
-  const loadMediaFile = useCallback(
-    async (filePath: string) => {
+  const executeLoadMediaFile = useCallback(
+    async (
+      filePath: string,
+      opts?: { preserveExistingOnFailure?: boolean; clearPendingIncomingOnSuccess?: boolean },
+    ) => {
       if (running) return;
       setExportError(null);
       setOverwritePending(null);
       setRetranscribeConfirm(null);
-      setDraftTimes({});
+      setReplaceConfirm(null);
+      if (!opts?.preserveExistingOnFailure) {
+        setDraftTimes({});
+      }
       await loadTranscribeMediaFile(
         filePath,
         (err) => formatLocalizedError(err, t),
         isZh
           ? "该媒体文件不包含可转写的音轨。"
           : "This media file contains no audio stream to transcribe.",
+        opts,
       );
     },
     [isZh, loadTranscribeMediaFile, running, t],
   );
 
+  const requestLoadMediaFile = useCallback(
+    (
+      filePath: string,
+      opts?: { fromPendingQueue?: boolean; preserveExistingOnFailure?: boolean },
+    ) => {
+      if (running) {
+        updateTranscribeMediaSession((prev) => ({
+          ...prev,
+          pendingIncomingPath: filePath,
+        }));
+        return;
+      }
+      if (st.hasManualEdits && st.segments.length > 0) {
+        setReplaceConfirm({
+          targetPath: filePath,
+          sourceGeneration: st.sourceGeneration,
+          sourcePath: st.sourcePath,
+          fromPendingQueue: Boolean(opts?.fromPendingQueue),
+        });
+        return;
+      }
+      void executeLoadMediaFile(filePath, {
+        preserveExistingOnFailure: Boolean(
+          opts?.preserveExistingOnFailure || opts?.fromPendingQueue,
+        ),
+        clearPendingIncomingOnSuccess: Boolean(opts?.fromPendingQueue),
+      });
+    },
+    [
+      executeLoadMediaFile,
+      running,
+      st.hasManualEdits,
+      st.segments.length,
+      st.sourceGeneration,
+      st.sourcePath,
+      updateTranscribeMediaSession,
+    ],
+  );
+
+  const handleConfirmReplaceMedia = () => {
+    const pending = replaceConfirm;
+    setReplaceConfirm(null);
+    if (
+      !pending ||
+      running ||
+      pending.sourceGeneration !== st.sourceGeneration ||
+      pending.sourcePath !== st.sourcePath
+    ) {
+      return;
+    }
+    void executeLoadMediaFile(pending.targetPath, {
+      preserveExistingOnFailure: true,
+      clearPendingIncomingOnSuccess: pending.fromPendingQueue,
+    });
+  };
+
   // Clean handoff intake hook for A02 / media tools sending audio to T01.
   useEffect(() => {
+    if (!pendingHandoff || pendingHandoff.toolId !== "T01") return;
     const handed = consumePendingHandoff("T01");
-    if (handed) {
-      void loadMediaFile(handed);
+    if (!handed) return;
+    if (running) {
+      updateTranscribeMediaSession((prev) => ({
+        ...prev,
+        pendingIncomingPath: handed,
+      }));
+      return;
     }
-  }, [pendingHandoff, consumePendingHandoff, loadMediaFile]);
+    requestLoadMediaFile(handed, { preserveExistingOnFailure: st.segments.length > 0 });
+  }, [
+    pendingHandoff,
+    consumePendingHandoff,
+    requestLoadMediaFile,
+    running,
+    st.segments.length,
+    updateTranscribeMediaSession,
+  ]);
 
   // Drag & drop support
   useEffect(() => {
@@ -219,12 +306,12 @@ export function TranscribeMediaWorkspace() {
           onHover: setHovering,
           onDropPaths: (paths) => {
             if (running || paths.length === 0) return;
-            void loadMediaFile(paths[0]!);
+            requestLoadMediaFile(paths[0]!);
           },
         }),
       "t01-file-drop",
     );
-  }, [running, loadMediaFile]);
+  }, [running, requestLoadMediaFile]);
 
   const handlePickFile = async () => {
     if (running) return;
@@ -238,7 +325,7 @@ export function TranscribeMediaWorkspace() {
       ],
     });
     if (picked) {
-      void loadMediaFile(picked);
+      requestLoadMediaFile(picked);
     }
   };
 
@@ -829,6 +916,60 @@ export function TranscribeMediaWorkspace() {
               </div>
             )}
 
+            {st.pendingIncomingPath && (
+              <div
+                className="status-banner"
+                role="status"
+                style={{ display: "flex", flexDirection: "column", gap: 8 }}
+                data-testid="t01-pending-handoff-banner"
+              >
+                <div style={{ fontWeight: 500 }}>
+                  {running
+                    ? isZh
+                      ? "已暂存来自录音机的新录音，待当前转写完成或取消后可选择载入："
+                      : "New recording queued from Audio Recorder. You can load it once the current transcription finishes or is cancelled:"
+                    : isZh
+                      ? "有待处理的录音交接（已保留当前转写结果）："
+                      : "Pending recording handoff ready (current transcript preserved):"}
+                </div>
+                <div className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
+                  {st.pendingIncomingPath}
+                </div>
+                <div className="media-actions-row">
+                  {!running && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={inspecting}
+                      onClick={() =>
+                        requestLoadMediaFile(st.pendingIncomingPath!, {
+                          fromPendingQueue: true,
+                          preserveExistingOnFailure: true,
+                        })
+                      }
+                      data-testid="t01-load-pending-btn"
+                    >
+                      <span>{isZh ? "载入待处理录音" : "Load Pending Recording"}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={inspecting}
+                    onClick={() =>
+                      updateTranscribeMediaSession((prev) => ({
+                        ...prev,
+                        pendingIncomingPath: null,
+                      }))
+                    }
+                    data-testid="t01-dismiss-pending-btn"
+                  >
+                    <span>{isZh ? "放弃" : "Dismiss"}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {st.errorMessage && (
               <div className="status-banner is-error" role="alert" data-testid="t01-error-banner">
                 {st.errorMessage}
@@ -1198,6 +1339,23 @@ export function TranscribeMediaWorkspace() {
           </section>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(replaceConfirm)}
+        title={isZh ? "替换当前手工校对内容？" : "Replace Manual Transcript Edits?"}
+        body={
+          replaceConfirm
+            ? isZh
+              ? `当前转写结果包含手工校对修改，是否切换载入新音频「${replaceConfirm.targetPath}」？确认后会先检查新文件是否有效且包含音轨，检查失败将完整保留当前旧稿、时间戳和试听状态。`
+              : `The current transcript contains manual edits. Switch to "${replaceConfirm.targetPath}"? The new file will be checked for validity and an audio stream first; if inspection fails, your existing edits, timestamps, and preview remain intact.`
+            : ""
+        }
+        confirmLabel={isZh ? "确认载入" : "Load New File"}
+        cancelLabel={isZh ? "保留旧稿" : "Keep Current"}
+        danger
+        onConfirm={handleConfirmReplaceMedia}
+        onCancel={() => setReplaceConfirm(null)}
+      />
 
       <ConfirmDialog
         open={Boolean(retranscribeConfirm)}
