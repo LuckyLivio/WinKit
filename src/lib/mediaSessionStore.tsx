@@ -439,6 +439,13 @@ export interface VideoWatermarkSessionState {
   errorMessage: string | null;
 }
 
+export interface LoadTranscribeMediaOptions {
+  /** Validate the incoming file and confirm `hasAudio` BEFORE replacing the existing session. */
+  preserveExistingOnFailure?: boolean;
+  /** Clear `pendingIncomingPath` once the new file succeeds validation and loads. */
+  clearPendingIncomingOnSuccess?: boolean;
+}
+
 export interface TranscribeMediaSessionState {
   sourcePath: string | null;
   sourceGeneration: number;
@@ -457,6 +464,7 @@ export interface TranscribeMediaSessionState {
   lastExportedPath: string | null;
   lastExportedFormat: TranscriptExportFormat | null;
   lastExportedSourcePath: string | null;
+  pendingIncomingPath: string | null;
   errorMessage: string | null;
 }
 
@@ -788,6 +796,7 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastExportedPath: null,
     lastExportedFormat: null,
     lastExportedSourcePath: null,
+    pendingIncomingPath: null,
     errorMessage: null,
   },
 };
@@ -928,7 +937,8 @@ export interface MediaSessionContextValue {
     filePath: string,
     formatError: (err: unknown) => string,
     noAudioMessage: string,
-  ) => Promise<void>;
+    options?: LoadTranscribeMediaOptions,
+  ) => Promise<boolean>;
   clearTranscribeMedia: () => void;
   startTranscribeMediaTask: (
     req: TranscribeMediaRequest,
@@ -2405,9 +2415,77 @@ export function MediaSessionProvider({
       filePath: string,
       formatError: (err: unknown) => string,
       noAudioMessage: string,
-    ): Promise<void> => {
-      if (activeTranscribeTaskRef.current) return;
+      options?: LoadTranscribeMediaOptions,
+    ): Promise<boolean> => {
+      if (activeTranscribeTaskRef.current) return false;
       const loadId = ++transcribeLoadSeqRef.current;
+      const preserveExisting = Boolean(options?.preserveExistingOnFailure);
+      const clearPending = Boolean(options?.clearPendingIncomingOnSuccess);
+
+      if (preserveExisting) {
+        // Keep existing source, transcript, timestamps, and preview intact while validating candidate.
+        setMediaSession((prev) => ({
+          ...prev,
+          transcribeMedia: {
+            ...prev.transcribeMedia,
+            inspectLoading: true,
+            errorMessage: null,
+          },
+        }));
+
+        try {
+          const inspected = await inspectTranscribeMedia(filePath);
+          if (transcribeLoadSeqRef.current !== loadId) return false;
+          if (!inspected.hasAudio) {
+            setMediaSession((prev) => ({
+              ...prev,
+              transcribeMedia: {
+                ...prev.transcribeMedia,
+                inspectLoading: false,
+                errorMessage: noAudioMessage,
+              },
+            }));
+            return false;
+          }
+          const preview = await registerMediaPreviewPath(inspected.path).catch(() => null);
+          if (transcribeLoadSeqRef.current !== loadId || activeTranscribeTaskRef.current) {
+            return false;
+          }
+          const nextGen = ++transcribeGenRef.current;
+          setMediaSession((prev) => ({
+            ...prev,
+            transcribeMedia: {
+              ...prev.transcribeMedia,
+              sourcePath: inspected.path,
+              sourceGeneration: nextGen,
+              inspectLoading: false,
+              inspect: inspected,
+              previewUrl: preview?.url ?? null,
+              lastResult: null,
+              segments: [],
+              hasManualEdits: false,
+              lastExportedPath: null,
+              lastExportedFormat: null,
+              lastExportedSourcePath: null,
+              pendingIncomingPath: clearPending ? null : prev.transcribeMedia.pendingIncomingPath,
+              errorMessage: null,
+            },
+          }));
+          return true;
+        } catch (err) {
+          if (transcribeLoadSeqRef.current !== loadId) return false;
+          setMediaSession((prev) => ({
+            ...prev,
+            transcribeMedia: {
+              ...prev.transcribeMedia,
+              inspectLoading: false,
+              errorMessage: formatError(err),
+            },
+          }));
+          return false;
+        }
+      }
+
       const gen = ++transcribeGenRef.current;
       setMediaSession((prev) => ({
         ...prev,
@@ -2430,9 +2508,9 @@ export function MediaSessionProvider({
 
       try {
         const inspected = await inspectTranscribeMedia(filePath);
-        if (transcribeLoadSeqRef.current !== loadId) return;
+        if (transcribeLoadSeqRef.current !== loadId) return false;
         const preview = await registerMediaPreviewPath(inspected.path).catch(() => null);
-        if (transcribeLoadSeqRef.current !== loadId) return;
+        if (transcribeLoadSeqRef.current !== loadId) return false;
         setMediaSession((prev) => {
           if (prev.transcribeMedia.sourceGeneration !== gen) return prev;
           return {
@@ -2443,12 +2521,14 @@ export function MediaSessionProvider({
               inspectLoading: false,
               inspect: inspected,
               previewUrl: preview?.url ?? null,
+              pendingIncomingPath: clearPending ? null : prev.transcribeMedia.pendingIncomingPath,
               errorMessage: inspected.hasAudio ? null : noAudioMessage,
             },
           };
         });
+        return inspected.hasAudio;
       } catch (err) {
-        if (transcribeLoadSeqRef.current !== loadId) return;
+        if (transcribeLoadSeqRef.current !== loadId) return false;
         setMediaSession((prev) => {
           if (prev.transcribeMedia.sourceGeneration !== gen) return prev;
           return {
@@ -2462,6 +2542,7 @@ export function MediaSessionProvider({
             },
           };
         });
+        return false;
       }
     },
     [],
