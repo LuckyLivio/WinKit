@@ -2419,22 +2419,13 @@ export function MediaSessionProvider({
       if (activeVideoSubtitlesTaskRef.current) return false;
       const seq = ++v02VideoSeqRef.current;
       const pairSeqAtStart = v02PairSeqRef.current;
-      const gen = ++v02GenRef.current;
-      v02PreviewSeqRef.current += 1;
+      // Preserve last valid media state while validating candidate; clear stale pair loading.
       setMediaSession((prev) => ({
         ...prev,
         videoSubtitles: {
           ...prev.videoSubtitles,
-          videoPath: filePath,
-          sourceGeneration: gen,
           loadingVideo: true,
           loadingPair: false,
-          videoProbe: null,
-          posterUrl: null,
-          previewFrame: null,
-          previewLoading: false,
-          previewError: null,
-          lastResult: null,
           errorMessage: null,
         },
       }));
@@ -2458,45 +2449,77 @@ export function MediaSessionProvider({
         ) {
           return false;
         }
-        const outPath = buildDefaultSubtitledOutputPath(filePath);
-        const commitGen = v02GenRef.current;
+        const resolvedPath = probe.path || filePath;
+        const outPath = buildDefaultSubtitledOutputPath(resolvedPath);
+        const nextGen = ++v02GenRef.current;
+        v02PreviewSeqRef.current += 1;
+        const cur = v02StateRef.current;
+        const nextCommitted: VideoSubtitlesSessionState = {
+          ...cur,
+          videoPath: resolvedPath,
+          videoProbe: probe,
+          posterUrl: poster,
+          outputPath: outPath,
+          sourceGeneration: nextGen,
+          previewFrame: null,
+          previewLoading: false,
+          previewError: null,
+          loadingVideo: false,
+          loadingPair: false,
+          lastResult: null,
+          errorMessage: null,
+        };
+        v02StateRef.current = nextCommitted;
         setMediaSession((prev) => ({
           ...prev,
           videoSubtitles: {
             ...prev.videoSubtitles,
-            videoPath: filePath,
+            videoPath: resolvedPath,
             videoProbe: probe,
             posterUrl: poster,
             outputPath: outPath,
+            sourceGeneration: nextGen,
+            previewFrame: null,
+            previewLoading: false,
+            previewError: null,
             loadingVideo: false,
+            loadingPair: false,
             lastResult: null,
             errorMessage: null,
           },
         }));
-        const cur = v02StateRef.current;
-        if (cur.subtitlePath && cur.parsedSubtitle && cur.parsedSubtitle.cues.length > 0) {
-          const firstCue = cur.parsedSubtitle.cues[0]!;
+        if (
+          nextCommitted.subtitlePath &&
+          nextCommitted.parsedSubtitle &&
+          nextCommitted.parsedSubtitle.cues.length > 0
+        ) {
+          const firstCue = nextCommitted.parsedSubtitle.cues[0]!;
           const mid = (firstCue.startSec + firstCue.endSec) / 2;
           await renderVideoSubtitlesPreview(
-            filePath,
-            cur.subtitlePath,
+            resolvedPath,
+            nextCommitted.subtitlePath,
             mid,
             {
-              fontSize: cur.fontSize,
-              position: cur.position,
-              boxStyle: cur.boxStyle,
-              marginV: cur.marginV,
+              fontSize: nextCommitted.fontSize,
+              position: nextCommitted.position,
+              boxStyle: nextCommitted.boxStyle,
+              marginV: nextCommitted.marginV,
             },
             firstCue.index,
-            commitGen,
+            nextGen,
             formatError,
           );
         }
         return true;
       } catch (err) {
-        if (v02VideoSeqRef.current !== seq || v02PairSeqRef.current !== pairSeqAtStart) {
+        if (
+          v02VideoSeqRef.current !== seq ||
+          v02PairSeqRef.current !== pairSeqAtStart ||
+          activeVideoSubtitlesTaskRef.current
+        ) {
           return false;
         }
+        // Keep last valid video, subtitle, preview, and output intact on failure.
         setMediaSession((prev) => ({
           ...prev,
           videoSubtitles: {
@@ -2516,23 +2539,14 @@ export function MediaSessionProvider({
       if (activeVideoSubtitlesTaskRef.current) return false;
       const seq = ++v02SubSeqRef.current;
       const pairSeqAtStart = v02PairSeqRef.current;
-      const gen = ++v02GenRef.current;
-      v02PreviewSeqRef.current += 1;
+      // Preserve last valid subtitle & preview while parsing candidate; clear stale pair loading.
       setMediaSession((prev) => ({
         ...prev,
         videoSubtitles: {
           ...prev.videoSubtitles,
-          subtitlePath: filePath,
-          sourceGeneration: gen,
           loadingSubtitle: true,
           loadingPair: false,
-          parsedSubtitle: null,
           subtitleParseError: null,
-          selectedCueIndex: null,
-          previewFrame: null,
-          previewLoading: false,
-          previewError: null,
-          lastResult: null,
         },
       }));
       try {
@@ -2544,48 +2558,76 @@ export function MediaSessionProvider({
         ) {
           return false;
         }
+        const resolvedSubPath = parsed.path || filePath;
         const firstCue = parsed.cues[0] ?? null;
         const mid = firstCue ? (firstCue.startSec + firstCue.endSec) / 2 : 0;
-        const commitGen = v02GenRef.current;
+        const nextGen = ++v02GenRef.current;
+        v02PreviewSeqRef.current += 1;
+        const cur = v02StateRef.current;
+        const nextCommitted: VideoSubtitlesSessionState = {
+          ...cur,
+          subtitlePath: resolvedSubPath,
+          parsedSubtitle: parsed,
+          subtitleParseError: null,
+          selectedCueIndex: firstCue?.index ?? null,
+          previewTimestampSec: mid,
+          previewFrame: null,
+          previewLoading: false,
+          previewError: null,
+          sourceGeneration: nextGen,
+          loadingSubtitle: false,
+          loadingPair: false,
+          lastResult: null,
+        };
+        v02StateRef.current = nextCommitted;
         setMediaSession((prev) => ({
           ...prev,
           videoSubtitles: {
             ...prev.videoSubtitles,
-            subtitlePath: filePath,
+            subtitlePath: resolvedSubPath,
             parsedSubtitle: parsed,
             subtitleParseError: null,
             selectedCueIndex: firstCue?.index ?? null,
             previewTimestampSec: mid,
+            previewFrame: null,
+            previewLoading: false,
+            previewError: null,
+            sourceGeneration: nextGen,
             loadingSubtitle: false,
+            loadingPair: false,
+            lastResult: null,
           },
         }));
-        const cur = v02StateRef.current;
-        if (cur.videoPath && cur.videoProbe?.hasVideo && firstCue) {
+        if (nextCommitted.videoPath && nextCommitted.videoProbe?.hasVideo && firstCue) {
           await renderVideoSubtitlesPreview(
-            cur.videoPath,
-            filePath,
+            nextCommitted.videoPath,
+            resolvedSubPath,
             mid,
             {
-              fontSize: cur.fontSize,
-              position: cur.position,
-              boxStyle: cur.boxStyle,
-              marginV: cur.marginV,
+              fontSize: nextCommitted.fontSize,
+              position: nextCommitted.position,
+              boxStyle: nextCommitted.boxStyle,
+              marginV: nextCommitted.marginV,
             },
             firstCue.index,
-            commitGen,
+            nextGen,
             formatError,
           );
         }
         return true;
       } catch (err) {
-        if (v02SubSeqRef.current !== seq || v02PairSeqRef.current !== pairSeqAtStart) {
+        if (
+          v02SubSeqRef.current !== seq ||
+          v02PairSeqRef.current !== pairSeqAtStart ||
+          activeVideoSubtitlesTaskRef.current
+        ) {
           return false;
         }
+        // Keep last valid subtitle & preview intact on parse failure.
         setMediaSession((prev) => ({
           ...prev,
           videoSubtitles: {
             ...prev.videoSubtitles,
-            parsedSubtitle: null,
             loadingSubtitle: false,
             subtitleParseError: formatError(err),
           },
@@ -2618,13 +2660,17 @@ export function MediaSessionProvider({
       const videoSeqAtStart = v02VideoSeqRef.current;
       const subSeqAtStart = v02SubSeqRef.current;
 
-      // Validate BOTH video & subtitle before mutating existing V02 state.
+      // Pair handoff supersedes any in-flight manual video/subtitle check, so it owns
+      // clearing stale loadingVideo/loadingSubtitle flags while keeping last valid assets intact.
       setMediaSession((prev) => ({
         ...prev,
         videoSubtitles: {
           ...prev.videoSubtitles,
+          loadingVideo: false,
+          loadingSubtitle: false,
           loadingPair: true,
           errorMessage: null,
+          subtitleParseError: null,
         },
       }));
 
@@ -2646,12 +2692,6 @@ export function MediaSessionProvider({
           v02SubSeqRef.current !== subSeqAtStart ||
           activeVideoSubtitlesTaskRef.current
         ) {
-          if (v02PairSeqRef.current === pairSeq) {
-            setMediaSession((prev) => ({
-              ...prev,
-              videoSubtitles: { ...prev.videoSubtitles, loadingPair: false },
-            }));
-          }
           return false;
         }
 
@@ -2663,6 +2703,30 @@ export function MediaSessionProvider({
         const mid = firstCue ? (firstCue.startSec + firstCue.endSec) / 2 : 0;
         const outPath = buildDefaultSubtitledOutputPath(resolvedVideoPath);
 
+        const cur = v02StateRef.current;
+        const nextCommitted: VideoSubtitlesSessionState = {
+          ...cur,
+          videoPath: resolvedVideoPath,
+          videoProbe: probe,
+          posterUrl: poster,
+          subtitlePath: resolvedSubPath,
+          parsedSubtitle: parsed,
+          subtitleParseError: null,
+          selectedCueIndex: firstCue?.index ?? null,
+          previewTimestampSec: mid,
+          previewFrame: null,
+          previewLoading: false,
+          previewError: null,
+          outputPath: outPath,
+          sourceGeneration: nextGen,
+          loadingVideo: false,
+          loadingSubtitle: false,
+          loadingPair: false,
+          pendingPairHandoff: options?.clearPendingOnSuccess ? null : cur.pendingPairHandoff,
+          lastResult: null,
+          errorMessage: null,
+        };
+        v02StateRef.current = nextCommitted;
         setMediaSession((prev) => ({
           ...prev,
           videoSubtitles: {
@@ -2692,16 +2756,15 @@ export function MediaSessionProvider({
         }));
 
         if (firstCue) {
-          const cur = v02StateRef.current;
           await renderVideoSubtitlesPreview(
             resolvedVideoPath,
             resolvedSubPath,
             mid,
             {
-              fontSize: cur.fontSize,
-              position: cur.position,
-              boxStyle: cur.boxStyle,
-              marginV: cur.marginV,
+              fontSize: nextCommitted.fontSize,
+              position: nextCommitted.position,
+              boxStyle: nextCommitted.boxStyle,
+              marginV: nextCommitted.marginV,
             },
             firstCue.index,
             nextGen,
@@ -2713,15 +2776,18 @@ export function MediaSessionProvider({
         if (
           v02PairSeqRef.current !== pairSeq ||
           v02VideoSeqRef.current !== videoSeqAtStart ||
-          v02SubSeqRef.current !== subSeqAtStart
+          v02SubSeqRef.current !== subSeqAtStart ||
+          activeVideoSubtitlesTaskRef.current
         ) {
           return false;
         }
-        // Keep previous V02 video, subtitle, preview, and output intact on validation failure!
+        // Restore last valid V02 video, subtitle, preview, and output intact and clear all loading flags.
         setMediaSession((prev) => ({
           ...prev,
           videoSubtitles: {
             ...prev.videoSubtitles,
+            loadingVideo: false,
+            loadingSubtitle: false,
             loadingPair: false,
             errorMessage: formatError(err),
           },
@@ -2740,10 +2806,14 @@ export function MediaSessionProvider({
       if (activeVideoSubtitlesTaskRef.current) return { result: null, errorCode: null };
       const taskId = `v02-sub-${Date.now()}-${taskSeqRef.current++}`;
       activeVideoSubtitlesTaskRef.current = taskId;
+      v02PairSeqRef.current += 1;
       setMediaSession((prev) => ({
         ...prev,
         videoSubtitles: {
           ...prev.videoSubtitles,
+          loadingVideo: false,
+          loadingSubtitle: false,
+          loadingPair: false,
           taskStatus: "running",
           activeTaskId: taskId,
           liveProgress: {

@@ -105,12 +105,15 @@ export function VideoSubtitlesWorkspace() {
     [state.fontSize, state.position, state.boxStyle, state.marginV],
   );
 
-  // Invalidate any pending overwrite confirmation if inputs, target path, style, or run state change.
+  // Invalidate any pending overwrite confirmation if inputs, target path, style, or load/run state change.
   useEffect(() => {
     setPendingOverwrite((pending) => {
       if (!pending) return null;
       if (
         running ||
+        loadingVideo ||
+        loadingSubtitle ||
+        loadingPair ||
         pending.sourceGeneration !== state.sourceGeneration ||
         pending.videoPath !== state.videoPath ||
         pending.subtitlePath !== state.subtitlePath ||
@@ -126,6 +129,9 @@ export function VideoSubtitlesWorkspace() {
     });
   }, [
     running,
+    loadingVideo,
+    loadingSubtitle,
+    loadingPair,
     state.sourceGeneration,
     state.videoPath,
     state.subtitlePath,
@@ -740,14 +746,11 @@ export function VideoSubtitlesWorkspace() {
                     ? isZh
                       ? "正在校验视频与字幕…"
                       : "Validating video & subtitles..."
-                    : (state.videoProbe?.fileName ??
-                      (loadingVideo
-                        ? isZh
-                          ? "读取中…"
-                          : "Loading..."
-                        : isZh
-                          ? "未选择"
-                          : "None"))}
+                    : loadingVideo
+                      ? isZh
+                        ? "读取中…"
+                        : "Loading..."
+                      : (state.videoProbe?.fileName ?? (isZh ? "未选择" : "None"))}
                 </span>
               </div>
               <div style={{ fontSize: "12px" }}>
@@ -761,12 +764,12 @@ export function VideoSubtitlesWorkspace() {
                     ? isZh
                       ? "正在校验视频与字幕…"
                       : "Validating video & subtitles..."
-                    : state.parsedSubtitle
-                      ? `${state.parsedSubtitle.fileName} (${state.parsedSubtitle.cueCount} ${isZh ? "条" : "cues"})`
-                      : loadingSubtitle
-                        ? isZh
-                          ? "解析中…"
-                          : "Parsing..."
+                    : loadingSubtitle
+                      ? isZh
+                        ? "解析中…"
+                        : "Parsing..."
+                      : state.parsedSubtitle
+                        ? `${state.parsedSubtitle.fileName} (${state.parsedSubtitle.cueCount} ${isZh ? "条" : "cues"})`
                         : isZh
                           ? "未导入 (.srt / .vtt)"
                           : "None (.srt / .vtt)"}

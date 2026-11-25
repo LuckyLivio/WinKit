@@ -860,4 +860,306 @@ describe("VideoSubtitlesWorkspace (V02)", () => {
     );
     expect(screen.getByTestId("v02-video-name")).toHaveTextContent("newer_c.mp4");
   });
+
+  it("clears loadingVideo and loadingSubtitle and restores last valid media when a slow manual import is superseded by a failing pair handoff", async () => {
+    const user = userEvent.setup();
+    let resolveSlowManualVideo!: (probe: tauriBridge.MediaProbeReport) => void;
+    let resolveSlowManualSub!: (parsed: tauriBridge.ParsedSubtitleFile) => void;
+
+    vi.mocked(tauriBridge.pickSingleFile)
+      .mockResolvedValueOnce("C:\\Videos\\valid_a.mp4") // V02 initial valid video
+      .mockResolvedValueOnce("C:\\Videos\\valid_a.srt") // V02 initial valid subtitle
+      .mockResolvedValueOnce("C:\\Videos\\slow_manual.mp4") // V02 slow manual video
+      .mockResolvedValueOnce("C:\\Videos\\bad_pair_1.mp4") // T01 pick for failing pair #1
+      .mockResolvedValueOnce("C:\\Videos\\slow_manual.srt") // V02 slow manual subtitle
+      .mockResolvedValueOnce("C:\\Videos\\bad_pair_2.mp4"); // T01 pick for failing pair #2
+
+    vi.mocked(tauriBridge.probeMediaInfo).mockImplementation(async (path) => {
+      if (path.includes("slow_manual")) {
+        return new Promise((resolve) => {
+          resolveSlowManualVideo = resolve;
+        });
+      }
+      if (path.includes("valid_a")) {
+        return makeVideoProbe("C:\\Videos\\valid_a.mp4", "valid_a.mp4");
+      }
+      return makeVideoProbe(path, path.split("\\").pop() ?? "video.mp4");
+    });
+
+    vi.mocked(tauriBridge.parseSubtitleFile).mockImplementation(async (path) => {
+      if (path.includes("slow_manual")) {
+        return new Promise((resolve) => {
+          resolveSlowManualSub = resolve;
+        });
+      }
+      if (path.includes("bad_pair")) {
+        throw { code: "INVALID_SUBTITLE", message: "字幕交接文件已失效" };
+      }
+      return makeParsedSubtitle("C:\\Videos\\valid_a.srt", "valid_a.srt", "srt", [
+        { index: 1, startSec: 1.0, endSec: 2.5, text: "有效字幕 A", sourceLine: 2 },
+      ]);
+    });
+
+    vi.mocked(tauriBridge.previewBurnedSubtitleFrame).mockResolvedValue({
+      dataUrl: "data:image/jpeg;base64,VALIDA",
+      timestampSec: 1.75,
+      activeCueIndices: [1],
+      displayWidth: 1280,
+      displayHeight: 720,
+    });
+
+    vi.mocked(tauriBridge.inspectTranscribeMedia).mockImplementation(async (path) =>
+      makeVideoInspect(path, path.split("\\").pop() ?? "bad.mp4"),
+    );
+    vi.mocked(tauriBridge.transcribeMedia).mockImplementation(async (_tid, req) =>
+      makeTranscribeResult(req.inputPath, req.inputPath.split("\\").pop() ?? "bad.mp4", [
+        { id: 1, startSec: 0.5, endSec: 2.0, text: "临时字幕", language: "zh" },
+      ]),
+    );
+    vi.mocked(tauriBridge.pickSaveFilePath)
+      .mockResolvedValueOnce("C:\\Videos\\bad_pair_1.srt")
+      .mockResolvedValueOnce("C:\\Videos\\bad_pair_2.srt");
+    vi.mocked(tauriBridge.exportTranscriptFile).mockImplementation(async (req) => ({
+      outputPath: req.outputPath,
+      format: "srt",
+      segmentCount: 1,
+      byteSize: 42,
+    }));
+
+    render(<CrossToolV02T01Harness />);
+
+    // 1. Establish valid last-known state: valid_a.mp4 + valid_a.srt
+    await user.click(screen.getAllByRole("button", { name: /选择视频/ })[0]!);
+    await waitFor(() =>
+      expect(screen.getByTestId("v02-video-name")).toHaveTextContent("valid_a.mp4"),
+    );
+    await user.click(screen.getByRole("button", { name: /导入字幕/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId("v02-subtitle-name")).toHaveTextContent("valid_a.srt"),
+    );
+    expect(screen.getByRole("button", { name: /烧录硬字幕并导出/ })).not.toBeDisabled();
+
+    // 2. Start slow manual video import -> loadingVideo becomes true
+    await user.click(screen.getByRole("button", { name: /更换视频/ }));
+    await waitFor(() => expect(screen.getByTestId("v02-video-name")).toHaveTextContent("读取中…"));
+    expect(screen.getByRole("button", { name: /烧录硬字幕并导出/ })).toBeDisabled();
+
+    // 3. While slow manual video is still pending, send an invalid pair handoff from T01
+    await user.click(screen.getByTestId("switch-t01"));
+    await user.click(screen.getByTestId("t01-dropzone"));
+    await waitFor(() =>
+      expect(screen.getByTestId("t01-source-meta")).toHaveTextContent("bad_pair_1.mp4"),
+    );
+    await user.click(screen.getByTestId("t01-start-btn"));
+    await waitFor(() => expect(screen.getByDisplayValue("临时字幕")).toBeInTheDocument());
+    await user.click(screen.getByTestId("t01-export-srt-btn"));
+    await waitFor(() => expect(screen.getByTestId("t01-apply-v02-btn")).toBeInTheDocument());
+    await user.click(screen.getByTestId("t01-apply-v02-btn"));
+
+    // 4. Pair handoff fails -> loadingVideo and loadingPair MUST both clear, last valid valid_a restored, UI operable!
+    await waitFor(() => expect(screen.getByTestId("active-tool")).toHaveTextContent("V02"));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("字幕交接文件已失效"));
+    expect(screen.getByTestId("v02-video-name")).toHaveTextContent("valid_a.mp4");
+    expect(screen.getByTestId("v02-subtitle-name")).toHaveTextContent("valid_a.srt");
+    expect(screen.getByRole("button", { name: /烧录硬字幕并导出/ })).not.toBeDisabled();
+    expect(screen.getByTestId("v02-generate-subtitles-btn")).not.toBeDisabled();
+
+    // Late resolution of superseded slow_manual.mp4 must NOT overwrite valid_a.mp4
+    await act(async () => {
+      resolveSlowManualVideo(makeVideoProbe("C:\\Videos\\slow_manual.mp4", "slow_manual.mp4"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByTestId("v02-video-name")).toHaveTextContent("valid_a.mp4");
+
+    // 5. Repeat with slow manual subtitle import -> superseded by failing pair handoff -> loadingSubtitle clears!
+    await user.click(screen.getByRole("button", { name: /更换字幕/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId("v02-subtitle-name")).toHaveTextContent("解析中…"),
+    );
+    expect(screen.getByRole("button", { name: /烧录硬字幕并导出/ })).toBeDisabled();
+
+    await user.click(screen.getByTestId("switch-t01"));
+    await user.click(screen.getByTestId("t01-dropzone"));
+    await waitFor(() =>
+      expect(screen.getByTestId("t01-source-meta")).toHaveTextContent("bad_pair_2.mp4"),
+    );
+    await user.click(screen.getByTestId("t01-start-btn"));
+    await waitFor(() => expect(screen.getByDisplayValue("临时字幕")).toBeInTheDocument());
+    await user.click(screen.getByTestId("t01-export-srt-btn"));
+    await waitFor(() => expect(screen.getByTestId("t01-apply-v02-btn")).toBeInTheDocument());
+    await user.click(screen.getByTestId("t01-apply-v02-btn"));
+
+    await waitFor(() => expect(screen.getByTestId("active-tool")).toHaveTextContent("V02"));
+    await waitFor(() =>
+      expect(screen.getByTestId("v02-subtitle-name")).toHaveTextContent("valid_a.srt"),
+    );
+    expect(screen.getByRole("button", { name: /烧录硬字幕并导出/ })).not.toBeDisabled();
+
+    // Late resolution of superseded slow_manual.srt must NOT overwrite valid_a.srt
+    await act(async () => {
+      resolveSlowManualSub(
+        makeParsedSubtitle("C:\\Videos\\slow_manual.srt", "slow_manual.srt", "srt", [
+          { index: 1, startSec: 0.1, endSec: 0.5, text: "迟到的旧字幕", sourceLine: 2 },
+        ]),
+      );
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByTestId("v02-subtitle-name")).toHaveTextContent("valid_a.srt");
+    expect(screen.queryByText("迟到的旧字幕")).not.toBeInTheDocument();
+  });
+
+  it("never lets an earlier request overwrite a later selection regardless of which request settles first", async () => {
+    const user = userEvent.setup();
+    let resolveEarlier1!: (probe: tauriBridge.MediaProbeReport) => void;
+    let resolveLater1!: (probe: tauriBridge.MediaProbeReport) => void;
+    let resolveEarlier2!: (probe: tauriBridge.MediaProbeReport) => void;
+    let resolveLater2!: (probe: tauriBridge.MediaProbeReport) => void;
+
+    vi.mocked(tauriBridge.pickSingleFile)
+      .mockResolvedValueOnce("C:\\Videos\\early_1.mp4")
+      .mockResolvedValueOnce("C:\\Videos\\later_1.mp4")
+      .mockResolvedValueOnce("C:\\Videos\\early_2.mp4")
+      .mockResolvedValueOnce("C:\\Videos\\later_2.mp4");
+
+    vi.mocked(tauriBridge.probeMediaInfo).mockImplementation(async (path) => {
+      if (path.includes("early_1")) {
+        return new Promise((resolve) => {
+          resolveEarlier1 = resolve;
+        });
+      }
+      if (path.includes("later_1")) {
+        return new Promise((resolve) => {
+          resolveLater1 = resolve;
+        });
+      }
+      if (path.includes("early_2")) {
+        return new Promise((resolve) => {
+          resolveEarlier2 = resolve;
+        });
+      }
+      return new Promise((resolve) => {
+        resolveLater2 = resolve;
+      });
+    });
+
+    renderWorkspace();
+
+    // Order A: earlier_1 starts -> later_1 starts -> earlier_1 settles FIRST, later_1 settles SECOND
+    await user.click(screen.getAllByRole("button", { name: /选择视频/ })[0]!);
+    await waitFor(() => expect(screen.getByTestId("v02-video-name")).toHaveTextContent("读取中…"));
+    await user.click(screen.getAllByRole("button", { name: /选择视频/ })[0]!);
+
+    await act(async () => {
+      resolveEarlier1(makeVideoProbe("C:\\Videos\\early_1.mp4", "early_1.mp4"));
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    // Superseded early_1 must NOT commit or clear loading while later_1 is still pending
+    expect(screen.getByTestId("v02-video-name")).toHaveTextContent("读取中…");
+
+    await act(async () => {
+      resolveLater1(makeVideoProbe("C:\\Videos\\later_1.mp4", "later_1.mp4"));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("v02-video-name")).toHaveTextContent("later_1.mp4"),
+    );
+
+    // Order B: early_2 starts -> later_2 starts -> later_2 settles FIRST, early_2 settles SECOND
+    await user.click(screen.getByRole("button", { name: /更换视频/ }));
+    await waitFor(() => expect(screen.getByTestId("v02-video-name")).toHaveTextContent("读取中…"));
+    await user.click(screen.getByRole("button", { name: /更换视频/ }));
+
+    await act(async () => {
+      resolveLater2(makeVideoProbe("C:\\Videos\\later_2.mp4", "later_2.mp4"));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("v02-video-name")).toHaveTextContent("later_2.mp4"),
+    );
+
+    await act(async () => {
+      resolveEarlier2(makeVideoProbe("C:\\Videos\\early_2.mp4", "early_2.mp4"));
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("v02-video-name")).toHaveTextContent("later_2.mp4");
+  });
+
+  it("never lets a superseded slow pair handoff commit or prematurely clear loadingVideo when the pair settles before a newer manual video", async () => {
+    const user = userEvent.setup();
+    let resolveSlowPairProbe!: (probe: tauriBridge.MediaProbeReport) => void;
+    let resolveNewerManualProbe!: (probe: tauriBridge.MediaProbeReport) => void;
+
+    vi.mocked(tauriBridge.pickSingleFile)
+      .mockResolvedValueOnce("C:\\Videos\\pair_first.mp4") // T01 pick for slow pair
+      .mockResolvedValueOnce("C:\\Videos\\manual_newer.mp4"); // V02 newer manual video
+
+    vi.mocked(tauriBridge.inspectTranscribeMedia).mockResolvedValue(
+      makeVideoInspect("C:\\Videos\\pair_first.mp4", "pair_first.mp4"),
+    );
+    vi.mocked(tauriBridge.transcribeMedia).mockResolvedValue(
+      makeTranscribeResult("C:\\Videos\\pair_first.mp4", "pair_first.mp4", [
+        { id: 1, startSec: 0.5, endSec: 2.0, text: "旧交接字幕", language: "zh" },
+      ]),
+    );
+    vi.mocked(tauriBridge.pickSaveFilePath).mockResolvedValue("C:\\Videos\\pair_first.srt");
+    vi.mocked(tauriBridge.exportTranscriptFile).mockResolvedValue({
+      outputPath: "C:\\Videos\\pair_first.srt",
+      format: "srt",
+      segmentCount: 1,
+      byteSize: 40,
+    });
+    vi.mocked(tauriBridge.parseSubtitleFile).mockResolvedValue(
+      makeParsedSubtitle("C:\\Videos\\pair_first.srt", "pair_first.srt", "srt", [
+        { index: 1, startSec: 0.5, endSec: 2.0, text: "旧交接字幕", sourceLine: 2 },
+      ]),
+    );
+    vi.mocked(tauriBridge.probeMediaInfo).mockImplementation(async (path) => {
+      if (path.includes("pair_first")) {
+        return new Promise((resolve) => {
+          resolveSlowPairProbe = resolve;
+        });
+      }
+      return new Promise((resolve) => {
+        resolveNewerManualProbe = resolve;
+      });
+    });
+
+    render(<CrossToolV02T01Harness />);
+
+    // 1. Trigger slow pair handoff from T01
+    await user.click(screen.getByTestId("switch-t01"));
+    await user.click(screen.getByTestId("t01-dropzone"));
+    await waitFor(() =>
+      expect(screen.getByTestId("t01-source-meta")).toHaveTextContent("pair_first.mp4"),
+    );
+    await user.click(screen.getByTestId("t01-start-btn"));
+    await waitFor(() => expect(screen.getByDisplayValue("旧交接字幕")).toBeInTheDocument());
+    await user.click(screen.getByTestId("t01-export-srt-btn"));
+    await waitFor(() => expect(screen.getByTestId("t01-apply-v02-btn")).toBeInTheDocument());
+    await user.click(screen.getByTestId("t01-apply-v02-btn"));
+
+    await waitFor(() => expect(screen.getByTestId("active-tool")).toHaveTextContent("V02"));
+    await waitFor(() =>
+      expect(screen.getByTestId("v02-video-name")).toHaveTextContent("正在校验视频与字幕"),
+    );
+
+    // 2. While pair is pending, user manually picks manual_newer.mp4
+    await user.click(screen.getAllByRole("button", { name: /选择视频/ })[0]!);
+    await waitFor(() => expect(screen.getByTestId("v02-video-name")).toHaveTextContent("读取中…"));
+
+    // 3. Earlier pair resolves FIRST -> must be discarded and must NOT clear loadingVideo
+    await act(async () => {
+      resolveSlowPairProbe(makeVideoProbe("C:\\Videos\\pair_first.mp4", "pair_first.mp4"));
+    });
+    await new Promise((r) => setTimeout(r, 25));
+    expect(screen.getByTestId("v02-video-name")).toHaveTextContent("读取中…");
+    expect(screen.queryByText("旧交接字幕")).not.toBeInTheDocument();
+
+    // 4. Newer manual video resolves SECOND -> commits manual_newer.mp4 cleanly!
+    await act(async () => {
+      resolveNewerManualProbe(makeVideoProbe("C:\\Videos\\manual_newer.mp4", "manual_newer.mp4"));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("v02-video-name")).toHaveTextContent("manual_newer.mp4"),
+    );
+    expect(screen.queryByText("旧交接字幕")).not.toBeInTheDocument();
+  });
 });

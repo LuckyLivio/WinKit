@@ -16,7 +16,7 @@ use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder, SamplingF
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{self, BufReader, Cursor, Read, Write};
+use std::io::{BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -1425,30 +1425,7 @@ pub fn encode_bmp_bytes(img: &DynamicImage, bg: [u8; 3]) -> Result<Vec<u8>, AppE
 }
 
 fn move_file_no_overwrite(from: &Path, to: &Path) -> Result<(), AppError> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
-
-        let from_w: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
-        let to_w: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-        let ok = unsafe { MoveFileExW(from_w.as_ptr(), to_w.as_ptr(), 0) };
-        if ok == 0 {
-            let io_err = io::Error::last_os_error();
-            if matches!(io_err.raw_os_error(), Some(80) | Some(183)) {
-                return Err(AppError::target_exists());
-            }
-            return Err(AppError::from_io(io_err, "Failed committing output image"));
-        }
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        if fs::symlink_metadata(to).is_ok() {
-            return Err(AppError::target_exists());
-        }
-        fs::rename(from, to).map_err(|e| AppError::from_io(e, "Failed committing output image"))
-    }
+    crate::fs_guard::commit_temp_file(from, to, false, "Failed committing output image")
 }
 
 /// Atomically writes bytes to a brand-new non-colliding file in `output_dir`.
