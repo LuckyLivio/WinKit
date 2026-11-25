@@ -231,6 +231,16 @@ impl MattingResultStore {
             guard.clear();
         }
     }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.inner.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub fn next_matting_result_id() -> String {
@@ -364,6 +374,20 @@ pub fn apply_predicted_matte_to_rgba(
     source: &RgbaImage,
     mask512: &[u8],
 ) -> Result<(RgbaImage, MattingAlphaStats), AppError> {
+    apply_predicted_matte_to_rgba_cancellable(source, mask512, None)
+}
+
+pub fn apply_predicted_matte_to_rgba_cancellable(
+    source: &RgbaImage,
+    mask512: &[u8],
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(RgbaImage, MattingAlphaStats), AppError> {
+    if cancel_flag
+        .map(|f| f.load(Ordering::Relaxed))
+        .unwrap_or(false)
+    {
+        return Err(AppError::cancelled());
+    }
     if mask512.len() != MATTING_MASK512_BYTES {
         return Err(AppError::invalid_param(format!(
             "Invalid predicted matte length: expected {MATTING_MASK512_BYTES}, got {}.",
@@ -386,6 +410,12 @@ pub fn apply_predicted_matte_to_rgba(
     } else {
         image::imageops::resize(&mask_gray, w, h, FilterType::Triangle)
     };
+    if cancel_flag
+        .map(|f| f.load(Ordering::Relaxed))
+        .unwrap_or(false)
+    {
+        return Err(AppError::cancelled());
+    }
 
     let src_raw = source.as_raw();
     let mask_raw = full_mask.as_raw();
@@ -402,6 +432,13 @@ pub fn apply_predicted_matte_to_rgba(
     let mut preserved_source_alpha = false;
 
     for y in 0..h {
+        if (y & 15) == 0
+            && cancel_flag
+                .map(|f| f.load(Ordering::Relaxed))
+                .unwrap_or(false)
+        {
+            return Err(AppError::cancelled());
+        }
         let row_base = (y as usize) * (w as usize);
         for x in 0..w {
             let idx = row_base + (x as usize);

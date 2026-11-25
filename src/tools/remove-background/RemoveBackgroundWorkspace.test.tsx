@@ -329,4 +329,234 @@ describe("RemoveBackgroundWorkspace (I04)", () => {
     });
     expect(screen.getByTestId("i04-crop-toggle")).toBeChecked();
   });
+
+  it("ignores late image A inspection after switching away, returning, loading B, and starting matting B", async () => {
+    const user = userEvent.setup();
+    vi.mocked(bridge.getMattingModelStatus).mockResolvedValue(READY_STATUS);
+
+    let resolveInspectA!: (
+      value: Awaited<ReturnType<typeof bridge.inspectBeautifierSourceImage>>,
+    ) => void;
+    vi.mocked(bridge.pickSingleFile)
+      .mockResolvedValueOnce("C:\\Photos\\slow_a.jpg")
+      .mockResolvedValueOnce("C:\\Photos\\fast_b.png");
+    vi.mocked(bridge.inspectBeautifierSourceImage)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInspectA = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        path: "C:\\Photos\\fast_b.png",
+        fileName: "fast_b.png",
+        width: 640,
+        height: 480,
+        hasAlpha: true,
+        previewDataUrl: "data:image/png;base64,origB",
+      });
+
+    let resolveMattingB!: (value: RemoveBackgroundResult) => void;
+    vi.mocked(bridge.removeImageBackground).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMattingB = resolve;
+        }),
+    );
+
+    const renderView = (showTool: boolean) => (
+      <I18nContext.Provider value={{ locale: "zh-CN", t: MESSAGES["zh-CN"], setLocale: () => {} }}>
+        <SessionStoreProvider>
+          {showTool ? <RemoveBackgroundWorkspace /> : <div>Other Tool</div>}
+        </SessionStoreProvider>
+      </I18nContext.Provider>
+    );
+
+    const { rerender } = render(renderView(true));
+    await waitFor(() => {
+      expect(screen.getByTestId("matting-model-compact-bar")).toBeInTheDocument();
+    });
+
+    // 1. Begin loading slow image A (inspection remains pending)
+    await user.click(screen.getByTestId("i04-pick-image-btn"));
+    await waitFor(() => {
+      expect(bridge.inspectBeautifierSourceImage).toHaveBeenCalledWith("C:\\Photos\\slow_a.jpg");
+    });
+
+    // 2. Navigate away (unmount I04) and return (remount I04)
+    rerender(renderView(false));
+    expect(screen.getByText("Other Tool")).toBeInTheDocument();
+    rerender(renderView(true));
+    await waitFor(() => {
+      expect(screen.getByTestId("matting-model-compact-bar")).toBeInTheDocument();
+    });
+
+    // 3. Load image B and start matting B
+    await user.click(screen.getByTestId("i04-pick-image-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("i04-meta-strip")).toHaveTextContent("fast_b.png");
+      expect(screen.getByTestId("i04-start-btn")).toBeEnabled();
+    });
+    await user.click(screen.getByTestId("i04-start-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("i04-cancel-btn")).toBeInTheDocument();
+    });
+
+    // 4. Slow image A finally resolves late — must NOT cancel B or overwrite B's source/task
+    resolveInspectA({
+      path: "C:\\Photos\\slow_a.jpg",
+      fileName: "slow_a.jpg",
+      width: 1200,
+      height: 1600,
+      hasAlpha: false,
+      previewDataUrl: "data:image/jpeg;base64,origA",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("i04-cancel-btn")).toBeInTheDocument();
+    });
+    expect(bridge.cancelBackendTask).not.toHaveBeenCalled();
+    expect(screen.getByTestId("i04-meta-strip")).toHaveTextContent("fast_b.png");
+    expect(screen.getByTestId("i04-meta-strip")).not.toHaveTextContent("slow_a.jpg");
+
+    // 5. Matting B finishes and owns the final result
+    resolveMattingB({
+      ...SAMPLE_RESULT,
+      resultId: "matting-B",
+      fileName: "fast_b.png",
+      sourcePath: "C:\\Photos\\fast_b.png",
+      width: 640,
+      height: 480,
+      rawWidth: 640,
+      rawHeight: 480,
+      exifOrientation: 1,
+      sourceHasAlpha: true,
+      preservedSourceAlpha: true,
+      originalPreviewDataUrl: "data:image/png;base64,origB",
+      cutoutPreviewDataUrl: "data:image/png;base64,cutoutB",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("i04-split-slider")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("i04-meta-strip")).toHaveTextContent("fast_b.png");
+    expect(screen.getByTestId("i04-output-dims")).toHaveTextContent("640 × 480");
+    expect(bridge.cancelBackendTask).not.toHaveBeenCalled();
+  });
+
+  it("suppresses stale export TARGET_ALREADY_EXISTS and save-dialog completion when switching images or changing settings", async () => {
+    const user = userEvent.setup();
+    vi.mocked(bridge.getMattingModelStatus).mockResolvedValue(READY_STATUS);
+    vi.mocked(bridge.pickSingleFile)
+      .mockResolvedValueOnce("C:\\Photos\\image_a.jpg")
+      .mockResolvedValueOnce("C:\\Photos\\image_b.png");
+    vi.mocked(bridge.inspectBeautifierSourceImage)
+      .mockResolvedValueOnce({
+        path: "C:\\Photos\\image_a.jpg",
+        fileName: "image_a.jpg",
+        width: 1200,
+        height: 1600,
+        hasAlpha: false,
+        previewDataUrl: "data:image/jpeg;base64,origA",
+      })
+      .mockResolvedValueOnce({
+        path: "C:\\Photos\\image_b.png",
+        fileName: "image_b.png",
+        width: 500,
+        height: 500,
+        hasAlpha: false,
+        previewDataUrl: "data:image/png;base64,origB",
+      });
+    vi.mocked(bridge.removeImageBackground)
+      .mockResolvedValueOnce({
+        ...SAMPLE_RESULT,
+        resultId: "matting-A",
+        fileName: "image_a.jpg",
+        sourcePath: "C:\\Photos\\image_a.jpg",
+      })
+      .mockResolvedValueOnce({
+        ...SAMPLE_RESULT,
+        resultId: "matting-B",
+        fileName: "image_b.png",
+        sourcePath: "C:\\Photos\\image_b.png",
+        width: 500,
+        height: 500,
+        rawWidth: 500,
+        rawHeight: 500,
+      });
+    vi.mocked(bridge.suggestSafeSiblingPath).mockResolvedValue("C:\\Photos\\out.png");
+
+    // Case 1: Settings change while save dialog is still open -> backend export is never called
+    let resolveSaveDialog!: (value: string | null) => void;
+    vi.mocked(bridge.pickSaveFilePath)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSaveDialog = resolve;
+          }),
+      )
+      .mockResolvedValueOnce("C:\\Photos\\existing_target.png")
+      .mockResolvedValueOnce("C:\\Photos\\existing_b.png");
+
+    let rejectExportA!: (reason?: unknown) => void;
+    let rejectExportA2!: (reason?: unknown) => void;
+    vi.mocked(bridge.exportMattingResult)
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectExportA = reject;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectExportA2 = reject;
+          }),
+      );
+
+    renderWorkspace();
+    await waitFor(() => {
+      expect(screen.getByTestId("matting-model-compact-bar")).toBeInTheDocument();
+    });
+
+    // Load & run A
+    await user.click(screen.getByTestId("i04-pick-image-btn"));
+    await waitFor(() => expect(screen.getByTestId("i04-start-btn")).toBeEnabled());
+    await user.click(screen.getByTestId("i04-start-btn"));
+    await waitFor(() => expect(screen.getByTestId("i04-export-btn")).toBeEnabled());
+
+    // Start export while save dialog stays pending, then toggle tight crop
+    await user.click(screen.getByTestId("i04-export-btn"));
+    await waitFor(() => expect(bridge.pickSaveFilePath).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByTestId("i04-crop-toggle"));
+    resolveSaveDialog("C:\\Photos\\stale_after_dialog.png");
+    await waitFor(() => {
+      expect(screen.getByTestId("i04-crop-toggle")).toBeChecked();
+    });
+    expect(bridge.exportMattingResult).not.toHaveBeenCalled();
+
+    // Case 2: Settings change while export A is awaiting backend TARGET_ALREADY_EXISTS
+    await user.click(screen.getByTestId("i04-export-btn"));
+    await waitFor(() => expect(bridge.exportMattingResult).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByTestId("i04-bg-solid"));
+    rejectExportA({ code: "TARGET_ALREADY_EXISTS", message: "Target exists" });
+    await waitFor(() => {
+      expect(screen.getByTestId("i04-fmt-jpeg")).toBeEnabled();
+    });
+    expect(screen.queryByText("覆盖已存在的文件？")).not.toBeInTheDocument();
+
+    // Case 3: Switch from A to B while export A is awaiting backend TARGET_ALREADY_EXISTS
+    await user.click(screen.getByTestId("i04-export-btn"));
+    await waitFor(() => expect(bridge.exportMattingResult).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByTestId("i04-pick-image-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("i04-meta-strip")).toHaveTextContent("image_b.png");
+    });
+    rejectExportA2({ code: "TARGET_ALREADY_EXISTS", message: "Target exists" });
+    await waitFor(() => {
+      expect(screen.getByTestId("i04-start-btn")).toBeEnabled();
+    });
+    expect(screen.queryByText("覆盖已存在的文件？")).not.toBeInTheDocument();
+    expect(bridge.exportMattingResult).toHaveBeenCalledTimes(2);
+  });
 });

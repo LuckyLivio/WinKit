@@ -103,7 +103,9 @@ import {
   convertImagesBatch,
   createArchive,
   extractArchivesBatch,
+  inspectBeautifierSourceImage,
   parseBackendError,
+  readClipboardImageAsAsset,
   removeImageBackground,
   resizeImagesBatch,
   rotateImagesBatch,
@@ -337,6 +339,8 @@ export type ImageHandoffTarget = "I02" | "I03" | "I04" | "I11" | "I12" | "I13";
 export type RemoveBackgroundViewMode = "split" | "cutout" | "original";
 
 export interface RemoveBackgroundSessionState {
+  sourceGeneration: number;
+  loadingSource: boolean;
   sourcePath: string | null;
   sourceAssetId: string | null;
   sourceFileName: string | null;
@@ -1069,6 +1073,8 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     errorMessage: null,
   },
   removeBackground: {
+    sourceGeneration: 0,
+    loadingSource: false,
     sourcePath: null,
     sourceAssetId: null,
     sourceFileName: null,
@@ -1363,6 +1369,15 @@ interface SessionStoreContextValue {
       | Partial<RemoveBackgroundSessionState>
       | ((prev: RemoveBackgroundSessionState) => RemoveBackgroundSessionState),
   ) => void;
+  loadRemoveBackgroundFile: (
+    rawPath: string,
+    formatError: (err: unknown) => string,
+  ) => Promise<boolean>;
+  pasteRemoveBackgroundClipboard: (
+    formatError: (err: unknown) => string,
+    fallbackLabel: string,
+  ) => Promise<boolean>;
+  clearRemoveBackgroundSession: () => void;
   startRemoveBackground: (
     req: RemoveBackgroundRequest,
     formatError: (err: unknown) => string,
@@ -1581,6 +1596,7 @@ export function SessionStoreProvider({
   );
 
   const mattingRunSeqRef = useRef(1);
+  const mattingSourceGenRef = useRef(0);
   const activeMattingTaskRef = useRef<string | null>(null);
 
   const handoffImageToTool = useCallback(
@@ -1635,6 +1651,7 @@ export function SessionStoreProvider({
           },
         }));
       } else if (targetToolId === "I04") {
+        const gen = ++mattingSourceGenRef.current;
         const runningId = activeMattingTaskRef.current;
         if (runningId) {
           activeMattingTaskRef.current = null;
@@ -1644,6 +1661,8 @@ export function SessionStoreProvider({
           ...prev,
           removeBackground: {
             ...prev.removeBackground,
+            sourceGeneration: gen,
+            loadingSource: false,
             sourcePath: null,
             sourceAssetId: asset.assetId,
             sourceFileName: asset.label,
@@ -2770,6 +2789,170 @@ export function SessionStoreProvider({
     );
   }, []);
 
+  const loadRemoveBackgroundFile = useCallback(
+    async (rawPath: string, formatError: (err: unknown) => string): Promise<boolean> => {
+      const gen = ++mattingSourceGenRef.current;
+      setSession((prev) => ({
+        ...prev,
+        removeBackground: {
+          ...prev.removeBackground,
+          sourceGeneration: gen,
+          loadingSource: true,
+          errorMessage: null,
+        },
+      }));
+      try {
+        const info = await inspectBeautifierSourceImage(rawPath);
+        if (mattingSourceGenRef.current !== gen) {
+          return false;
+        }
+        const runningId = activeMattingTaskRef.current;
+        if (runningId) {
+          activeMattingTaskRef.current = null;
+          void cancelBackendTask(runningId);
+        }
+        setSession((prev) => {
+          if (prev.removeBackground.sourceGeneration !== gen) return prev;
+          return {
+            ...prev,
+            removeBackground: {
+              ...prev.removeBackground,
+              loadingSource: false,
+              sourcePath: info.path,
+              sourceAssetId: null,
+              sourceFileName: info.fileName,
+              sourcePreviewUrl: info.previewDataUrl,
+              sourceWidth: info.width,
+              sourceHeight: info.height,
+              sourceHasAlpha: info.hasAlpha,
+              status: "idle",
+              activeTaskId: null,
+              liveProgress: null,
+              result: null,
+              errorMessage: null,
+              lastSavedMessage: null,
+            },
+          };
+        });
+        return true;
+      } catch (err) {
+        if (mattingSourceGenRef.current !== gen) {
+          return false;
+        }
+        setSession((prev) => {
+          if (prev.removeBackground.sourceGeneration !== gen) return prev;
+          return {
+            ...prev,
+            removeBackground: {
+              ...prev.removeBackground,
+              loadingSource: false,
+              errorMessage: formatError(err),
+            },
+          };
+        });
+        return false;
+      }
+    },
+    [],
+  );
+
+  const pasteRemoveBackgroundClipboard = useCallback(
+    async (formatError: (err: unknown) => string, fallbackLabel: string): Promise<boolean> => {
+      const gen = ++mattingSourceGenRef.current;
+      setSession((prev) => ({
+        ...prev,
+        removeBackground: {
+          ...prev.removeBackground,
+          sourceGeneration: gen,
+          loadingSource: true,
+          errorMessage: null,
+        },
+      }));
+      try {
+        const asset = await readClipboardImageAsAsset();
+        if (mattingSourceGenRef.current !== gen) {
+          return false;
+        }
+        const runningId = activeMattingTaskRef.current;
+        if (runningId) {
+          activeMattingTaskRef.current = null;
+          void cancelBackendTask(runningId);
+        }
+        setSession((prev) => {
+          if (prev.removeBackground.sourceGeneration !== gen) return prev;
+          return {
+            ...prev,
+            removeBackground: {
+              ...prev.removeBackground,
+              loadingSource: false,
+              sourcePath: null,
+              sourceAssetId: asset.assetId,
+              sourceFileName: asset.label || fallbackLabel,
+              sourcePreviewUrl: asset.dataUrl,
+              sourceWidth: asset.width,
+              sourceHeight: asset.height,
+              sourceHasAlpha: asset.hasAlpha,
+              status: "idle",
+              activeTaskId: null,
+              liveProgress: null,
+              result: null,
+              errorMessage: null,
+              lastSavedMessage: null,
+            },
+          };
+        });
+        return true;
+      } catch (err) {
+        if (mattingSourceGenRef.current !== gen) {
+          return false;
+        }
+        setSession((prev) => {
+          if (prev.removeBackground.sourceGeneration !== gen) return prev;
+          return {
+            ...prev,
+            removeBackground: {
+              ...prev.removeBackground,
+              loadingSource: false,
+              errorMessage: formatError(err),
+            },
+          };
+        });
+        return false;
+      }
+    },
+    [],
+  );
+
+  const clearRemoveBackgroundSession = useCallback(() => {
+    const gen = ++mattingSourceGenRef.current;
+    const runningId = activeMattingTaskRef.current;
+    if (runningId) {
+      activeMattingTaskRef.current = null;
+      void cancelBackendTask(runningId);
+    }
+    setSession((prev) => ({
+      ...prev,
+      removeBackground: {
+        ...prev.removeBackground,
+        sourceGeneration: gen,
+        loadingSource: false,
+        sourcePath: null,
+        sourceAssetId: null,
+        sourceFileName: null,
+        sourcePreviewUrl: null,
+        sourceWidth: null,
+        sourceHeight: null,
+        sourceHasAlpha: false,
+        status: "idle",
+        activeTaskId: null,
+        liveProgress: null,
+        result: null,
+        errorMessage: null,
+        lastSavedMessage: null,
+      },
+    }));
+  }, []);
+
   const startRemoveBackground = useCallback(
     async (
       req: RemoveBackgroundRequest,
@@ -2778,12 +2961,15 @@ export function SessionStoreProvider({
       if (activeMattingTaskRef.current) {
         return null;
       }
+      const gen = ++mattingSourceGenRef.current;
       const taskId = `i04-matting-${Date.now()}-${mattingRunSeqRef.current++}`;
       activeMattingTaskRef.current = taskId;
       setSession((prev) => ({
         ...prev,
         removeBackground: {
           ...prev.removeBackground,
+          sourceGeneration: gen,
+          loadingSource: false,
           status: "running",
           activeTaskId: taskId,
           liveProgress: {
@@ -2798,49 +2984,55 @@ export function SessionStoreProvider({
       }));
       try {
         const res = await removeImageBackground(taskId, req);
-        if (activeMattingTaskRef.current !== taskId) {
+        if (activeMattingTaskRef.current !== taskId || mattingSourceGenRef.current !== gen) {
           return null;
         }
         activeMattingTaskRef.current = null;
-        setSession((prev) => ({
-          ...prev,
-          removeBackground: {
-            ...prev.removeBackground,
-            sourcePath: res.sourcePath ?? prev.removeBackground.sourcePath,
-            sourceFileName: res.fileName,
-            sourcePreviewUrl: res.originalPreviewDataUrl,
-            sourceWidth: res.width,
-            sourceHeight: res.height,
-            sourceHasAlpha: res.sourceHasAlpha,
-            status: "done",
-            activeTaskId: null,
-            liveProgress: null,
-            result: res,
-            errorMessage: null,
-          },
-        }));
+        setSession((prev) => {
+          if (prev.removeBackground.sourceGeneration !== gen) return prev;
+          return {
+            ...prev,
+            removeBackground: {
+              ...prev.removeBackground,
+              sourcePath: res.sourcePath ?? prev.removeBackground.sourcePath,
+              sourceFileName: res.fileName,
+              sourcePreviewUrl: res.originalPreviewDataUrl,
+              sourceWidth: res.width,
+              sourceHeight: res.height,
+              sourceHasAlpha: res.sourceHasAlpha,
+              status: "done",
+              activeTaskId: null,
+              liveProgress: null,
+              result: res,
+              errorMessage: null,
+            },
+          };
+        });
         return res;
       } catch (err) {
-        if (activeMattingTaskRef.current !== taskId) {
+        if (activeMattingTaskRef.current !== taskId || mattingSourceGenRef.current !== gen) {
           return null;
         }
         activeMattingTaskRef.current = null;
         const parsed = parseBackendError(err);
-        setSession((prev) => ({
-          ...prev,
-          removeBackground: {
-            ...prev.removeBackground,
-            status:
-              parsed.code === "TASK_CANCELLED"
-                ? prev.removeBackground.result
-                  ? "done"
-                  : "idle"
-                : "error",
-            activeTaskId: null,
-            liveProgress: null,
-            errorMessage: formatError(err),
-          },
-        }));
+        setSession((prev) => {
+          if (prev.removeBackground.sourceGeneration !== gen) return prev;
+          return {
+            ...prev,
+            removeBackground: {
+              ...prev.removeBackground,
+              status:
+                parsed.code === "TASK_CANCELLED"
+                  ? prev.removeBackground.result
+                    ? "done"
+                    : "idle"
+                  : "error",
+              activeTaskId: null,
+              liveProgress: null,
+              errorMessage: formatError(err),
+            },
+          };
+        });
         return null;
       }
     },
@@ -2913,6 +3105,9 @@ export function SessionStoreProvider({
         startImageMetadataBatch,
         cancelImageMetadataBatch,
         updateRemoveBackgroundSession,
+        loadRemoveBackgroundFile,
+        pasteRemoveBackgroundClipboard,
+        clearRemoveBackgroundSession,
         startRemoveBackground,
         cancelRemoveBackground,
       }}

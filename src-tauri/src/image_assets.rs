@@ -207,6 +207,24 @@ impl ImageAssetStore {
             ),
         })
     }
+
+    pub fn remove(&self, asset_id: &str) {
+        if let Ok(mut guard) = self.inner.lock() {
+            if let Some(pos) = guard.iter().position(|a| a.id == asset_id) {
+                guard.remove(pos);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.inner.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub fn decode_png_data_url_or_base64(input: &str) -> Result<Vec<u8>, AppError> {

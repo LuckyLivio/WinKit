@@ -25,12 +25,10 @@ import {
   exportMattingResult,
   formatLocalizedError,
   getImageAsset,
-  inspectBeautifierSourceImage,
   openLocalDirectory,
   parseBackendError,
   pickSaveFilePath,
   pickSingleFile,
-  readClipboardImageAsAsset,
   subscribeFileDrop,
   suggestSafeSiblingPath,
   type MattingBackgroundMode,
@@ -108,12 +106,21 @@ function parentDirectoryOf(filePath: string): string | null {
   return filePath.slice(0, idx);
 }
 
+interface PendingOverwriteExport {
+  request: MattingExportRequest;
+  bindingKey: string;
+  seq: number;
+}
+
 export function RemoveBackgroundWorkspace() {
   const { locale, t } = useI18n();
   const isZh = locale === "zh-CN";
   const {
     session,
     updateRemoveBackgroundSession,
+    loadRemoveBackgroundFile,
+    pasteRemoveBackgroundClipboard,
+    clearRemoveBackgroundSession,
     startRemoveBackground,
     cancelRemoveBackground,
     handoffImageToTool,
@@ -122,26 +129,33 @@ export function RemoveBackgroundWorkspace() {
 
   const [modelStatus, setModelStatus] = useState<MattingModelStatus | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [loadingSource, setLoadingSource] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [copying, setCopying] = useState(false);
   const [hexDraft, setHexDraft] = useState(state.backgroundHex);
   const [localError, setLocalError] = useState<string | null>(null);
   const [lastSavedPath, setLastSavedPath] = useState<string | null>(null);
-  const [pendingOverwriteRequest, setPendingOverwriteRequest] =
-    useState<MattingExportRequest | null>(null);
+  const [pendingOverwrite, setPendingOverwrite] = useState<PendingOverwriteExport | null>(null);
 
-  const loadSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+  const exportSeqRef = useRef(0);
 
-  useEffect(() => {
-    setHexDraft(state.backgroundHex);
-  }, [state.backgroundHex]);
-
-  // Any change to result, source, or export parameters invalidates any stale overwrite prompt.
-  useEffect(() => {
-    setPendingOverwriteRequest(null);
+  const exportBindingKey = useMemo(() => {
+    if (!state.result) return null;
+    return JSON.stringify({
+      sourceGeneration: state.sourceGeneration,
+      resultId: state.result.resultId,
+      sourcePath: state.sourcePath,
+      sourceAssetId: state.sourceAssetId,
+      backgroundMode: state.backgroundMode,
+      backgroundHex: state.backgroundMode === "solid_color" ? state.backgroundHex : null,
+      exportFormat: state.exportFormat,
+      exportQuality: state.exportFormat === "png" ? null : state.exportQuality,
+      cropToSubject: state.cropToSubject,
+      cropPaddingPx: state.cropToSubject ? state.cropPaddingPx : 0,
+    });
   }, [
-    state.result?.resultId,
+    state.sourceGeneration,
+    state.result,
     state.sourcePath,
     state.sourceAssetId,
     state.backgroundMode,
@@ -152,41 +166,45 @@ export function RemoveBackgroundWorkspace() {
     state.cropPaddingPx,
   ]);
 
+  const liveExportBindingRef = useRef<string | null>(exportBindingKey);
+  liveExportBindingRef.current = exportBindingKey;
+
+  const isExportStillCurrent = useCallback(
+    (bindingKey: string, seq: number) =>
+      mountedRef.current &&
+      liveExportBindingRef.current === bindingKey &&
+      exportSeqRef.current === seq,
+    [],
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      exportSeqRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    setHexDraft(state.backgroundHex);
+  }, [state.backgroundHex]);
+
+  // Any change to source generation, result, or export parameters invalidates in-flight exports
+  // and any pending overwrite confirmation so stale responses can never re-open a prompt.
+  useEffect(() => {
+    exportSeqRef.current += 1;
+    setPendingOverwrite(null);
+    setExporting(false);
+  }, [exportBindingKey]);
+
   const loadLocalFile = useCallback(
     async (rawPath: string) => {
-      const seq = ++loadSeqRef.current;
-      setLoadingSource(true);
       setLocalError(null);
       setLastSavedPath(null);
-      setPendingOverwriteRequest(null);
-      try {
-        const info = await inspectBeautifierSourceImage(rawPath);
-        if (loadSeqRef.current !== seq) return;
-        updateRemoveBackgroundSession({
-          sourcePath: info.path,
-          sourceAssetId: null,
-          sourceFileName: info.fileName,
-          sourcePreviewUrl: info.previewDataUrl,
-          sourceWidth: info.width,
-          sourceHeight: info.height,
-          sourceHasAlpha: info.hasAlpha,
-          status: "idle",
-          activeTaskId: null,
-          liveProgress: null,
-          result: null,
-          errorMessage: null,
-          lastSavedMessage: null,
-        });
-      } catch (err) {
-        if (loadSeqRef.current !== seq) return;
-        setLocalError(formatLocalizedError(err, t));
-      } finally {
-        if (loadSeqRef.current === seq) {
-          setLoadingSource(false);
-        }
-      }
+      setPendingOverwrite(null);
+      await loadRemoveBackgroundFile(rawPath, (err) => formatLocalizedError(err, t));
     },
-    [t, updateRemoveBackgroundSession],
+    [loadRemoveBackgroundFile, t],
   );
 
   useEffect(() => {
@@ -217,72 +235,33 @@ export function RemoveBackgroundWorkspace() {
           },
         ],
       });
-      if (!picked) return;
+      if (!picked || !mountedRef.current) return;
       await loadLocalFile(picked);
     } catch (err) {
+      if (!mountedRef.current) return;
       setLocalError(formatLocalizedError(err, t));
     }
   };
 
   const handlePasteClipboard = async () => {
-    const seq = ++loadSeqRef.current;
-    setLoadingSource(true);
     setLocalError(null);
     setLastSavedPath(null);
-    setPendingOverwriteRequest(null);
-    try {
-      const asset = await readClipboardImageAsAsset();
-      if (loadSeqRef.current !== seq) return;
-      updateRemoveBackgroundSession({
-        sourcePath: null,
-        sourceAssetId: asset.assetId,
-        sourceFileName: asset.label || (isZh ? "剪贴板图片.png" : "clipboard.png"),
-        sourcePreviewUrl: asset.dataUrl,
-        sourceWidth: asset.width,
-        sourceHeight: asset.height,
-        sourceHasAlpha: asset.hasAlpha,
-        status: "idle",
-        activeTaskId: null,
-        liveProgress: null,
-        result: null,
-        errorMessage: null,
-        lastSavedMessage: null,
-      });
-    } catch (err) {
-      if (loadSeqRef.current !== seq) return;
-      setLocalError(formatLocalizedError(err, t));
-    } finally {
-      if (loadSeqRef.current === seq) {
-        setLoadingSource(false);
-      }
-    }
+    setPendingOverwrite(null);
+    await pasteRemoveBackgroundClipboard(
+      (err) => formatLocalizedError(err, t),
+      isZh ? "剪贴板图片.png" : "clipboard.png",
+    );
   };
 
   const handleClear = () => {
-    loadSeqRef.current += 1;
-    setLoadingSource(false);
     setLocalError(null);
     setLastSavedPath(null);
-    setPendingOverwriteRequest(null);
-    updateRemoveBackgroundSession({
-      sourcePath: null,
-      sourceAssetId: null,
-      sourceFileName: null,
-      sourcePreviewUrl: null,
-      sourceWidth: null,
-      sourceHeight: null,
-      sourceHasAlpha: false,
-      status: "idle",
-      activeTaskId: null,
-      liveProgress: null,
-      result: null,
-      errorMessage: null,
-      lastSavedMessage: null,
-    });
+    setPendingOverwrite(null);
+    clearRemoveBackgroundSession();
   };
 
   const handleRunMatting = async () => {
-    if (!modelStatus?.ready || state.status === "running") return;
+    if (!modelStatus?.ready || state.status === "running" || state.loadingSource) return;
     if (!state.sourcePath && !state.sourceAssetId) return;
     setLocalError(null);
     setLastSavedPath(null);
@@ -314,12 +293,18 @@ export function RemoveBackgroundWorkspace() {
     });
   };
 
-  const executeExportRequest = async (req: MattingExportRequest) => {
+  const executeExportRequest = async (
+    req: MattingExportRequest,
+    bindingKey: string,
+    seq: number,
+  ) => {
+    if (!isExportStillCurrent(bindingKey, seq)) return;
     setExporting(true);
     setLocalError(null);
     try {
       const saved = await exportMattingResult(req);
-      setPendingOverwriteRequest(null);
+      if (!isExportStillCurrent(bindingKey, seq)) return;
+      setPendingOverwrite(null);
       setLastSavedPath(saved.outputPath);
       updateRemoveBackgroundSession({
         lastSavedMessage: isZh
@@ -327,36 +312,56 @@ export function RemoveBackgroundWorkspace() {
           : `Exported ${saved.width}×${saved.height} (${formatImageBytes(saved.byteLength)}): ${saved.outputPath}`,
       });
     } catch (err) {
+      if (!isExportStillCurrent(bindingKey, seq)) return;
       const parsed = parseBackendError(err);
       if (parsed.code === "TARGET_ALREADY_EXISTS" && !req.overwrite) {
-        setPendingOverwriteRequest({ ...req, overwrite: true });
+        setPendingOverwrite({
+          request: { ...req, overwrite: true },
+          bindingKey,
+          seq,
+        });
       } else {
         setLocalError(formatLocalizedError(err, t));
       }
     } finally {
-      setExporting(false);
+      if (mountedRef.current && exportSeqRef.current === seq) {
+        setExporting(false);
+      }
     }
   };
 
   const handleExportClick = async () => {
-    if (!state.result || exporting) return;
+    const bindingKey = exportBindingKey;
+    if (!state.result || !bindingKey || exporting) return;
+    const seq = ++exportSeqRef.current;
+    const resultSnapshot = state.result;
+    const sourcePathSnapshot = state.sourcePath;
+    const sourceFileNameSnapshot = state.sourceFileName;
+    const backgroundModeSnapshot = state.backgroundMode;
+    const backgroundHexSnapshot = state.backgroundHex;
+    const exportFormatSnapshot = state.exportFormat;
+    const exportQualitySnapshot = state.exportQuality;
+    const cropToSubjectSnapshot = state.cropToSubject;
+    const cropPaddingPxSnapshot = state.cropPaddingPx;
+
     setLocalError(null);
     const ext =
-      state.exportFormat === "jpeg" ? "jpg" : state.exportFormat === "webp" ? "webp" : "png";
-    const suffixParts = [state.backgroundMode === "transparent" ? "cutout" : "solid"];
-    if (state.cropToSubject && state.result.subjectBbox) {
+      exportFormatSnapshot === "jpeg" ? "jpg" : exportFormatSnapshot === "webp" ? "webp" : "png";
+    const suffixParts = [backgroundModeSnapshot === "transparent" ? "cutout" : "solid"];
+    if (cropToSubjectSnapshot && resultSnapshot.subjectBbox) {
       suffixParts.push("cropped");
     }
     const suffix = `_${suffixParts.join("_")}`;
     let defaultPath: string | undefined;
-    if (state.sourcePath) {
-      const suggested = await suggestSafeSiblingPath(state.sourcePath, suffix, ext);
+    if (sourcePathSnapshot) {
+      const suggested = await suggestSafeSiblingPath(sourcePathSnapshot, suffix, ext);
+      if (!isExportStillCurrent(bindingKey, seq)) return;
       if (suggested) {
         defaultPath = suggested;
       }
     }
     if (!defaultPath) {
-      const stem = (state.sourceFileName ?? "image").replace(/\.[^.]+$/, "") || "image";
+      const stem = (sourceFileNameSnapshot ?? "image").replace(/\.[^.]+$/, "") || "image";
       defaultPath = `${stem}${suffix}.${ext}`;
     }
 
@@ -370,25 +375,26 @@ export function RemoveBackgroundWorkspace() {
         },
       ],
     });
-    if (!picked) return;
+    if (!picked || !isExportStillCurrent(bindingKey, seq)) return;
 
     const req: MattingExportRequest = {
-      resultId: state.result.resultId,
+      resultId: resultSnapshot.resultId,
       outputPath: picked,
-      sourcePath: state.sourcePath,
+      sourcePath: sourcePathSnapshot,
       overwrite: false,
-      backgroundMode: state.backgroundMode,
-      backgroundHex: state.backgroundMode === "solid_color" ? state.backgroundHex : null,
-      format: state.exportFormat,
-      quality: state.exportFormat === "png" ? null : state.exportQuality,
-      cropToSubject: state.cropToSubject,
-      cropPaddingPx: state.cropToSubject ? state.cropPaddingPx : 0,
+      backgroundMode: backgroundModeSnapshot,
+      backgroundHex: backgroundModeSnapshot === "solid_color" ? backgroundHexSnapshot : null,
+      format: exportFormatSnapshot,
+      quality: exportFormatSnapshot === "png" ? null : exportQualitySnapshot,
+      cropToSubject: cropToSubjectSnapshot,
+      cropPaddingPx: cropToSubjectSnapshot ? cropPaddingPxSnapshot : 0,
     };
-    await executeExportRequest(req);
+    await executeExportRequest(req, bindingKey, seq);
   };
 
   const handleCopyClipboard = async () => {
-    if (!state.result || copying) return;
+    const bindingKey = exportBindingKey;
+    if (!state.result || !bindingKey || copying) return;
     setCopying(true);
     setLocalError(null);
     try {
@@ -399,15 +405,19 @@ export function RemoveBackgroundWorkspace() {
         cropToSubject: state.cropToSubject,
         cropPaddingPx: state.cropToSubject ? state.cropPaddingPx : 0,
       });
+      if (!mountedRef.current || liveExportBindingRef.current !== bindingKey) return;
       updateRemoveBackgroundSession({
         lastSavedMessage: isZh
           ? `已复制 ${copied.width}×${copied.height} ${copied.hasAlpha ? "透明 PNG" : "纯色背景图"} 到剪贴板`
           : `Copied ${copied.width}×${copied.height} ${copied.hasAlpha ? "transparent PNG" : "solid-background image"} to clipboard`,
       });
     } catch (err) {
+      if (!mountedRef.current || liveExportBindingRef.current !== bindingKey) return;
       setLocalError(formatLocalizedError(err, t));
     } finally {
-      setCopying(false);
+      if (mountedRef.current) {
+        setCopying(false);
+      }
     }
   };
 
@@ -437,7 +447,7 @@ export function RemoveBackgroundWorkspace() {
   const hasSource = Boolean(state.sourcePath || state.sourceAssetId || state.sourcePreviewUrl);
   const hasResult = Boolean(state.result);
   const isRunning = state.status === "running";
-  const canStart = Boolean(modelStatus?.ready && hasSource && !isRunning && !loadingSource);
+  const canStart = Boolean(modelStatus?.ready && hasSource && !isRunning && !state.loadingSource);
 
   const originalPreviewUrl = state.result?.originalPreviewDataUrl ?? state.sourcePreviewUrl;
   const cutoutPreviewUrl = state.result?.cutoutPreviewDataUrl ?? null;
@@ -460,7 +470,6 @@ export function RemoveBackgroundWorkspace() {
           <button
             type="button"
             className="btn btn-secondary"
-            disabled={loadingSource}
             onClick={() => void handlePickImage()}
             data-testid="i04-pick-image-btn"
           >
@@ -470,7 +479,6 @@ export function RemoveBackgroundWorkspace() {
           <button
             type="button"
             className="btn btn-ghost"
-            disabled={loadingSource}
             onClick={() => void handlePasteClipboard()}
             data-testid="i04-paste-clipboard-btn"
           >
@@ -1093,22 +1101,29 @@ export function RemoveBackgroundWorkspace() {
       </div>
 
       <ConfirmDialog
-        open={pendingOverwriteRequest != null}
+        open={pendingOverwrite != null}
         title={isZh ? "覆盖已存在的文件？" : "Overwrite Existing File?"}
         body={
           isZh
-            ? `目标路径已存在文件：${pendingOverwriteRequest?.outputPath ?? ""}。是否确认覆盖该文件？（源文件始终受保护，不会被覆盖）`
-            : `A file already exists at: ${pendingOverwriteRequest?.outputPath ?? ""}. Overwrite it? (Your original source image is always protected.)`
+            ? `目标路径已存在文件：${pendingOverwrite?.request.outputPath ?? ""}。是否确认覆盖该文件？（源文件始终受保护，不会被覆盖）`
+            : `A file already exists at: ${pendingOverwrite?.request.outputPath ?? ""}. Overwrite it? (Your original source image is always protected.)`
         }
         confirmLabel={isZh ? "确认覆盖" : "Overwrite"}
         cancelLabel={isZh ? "取消" : "Cancel"}
         danger
         onConfirm={() => {
-          if (pendingOverwriteRequest) {
-            void executeExportRequest(pendingOverwriteRequest);
+          if (
+            pendingOverwrite &&
+            isExportStillCurrent(pendingOverwrite.bindingKey, pendingOverwrite.seq)
+          ) {
+            const confirmed = pendingOverwrite;
+            setPendingOverwrite(null);
+            void executeExportRequest(confirmed.request, confirmed.bindingKey, confirmed.seq);
+          } else {
+            setPendingOverwrite(null);
           }
         }}
-        onCancel={() => setPendingOverwriteRequest(null)}
+        onCancel={() => setPendingOverwrite(null)}
       />
     </div>
   );

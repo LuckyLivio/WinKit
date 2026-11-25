@@ -16,10 +16,10 @@
 use crate::error::AppError;
 use crate::image_assets::{ImageAssetStore, MAX_ASSET_BYTES, MAX_ASSET_PIXELS, MAX_ASSET_SIDE};
 use crate::matting_core::{
-    apply_predicted_matte_to_rgba, build_matting_preview_urls, encode_rgba_png_bytes,
+    apply_predicted_matte_to_rgba_cancellable, build_matting_preview_urls, encode_rgba_png_bytes,
     load_matting_source, next_matting_result_id, prepare_rgb512_for_model, BiRefNetMattingEngine,
-    MattingProgressPayload, MattingResultStore, RemoveBackgroundRequest, RemoveBackgroundResult,
-    StoredMattingCutout, MATTING_MASK512_BYTES, MATTING_RGB512_BYTES,
+    LoadedMattingSource, MattingProgressPayload, MattingResultStore, RemoveBackgroundRequest,
+    RemoveBackgroundResult, StoredMattingCutout, MATTING_MASK512_BYTES, MATTING_RGB512_BYTES,
 };
 use crate::matting_models::{
     find_model_file_in_dir, require_matting_assets, ResolvedMattingAssets,
@@ -621,7 +621,7 @@ where
         percent: 12.0,
         detail: "Decoding source image and applying upright EXIF orientation...".into(),
     });
-    let mut loaded = load_matting_source(request, asset_store)?;
+    let loaded = load_matting_source(request, asset_store)?;
     if cancel_flag.load(Ordering::Relaxed) {
         return Err(AppError::cancelled());
     }
@@ -660,6 +660,35 @@ where
         ));
     }
 
+    finalize_matting_from_mask(
+        task_id,
+        started,
+        loaded,
+        &mask512,
+        matting,
+        asset_store,
+        cancel_flag,
+        emit_progress,
+    )
+}
+
+/// Runs full-resolution alpha compositing, PNG/preview encoding, and cache publishing with
+/// explicit cancellation checks at every stage boundary and immediately before mutating either
+/// `ImageAssetStore` or `MattingResultStore`.
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_matting_from_mask<F>(
+    task_id: &str,
+    started: Instant,
+    mut loaded: LoadedMattingSource,
+    mask512: &[u8],
+    matting: &MattingSessionManager,
+    asset_store: &ImageAssetStore,
+    cancel_flag: &AtomicBool,
+    mut emit_progress: F,
+) -> Result<RemoveBackgroundResult, AppError>
+where
+    F: FnMut(MattingProgressPayload),
+{
     if cancel_flag.load(Ordering::Relaxed) {
         return Err(AppError::cancelled());
     }
@@ -670,8 +699,13 @@ where
         percent: 82.0,
         detail: "Compositing full-resolution alpha channel and generating previews...".into(),
     });
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
 
-    let (cutout_rgba, stats) = apply_predicted_matte_to_rgba(&loaded.rgba, &mask512)?;
+    let (width, height) = loaded.rgba.dimensions();
+    let (cutout_rgba, stats) =
+        apply_predicted_matte_to_rgba_cancellable(&loaded.rgba, mask512, Some(cancel_flag))?;
     if stats.subject_bbox.is_none() {
         loaded.warnings.push(
             "No distinct foreground subject was detected; the resulting alpha mask is empty."
@@ -679,8 +713,24 @@ where
         );
     }
 
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
+
     let cutout_png_bytes =
         encode_rgba_png_bytes(&cutout_rgba, true, loaded.icc_profile.as_deref())?;
+
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
+
+    let (original_preview_data_url, cutout_preview_data_url) =
+        build_matting_preview_urls(&loaded.rgba, loaded.source_has_alpha, &cutout_rgba)?;
+
+    // Final validity check immediately before publishing to shared image cache & result store.
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
 
     // Also register in WinKit's shared in-memory ImageAssetStore when within asset store bounds
     // so the user can hand off the transparent PNG cutout straight into I12 / I13 / I03.
@@ -702,11 +752,15 @@ where
         None
     };
 
-    let (original_preview_data_url, cutout_preview_data_url) =
-        build_matting_preview_urls(&loaded.rgba, loaded.source_has_alpha, &cutout_rgba)?;
+    if cancel_flag.load(Ordering::Relaxed) {
+        if let Some(ref aid) = cutout_asset_id {
+            asset_store.remove(aid);
+        }
+        return Err(AppError::cancelled());
+    }
 
     let result_id = next_matting_result_id();
-    matting.results().insert(StoredMattingCutout {
+    if let Err(err) = matting.results().insert(StoredMattingCutout {
         id: result_id.clone(),
         label: loaded.file_name.clone(),
         source_path: loaded.source_path.clone(),
@@ -716,7 +770,12 @@ where
         subject_bbox: stats.subject_bbox,
         cutout_png_bytes,
         cutout_asset_id: cutout_asset_id.clone(),
-    })?;
+    }) {
+        if let Some(ref aid) = cutout_asset_id {
+            asset_store.remove(aid);
+        }
+        return Err(err);
+    }
 
     emit_progress(MattingProgressPayload {
         task_id: task_id.to_string(),
@@ -795,5 +854,117 @@ mod tests {
             "unexpected error code: {}",
             err_missing.code
         );
+    }
+
+    fn make_synthetic_loaded_source(file_name: &str, r: u8, g: u8, b: u8) -> LoadedMattingSource {
+        let mut rgba = image::RgbaImage::new(32, 32);
+        for pixel in rgba.pixels_mut() {
+            *pixel = image::Rgba([r, g, b, 255]);
+        }
+        LoadedMattingSource {
+            rgba,
+            file_name: file_name.to_string(),
+            source_path: None,
+            raw_width: 32,
+            raw_height: 32,
+            exif_orientation: 1,
+            source_has_alpha: false,
+            icc_profile: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    fn make_centered_mask512() -> Vec<u8> {
+        let mut mask = vec![0u8; MATTING_MASK512_BYTES];
+        for y in 128..384 {
+            for x in 128..384 {
+                mask[y * 512 + x] = 255;
+            }
+        }
+        mask
+    }
+
+    #[test]
+    fn compositing_stage_cancel_at_82_percent_preserves_existing_results_and_allows_retry() {
+        let mgr = MattingSessionManager::default();
+        let store = ImageAssetStore::default();
+        let mask512 = make_centered_mask512();
+
+        // 1. Seed an existing completed result A in both MattingResultStore and ImageAssetStore.
+        let active = AtomicBool::new(false);
+        let res_a = finalize_matting_from_mask(
+            "task-a",
+            Instant::now(),
+            make_synthetic_loaded_source("first.png", 200, 40, 40),
+            &mask512,
+            &mgr,
+            &store,
+            &active,
+            |_| {},
+        )
+        .expect("initial matting result A should succeed");
+        let existing_asset_id = res_a
+            .cutout_asset_id
+            .clone()
+            .expect("result A should register in shared ImageAssetStore");
+        let existing_stored = mgr
+            .results()
+            .get(&res_a.result_id)
+            .expect("result A should exist in MattingResultStore");
+        assert_eq!(mgr.results().len(), 1);
+        assert_eq!(store.len(), 1);
+
+        // 2. Start task B and trigger cancellation right when 82% compositing progress arrives.
+        let cancel_b = AtomicBool::new(false);
+        let mut saw_82 = false;
+        let err_b = finalize_matting_from_mask(
+            "task-b-cancelled",
+            Instant::now(),
+            make_synthetic_loaded_source("second.png", 40, 120, 220),
+            &mask512,
+            &mgr,
+            &store,
+            &cancel_b,
+            |progress| {
+                if progress.phase == "compositing" && (progress.percent - 82.0).abs() < 0.01 {
+                    saw_82 = true;
+                    cancel_b.store(true, Ordering::Relaxed);
+                }
+            },
+        )
+        .expect_err("task B cancelled at 82% compositing must return TASK_CANCELLED");
+
+        assert!(saw_82, "expected 82% compositing progress event");
+        assert_eq!(err_b.code, "TASK_CANCELLED");
+
+        // Existing result A and shared ImageAssetStore must remain completely intact (no leak).
+        assert_eq!(mgr.results().len(), 1);
+        assert_eq!(store.len(), 1);
+        let preserved = mgr
+            .results()
+            .get(&res_a.result_id)
+            .expect("existing result A must remain preserved");
+        assert_eq!(preserved.cutout_png_bytes, existing_stored.cutout_png_bytes);
+        assert!(store.get_png_bytes(&existing_asset_id).is_ok());
+
+        // 3. Subsequent retry of task B with a fresh active flag succeeds cleanly.
+        let retry_active = AtomicBool::new(false);
+        let res_b = finalize_matting_from_mask(
+            "task-b-retry",
+            Instant::now(),
+            make_synthetic_loaded_source("second.png", 40, 120, 220),
+            &mask512,
+            &mgr,
+            &store,
+            &retry_active,
+            |_| {},
+        )
+        .expect("retry of task B should succeed");
+        assert_eq!(res_b.file_name, "second.png");
+        assert!(res_b.subject_bbox.is_some());
+        assert!(res_b.cutout_asset_id.is_some());
+        assert_eq!(mgr.results().len(), 2);
+        assert_eq!(store.len(), 2);
+        assert!(mgr.results().get(&res_a.result_id).is_ok());
     }
 }
