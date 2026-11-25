@@ -1159,7 +1159,7 @@ pub fn encode_jpeg_bytes(
     Ok(out)
 }
 
-fn inject_png_iccp_chunk(png_bytes: &[u8], icc: &[u8]) -> Vec<u8> {
+pub(crate) fn inject_png_iccp_chunk(png_bytes: &[u8], icc: &[u8]) -> Vec<u8> {
     if png_bytes.len() < 33 || &png_bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
         return png_bytes.to_vec();
     }

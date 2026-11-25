@@ -153,6 +153,13 @@ export interface Messages {
     ASR_WORKER_TIMEOUT: string;
     ASR_WORKER_CRASHED: string;
     ASR_WORKER_ERROR: string;
+    MATTING_MODEL_MISSING: string;
+    MATTING_ENGINE_LOAD_FAILED: string;
+    MATTING_INFERENCE_FAILED: string;
+    MATTING_WORKER_TIMEOUT: string;
+    MATTING_WORKER_CRASHED: string;
+    MATTING_WORKER_ERROR: string;
+    MATTING_RESULT_EXPIRED: string;
     ORT_RUNTIME_MISSING: string;
     PDF_WRITE_FAILED: string;
     TASK_CANCELLED: string;
@@ -1172,6 +1179,14 @@ export const MESSAGES: Record<Locale, Messages> = {
       ASR_WORKER_TIMEOUT: "隔离语音转写进程长时间无进展并已安全终止，请检查输入文件后重试。",
       ASR_WORKER_CRASHED: "隔离语音转写子进程异常退出，原音视频文件未受影响，请重试。",
       ASR_WORKER_ERROR: "离线语音转写进程通信失败，请重试。",
+      MATTING_MODEL_MISSING:
+        "尚未安装离线抠图模型（BiRefNet_lite 512 FP16），请先在上方点击下载或指定本地模型目录。",
+      MATTING_ENGINE_LOAD_FAILED: "加载离线抠图模型失败，请检查模型文件是否完整以及内存是否充足。",
+      MATTING_INFERENCE_FAILED: "本地离线抠图推理失败，请确认图片未损坏后重试。",
+      MATTING_WORKER_TIMEOUT: "隔离抠图进程超时并已安全终止，请检查图片尺寸后重试。",
+      MATTING_WORKER_CRASHED: "隔离抠图子进程异常退出，原图片未受影响，请重试。",
+      MATTING_WORKER_ERROR: "离线抠图进程通信失败，请重试。",
+      MATTING_RESULT_EXPIRED: "内存中的抠图结果已过期或被清理，请重新执行离线抠图。",
       ORT_RUNTIME_MISSING: "内置 ONNX Runtime 运行库缺失，请重新安装官方安装包。",
       PDF_WRITE_FAILED: "写入目标 PDF 文件失败，请检查磁盘空间与目录权限。",
       TASK_CANCELLED: "任务已按请求取消。",
@@ -2339,6 +2354,19 @@ export const MESSAGES: Record<Locale, Messages> = {
       ASR_WORKER_CRASHED:
         "Isolated transcription worker exited unexpectedly. Your source media remains untouched.",
       ASR_WORKER_ERROR: "Isolated transcription worker communication error. Please retry.",
+      MATTING_MODEL_MISSING:
+        "The offline background-removal model (BiRefNet_lite 512 FP16) is not installed yet. Click Download above or select a local model folder.",
+      MATTING_ENGINE_LOAD_FAILED:
+        "Failed to load the offline cutout model. Check model integrity and available memory.",
+      MATTING_INFERENCE_FAILED:
+        "Offline background-removal inference failed. Verify the image file is intact and retry.",
+      MATTING_WORKER_TIMEOUT:
+        "The isolated background-removal worker timed out and was safely terminated. Please retry.",
+      MATTING_WORKER_CRASHED:
+        "Isolated background-removal worker exited unexpectedly. Your source image remains untouched.",
+      MATTING_WORKER_ERROR: "Isolated background-removal worker communication error. Please retry.",
+      MATTING_RESULT_EXPIRED:
+        "The in-memory cutout result expired or was cleared. Please run background removal again.",
       ORT_RUNTIME_MISSING:
         "The bundled ONNX Runtime (onnxruntime.dll) is missing. Please reinstall WinKit.",
       PDF_WRITE_FAILED: "Failed to write output PDF file. Check disk space and folder permissions.",

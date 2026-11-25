@@ -4369,3 +4369,190 @@ export async function exportTranscriptFile(
   assertFrontendNotShuttingDown();
   return invoke<ExportTranscriptResult>("export_transcript_file", { request });
 }
+
+// ============================================================================
+// Phase 6 PR 7: I04 Offline Background Removal (BiRefNet_lite 512 FP16)
+// ============================================================================
+
+export type MattingModelMode = "managed" | "custom";
+export type MattingModelSource = "managed" | "custom" | "missing";
+export type MattingBackgroundMode = "transparent" | "solid_color";
+export type MattingExportFormat = "png" | "jpeg" | "webp";
+
+export interface ManagedMattingModelSpec {
+  modelId: string;
+  displayName: string;
+  version: string;
+  sourceName: string;
+  releaseUrl: string;
+  modelUrl: string;
+  modelFileName: string;
+  modelBytes: number;
+  modelSha256: string;
+  licenseSummary: string;
+}
+
+export interface MattingModelStatus {
+  ready: boolean;
+  runtimeReady: boolean;
+  source: MattingModelSource;
+  mode: MattingModelMode;
+  customDir: string | null;
+  installDir: string;
+  activeModelDir: string | null;
+  installedBytes: number | null;
+  licensePath: string | null;
+  error: string | null;
+  spec: ManagedMattingModelSpec;
+}
+
+export interface MattingSetupProgressPayload {
+  taskId: string;
+  phase: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number | null;
+  message: string;
+}
+
+export interface SubjectBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface MattingProgressPayload {
+  taskId: string;
+  phase: string;
+  percent: number;
+  detail: string;
+}
+
+export interface RemoveBackgroundRequest {
+  path?: string | null;
+  assetId?: string | null;
+  label?: string | null;
+}
+
+export interface RemoveBackgroundResult {
+  resultId: string;
+  cutoutAssetId: string | null;
+  fileName: string;
+  sourcePath: string | null;
+  width: number;
+  height: number;
+  rawWidth: number;
+  rawHeight: number;
+  exifOrientation: number;
+  sourceHasAlpha: boolean;
+  preservedSourceAlpha: boolean;
+  subjectBbox: SubjectBoundingBox | null;
+  foregroundRatio: number;
+  softEdgeRatio: number;
+  elapsedMs: number;
+  originalPreviewDataUrl: string;
+  cutoutPreviewDataUrl: string;
+  warnings: string[];
+}
+
+export interface MattingExportRequest {
+  resultId: string;
+  outputPath: string;
+  sourcePath?: string | null;
+  overwrite: boolean;
+  backgroundMode: MattingBackgroundMode;
+  backgroundHex?: string | null;
+  format: MattingExportFormat;
+  quality?: number | null;
+  cropToSubject: boolean;
+  cropPaddingPx?: number | null;
+}
+
+export interface MattingExportResult {
+  outputPath: string;
+  width: number;
+  height: number;
+  byteLength: number;
+  hasAlpha: boolean;
+  cropped: boolean;
+  format: MattingExportFormat;
+}
+
+export interface MattingCopyClipboardRequest {
+  resultId: string;
+  backgroundMode: MattingBackgroundMode;
+  backgroundHex?: string | null;
+  cropToSubject: boolean;
+  cropPaddingPx?: number | null;
+}
+
+export interface MattingCopyClipboardResult {
+  width: number;
+  height: number;
+  hasAlpha: boolean;
+  cropped: boolean;
+}
+
+export async function getMattingModelStatus(): Promise<MattingModelStatus> {
+  return invoke<MattingModelStatus>("get_matting_model_status");
+}
+
+export async function setMattingModelCustomDir(dir: string | null): Promise<MattingModelStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<MattingModelStatus>("set_matting_model_custom_dir", { dir });
+}
+
+export async function removeManagedMattingModel(): Promise<MattingModelStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<MattingModelStatus>("remove_managed_matting_model");
+}
+
+export async function installManagedMattingModel(taskId: string): Promise<MattingModelStatus> {
+  assertFrontendNotShuttingDown();
+  return invoke<MattingModelStatus>("install_managed_matting_model", { taskId });
+}
+
+export async function subscribeMattingSetupProgress(
+  handler: (payload: MattingSetupProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<MattingSetupProgressPayload>("winkit://matting-setup-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function removeImageBackground(
+  taskId: string,
+  request: RemoveBackgroundRequest,
+): Promise<RemoveBackgroundResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<RemoveBackgroundResult>("remove_image_background", { taskId, request });
+}
+
+export async function subscribeMattingProgress(
+  handler: (payload: MattingProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<MattingProgressPayload>("winkit://matting-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function exportMattingResult(
+  request: MattingExportRequest,
+): Promise<MattingExportResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<MattingExportResult>("export_matting_result", { request });
+}
+
+export async function copyMattingResultToClipboard(
+  request: MattingCopyClipboardRequest,
+): Promise<MattingCopyClipboardResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<MattingCopyClipboardResult>("copy_matting_result_to_clipboard", { request });
+}

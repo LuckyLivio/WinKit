@@ -109,6 +109,15 @@ WinKit does **not** bundle speech recognition model weights inside the installer
   - **Pinned Distribution File**: `silero_vad_v5.onnx` (`2,313,101` bytes, SHA-256 `6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396`, `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad_v5.onnx`).
   - **License & Preservation**: **MIT License** (`Copyright (c) 2020-present Silero Team`, upstream `https://github.com/snakers4/silero-vad/blob/master/LICENSE`). WinKit writes the complete verbatim MIT license text to `LICENSE-silero-vad.txt` alongside the installed weights.
 
+## Optional User-Downloaded Offline Background-Removal Model (`I04` Remove Background)
+
+WinKit does **not** bundle background-removal model weights inside the installer. `I04` reuses WinKit's already-bundled Microsoft-signed `onnxruntime.dll 1.23.2` (**MIT License**) inside an isolated `--matting-worker` child process and downloads the pinned offline model only when the user explicitly clicks "Download Offline Cutout Model" (or selects an already-verified local folder), verifying exact byte length and SHA-256 digest before atomic activation:
+
+- **BiRefNet_lite 512 FP16 ONNX**:
+  - **Upstream Model Code & Weights**: `ZhengPeng7/BiRefNet` / `ZhengPeng7/BiRefNet_lite` (`https://github.com/ZhengPeng7/BiRefNet`, `https://huggingface.co/ZhengPeng7/BiRefNet_lite`), **MIT License** (`Copyright (c) 2024 ZhengPeng`).
+  - **Pinned ONNX FP16 Distribution**: `studioludens/birefnet-lite-512` at immutable commit `962e67969ec6acec9c19fab76acee4f5e22e990c` (`onnx/model_fp16.onnx`, `98,484,532` bytes / `93.92 MiB`, SHA-256 `eff9216bb2f9d3f023d9c2b7196845a7485739ab1f231593633e4d2344ffc516`, `https://huggingface.co/studioludens/birefnet-lite-512/resolve/962e67969ec6acec9c19fab76acee4f5e22e990c/onnx/model_fp16.onnx`).
+  - **License & Preservation**: Both upstream model code/weights and the Studio Ludens FP16 ONNX conversion are explicitly licensed under the **MIT License** (`Copyright (c) 2024 ZhengPeng`, `Copyright (c) 2026 Studio Ludens V.O.F.`). WinKit writes the complete verbatim MIT license notice to `LICENSE-birefnet-lite.txt` alongside the installed weights.
+
 ## Application Icons & Visual Assets
 
 All WinKit icons (`src-tauri/icons/*`) and UI styles are original works created specifically for WinKit. No icons, brand marks, screenshots, or code were copied from any third-party reference application.
