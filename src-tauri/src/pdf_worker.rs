@@ -20,11 +20,13 @@
 use crate::error::AppError;
 use crate::fs_guard::validate_existing_input_file;
 use crate::pdf_pdfium::{
-    extract_page_text_with_pdfium, inspect_pages_text_status_with_pdfium, inspect_with_pdfium,
-    render_page_png_with_pdfium, render_page_rgba_with_pdfium, search_document_with_pdfium,
+    extract_page_text_with_pdfium, extract_pages_text_for_tts_with_pdfium,
+    inspect_pages_text_status_with_pdfium, inspect_with_pdfium, render_page_png_with_pdfium,
+    render_page_rgba_with_pdfium, search_document_with_pdfium, PdfExtractPagesTextResult,
     PdfPageTextPayload, PdfPageTextSummary, PdfRenderMeta, PdfSearchResult, PdfiumInspectResult,
     MAX_PDF_FILE_BYTES,
 };
+use crate::tts_core::{MAX_TTS_INPUT_BYTES, MAX_TTS_INPUT_CHARS};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -66,6 +68,10 @@ pub enum PdfWorkerRequest {
         path: String,
         page_number: usize,
     },
+    ExtractPagesText {
+        path: String,
+        pages: Vec<usize>,
+    },
     InspectPagesText {
         path: String,
     },
@@ -84,6 +90,7 @@ pub enum PdfWorkerResponse {
     Inspect(PdfiumInspectResult),
     Render(PdfRenderMeta),
     ExtractText(PdfPageTextPayload),
+    ExtractPagesText(PdfExtractPagesTextResult),
     PagesText { pages: Vec<PdfPageTextSummary> },
     Search(PdfSearchResult),
     Error { code: String, message: String },
@@ -233,6 +240,22 @@ pub fn dispatch_worker_request(
             };
             match extract_page_text_with_pdfium(resource_dir, &canonical, page_number) {
                 Ok(text) => (PdfWorkerResponse::ExtractText(text), Vec::new()),
+                Err(err) => error_response(err),
+            }
+        }
+        PdfWorkerRequest::ExtractPagesText { path, pages } => {
+            let canonical = match validate_worker_pdf_path(&path) {
+                Ok(p) => p,
+                Err(err) => return error_response(err),
+            };
+            match extract_pages_text_for_tts_with_pdfium(
+                resource_dir,
+                &canonical,
+                &pages,
+                MAX_TTS_INPUT_CHARS,
+                MAX_TTS_INPUT_BYTES,
+            ) {
+                Ok(result) => (PdfWorkerResponse::ExtractPagesText(result), Vec::new()),
                 Err(err) => error_response(err),
             }
         }
@@ -465,9 +488,9 @@ impl LiveWorkerProc {
 
 fn timeout_for_request(req: &PdfWorkerRequest) -> Duration {
     match req {
-        PdfWorkerRequest::Search { .. } | PdfWorkerRequest::InspectPagesText { .. } => {
-            SEARCH_REQUEST_TIMEOUT
-        }
+        PdfWorkerRequest::Search { .. }
+        | PdfWorkerRequest::InspectPagesText { .. }
+        | PdfWorkerRequest::ExtractPagesText { .. } => SEARCH_REQUEST_TIMEOUT,
         _ => DEFAULT_REQUEST_TIMEOUT,
     }
 }

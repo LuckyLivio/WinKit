@@ -3289,12 +3289,46 @@ export async function renderPdfPage(request: PdfRenderRequest): Promise<Rendered
   return invoke<RenderedPdfPagePayload>("render_pdf_page", { request });
 }
 
+export type PdfExtractedPageStatus = "included" | "truncated" | "scanned" | "omitted";
+
+export interface PdfExtractedPageMeta {
+  pageNumber: number;
+  charCount: number;
+  byteCount: number;
+  hasText: boolean;
+  status: PdfExtractedPageStatus;
+}
+
+export interface PdfExtractPagesTextResult {
+  path: string;
+  fileName: string;
+  totalPages: number;
+  requestedPages: number[];
+  includedPages: number[];
+  scannedPages: number[];
+  omittedPages: number[];
+  pages: PdfExtractedPageMeta[];
+  combinedText: string;
+  extractedPageCount: number;
+  totalChars: number;
+  totalBytes: number;
+  truncated: boolean;
+}
+
 export async function getPdfPageText(
   path: string,
   pageNumber: number,
 ): Promise<PdfPageTextPayload> {
   assertFrontendNotShuttingDown();
   return invoke<PdfPageTextPayload>("get_pdf_page_text", { path, pageNumber });
+}
+
+export async function extractPdfPagesText(
+  path: string,
+  pages: number[],
+): Promise<PdfExtractPagesTextResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<PdfExtractPagesTextResult>("extract_pdf_pages_text", { path, pages });
 }
 
 export async function searchPdfText(

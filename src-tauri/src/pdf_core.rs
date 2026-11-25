@@ -14,8 +14,9 @@ use crate::fs_guard::{
     paths_refer_to_same_location, validate_existing_input_file, validate_user_path,
 };
 use crate::pdf_pdfium::{
-    PdfOutlineItem, PdfPageGeometry, PdfPageTextPayload, PdfPageTextSummary, PdfRenderMeta,
-    PdfSearchResult, MAX_PDF_FILE_BYTES, MAX_PDF_PAGES, MAX_PREVIEW_SIDE_PX,
+    PdfExtractPagesTextResult, PdfOutlineItem, PdfPageGeometry, PdfPageTextPayload,
+    PdfPageTextSummary, PdfRenderMeta, PdfSearchResult, MAX_PDF_FILE_BYTES, MAX_PDF_PAGES,
+    MAX_PREVIEW_SIDE_PX,
 };
 use crate::pdf_worker::{PdfWorkerClient, PdfWorkerRequest, PdfWorkerResponse};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -381,6 +382,25 @@ impl PdfSessionManager {
             _ => Err(AppError::new(
                 "PDF_WORKER_ERROR",
                 "Unexpected PDF worker response for text extraction.",
+            )),
+        }
+    }
+
+    pub fn extract_pages_text(
+        &self,
+        path_raw: &str,
+        pages: Vec<usize>,
+    ) -> Result<PdfExtractPagesTextResult, AppError> {
+        let (canonical, _) = validate_existing_input_file(path_raw)?;
+        let (resp, _) = self.worker.send(PdfWorkerRequest::ExtractPagesText {
+            path: canonical.to_string_lossy().into_owned(),
+            pages,
+        })?;
+        match resp {
+            PdfWorkerResponse::ExtractPagesText(result) => Ok(result),
+            _ => Err(AppError::new(
+                "PDF_WORKER_ERROR",
+                "Unexpected PDF worker response for multi-page text extraction.",
             )),
         }
     }

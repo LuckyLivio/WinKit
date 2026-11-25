@@ -39,6 +39,7 @@ const MAX_OUTLINE_DEPTH: usize = 16;
 const MAX_TEXT_RECTS_PER_PAGE: usize = 4_000;
 const MAX_SEARCH_MATCHES_TOTAL: usize = 500;
 const MAX_LINKS_PER_PAGE: usize = 500;
+pub const MAX_PDFIUM_PAGE_RAW_CHARS: usize = 200_000;
 
 const FPDF_ERR_FILE: c_ulong = 2;
 const FPDF_ERR_FORMAT: c_ulong = 3;
@@ -103,6 +104,167 @@ pub struct PdfPageTextPayload {
     pub char_count: usize,
     pub spans: Vec<PdfTextSpan>,
     pub links: Vec<PdfLinkItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfExtractedPageStatus {
+    Included,
+    Truncated,
+    Scanned,
+    Omitted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfExtractedPageMeta {
+    pub page_number: usize,
+    pub char_count: usize,
+    pub byte_count: usize,
+    pub has_text: bool,
+    pub status: PdfExtractedPageStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfExtractPagesTextResult {
+    pub path: String,
+    pub file_name: String,
+    pub total_pages: usize,
+    pub requested_pages: Vec<usize>,
+    pub included_pages: Vec<usize>,
+    pub scanned_pages: Vec<usize>,
+    pub omitted_pages: Vec<usize>,
+    pub pages: Vec<PdfExtractedPageMeta>,
+    pub combined_text: String,
+    pub extracted_page_count: usize,
+    pub total_chars: usize,
+    pub total_bytes: usize,
+    pub truncated: bool,
+}
+
+/// Normalizes raw PDFium `FPDFText_GetText` page text for clean editing and natural offline
+/// speech synthesis while preserving paragraph boundaries.
+pub fn normalize_pdf_text_for_speech(raw: &str) -> String {
+    let cleaned: String = raw
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|&c| {
+            !matches!(
+                c,
+                '\u{FEFF}' | '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}'
+            ) && (!c.is_control() || c == '\n' || c == '\t')
+        })
+        .collect();
+
+    let mut out_lines: Vec<String> = Vec::new();
+    let mut consecutive_empty = 0usize;
+
+    for raw_line in cleaned.split('\n') {
+        let mut norm_line = String::new();
+        let mut prev_space = false;
+        for ch in raw_line.trim().chars() {
+            if ch == '\t' || ch == ' ' || ch == '\u{00A0}' {
+                if !prev_space && !norm_line.is_empty() {
+                    norm_line.push(' ');
+                    prev_space = true;
+                }
+            } else {
+                norm_line.push(ch);
+                prev_space = false;
+            }
+        }
+        let trimmed = norm_line.trim();
+        if trimmed.is_empty() {
+            if !out_lines.is_empty() && consecutive_empty == 0 {
+                out_lines.push(String::new());
+                consecutive_empty = 1;
+            }
+        } else {
+            out_lines.push(trimmed.to_string());
+            consecutive_empty = 0;
+        }
+    }
+
+    while out_lines.last().is_some_and(|l| l.is_empty()) {
+        out_lines.pop();
+    }
+
+    out_lines.join("\n")
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AppendTtsTextOutcome {
+    added_chars: usize,
+    added_bytes: usize,
+    hit_budget: bool,
+}
+
+fn append_bounded_tts_text(
+    combined: &mut String,
+    total_chars: &mut usize,
+    piece: &str,
+    max_chars: usize,
+    max_bytes: usize,
+) -> AppendTtsTextOutcome {
+    let Some(first_ch) = piece.chars().next() else {
+        return AppendTtsTextOutcome {
+            added_chars: 0,
+            added_bytes: 0,
+            hit_budget: false,
+        };
+    };
+    let sep = if combined.is_empty() { "" } else { "\n\n" };
+    let sep_chars = sep.chars().count();
+    let sep_bytes = sep.len();
+
+    // Only append the inter-page separator if at least one character of `piece` fits within both
+    // character and UTF-8 byte ceilings.
+    if *total_chars + sep_chars + 1 > max_chars
+        || combined.len() + sep_bytes + first_ch.len_utf8() > max_bytes
+    {
+        return AppendTtsTextOutcome {
+            added_chars: 0,
+            added_bytes: 0,
+            hit_budget: true,
+        };
+    }
+
+    let piece_chars = piece.chars().count();
+    if *total_chars + sep_chars + piece_chars <= max_chars
+        && combined.len() + sep_bytes + piece.len() <= max_bytes
+    {
+        combined.push_str(sep);
+        combined.push_str(piece);
+        *total_chars += sep_chars + piece_chars;
+        return AppendTtsTextOutcome {
+            added_chars: piece_chars,
+            added_bytes: piece.len(),
+            hit_budget: false,
+        };
+    }
+
+    // Truncate cleanly on a UTF-8 character boundary within both char and byte ceilings.
+    combined.push_str(sep);
+    *total_chars += sep_chars;
+    let mut added_chars = 0usize;
+    let mut added_bytes = 0usize;
+    for ch in piece.chars() {
+        let ch_bytes = ch.len_utf8();
+        if *total_chars + 1 > max_chars || combined.len() + ch_bytes > max_bytes {
+            break;
+        }
+        combined.push(ch);
+        *total_chars += 1;
+        added_chars += 1;
+        added_bytes += ch_bytes;
+    }
+    AppendTtsTextOutcome {
+        added_chars,
+        added_bytes,
+        hit_budget: true,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1765,14 +1927,263 @@ mod win_impl {
             Ok(out)
         })
     }
+
+    /// Reuses PDFium text extraction (`FPDFText_LoadPage` + `FPDFText_GetText`) in a single
+    /// document open to extract ordered, normalized text strictly within `max_chars` / `max_bytes`
+    /// for offline `T06` reading without duplicating per-page text payloads.
+    pub fn extract_pages_text_for_tts_with_pdfium(
+        resource_dir: Option<&Path>,
+        path: &Path,
+        requested_pages: &[usize],
+        max_chars: usize,
+        max_bytes: usize,
+    ) -> Result<PdfExtractPagesTextResult, AppError> {
+        extract_pages_text_for_tts_with_pdfium_limits(
+            resource_dir,
+            path,
+            requested_pages,
+            max_chars,
+            max_bytes,
+            MAX_PDFIUM_PAGE_RAW_CHARS,
+        )
+    }
+
+    pub fn extract_pages_text_for_tts_with_pdfium_limits(
+        resource_dir: Option<&Path>,
+        path: &Path,
+        requested_pages: &[usize],
+        max_chars: usize,
+        max_bytes: usize,
+        page_raw_char_cap: usize,
+    ) -> Result<PdfExtractPagesTextResult, AppError> {
+        if requested_pages.is_empty() {
+            return Err(AppError::invalid_param(
+                "Please select at least one PDF page to read aloud.",
+            ));
+        }
+
+        let mut deduped: Vec<usize> = Vec::with_capacity(requested_pages.len());
+        let mut seen = HashSet::new();
+        for &p in requested_pages {
+            if p == 0 {
+                return Err(AppError::invalid_param("Page number must be >= 1."));
+            }
+            if seen.insert(p) {
+                deduped.push(p);
+            }
+        }
+
+        let effective_raw_cap = page_raw_char_cap.max(1);
+
+        with_pdfium(resource_dir, |api| {
+            let loaded = open_pdf_doc(api, path)?;
+            let total_pages = unsafe { (api.FPDF_GetPageCount)(loaded.doc) }.max(0) as usize;
+            if total_pages == 0 {
+                return Err(AppError::new(
+                    "PDF_CORRUPT_OR_INVALID",
+                    "PDF document contains no pages.",
+                ));
+            }
+            for &p in &deduped {
+                if p > total_pages {
+                    return Err(AppError::invalid_param(format!(
+                        "Requested page {p} is out of bounds (document has {total_pages} pages)."
+                    )));
+                }
+            }
+
+            let mut pages_out = Vec::with_capacity(deduped.len());
+            let mut included_pages = Vec::new();
+            let mut scanned_pages = Vec::new();
+            let mut omitted_pages = Vec::new();
+            let mut combined_text = String::new();
+            let mut total_chars = 0usize;
+            let mut truncated = false;
+
+            for &page_number in &deduped {
+                // Once the combined budget has already triggered truncation, omit remaining pages
+                // cleanly without doing extra full-page text reads or mislabeling them as scanned.
+                if truncated {
+                    omitted_pages.push(page_number);
+                    pages_out.push(PdfExtractedPageMeta {
+                        page_number,
+                        char_count: 0,
+                        byte_count: 0,
+                        has_text: false,
+                        status: PdfExtractedPageStatus::Omitted,
+                    });
+                    continue;
+                }
+
+                let page = unsafe { (api.FPDF_LoadPage)(loaded.doc, (page_number - 1) as c_int) };
+                if page.is_null() {
+                    return Err(AppError::new(
+                        "PDF_PAGE_ERROR",
+                        format!("Failed to load PDF page {page_number}."),
+                    ));
+                }
+
+                let mut raw_text = String::new();
+                let mut hit_pdfium_page_cap = false;
+                let text_page = unsafe { (api.FPDFText_LoadPage)(page) };
+                if !text_page.is_null() {
+                    let raw_count = unsafe { (api.FPDFText_CountChars)(text_page) };
+                    if raw_count > 0 {
+                        let raw_count_usize = raw_count as usize;
+                        hit_pdfium_page_cap = raw_count_usize > effective_raw_cap;
+                        let capped = raw_count_usize.min(effective_raw_cap);
+                        let mut full_buf = vec![0u16; capped + 1];
+                        let got = unsafe {
+                            (api.FPDFText_GetText)(
+                                text_page,
+                                0,
+                                capped as c_int,
+                                full_buf.as_mut_ptr(),
+                            )
+                        };
+                        if got > 1 {
+                            let mut end = (got as usize).saturating_sub(1);
+                            // Avoid splitting a UTF-16 surrogate pair when hitting the raw cap.
+                            if hit_pdfium_page_cap
+                                && end > 0
+                                && (0xD800..=0xDBFF).contains(&full_buf[end - 1])
+                            {
+                                end -= 1;
+                            }
+                            raw_text = String::from_utf16_lossy(&full_buf[..end]);
+                        }
+                    }
+                    unsafe { (api.FPDFText_ClosePage)(text_page) };
+                }
+                unsafe { (api.FPDF_ClosePage)(page) };
+
+                let normalized = normalize_pdf_text_for_speech(&raw_text);
+                let has_text = normalized.chars().any(|c| !c.is_whitespace());
+
+                if !has_text {
+                    if hit_pdfium_page_cap {
+                        truncated = true;
+                        omitted_pages.push(page_number);
+                        pages_out.push(PdfExtractedPageMeta {
+                            page_number,
+                            char_count: 0,
+                            byte_count: 0,
+                            has_text: false,
+                            status: PdfExtractedPageStatus::Omitted,
+                        });
+                    } else {
+                        scanned_pages.push(page_number);
+                        pages_out.push(PdfExtractedPageMeta {
+                            page_number,
+                            char_count: 0,
+                            byte_count: 0,
+                            has_text: false,
+                            status: PdfExtractedPageStatus::Scanned,
+                        });
+                    }
+                    continue;
+                }
+
+                let outcome = append_bounded_tts_text(
+                    &mut combined_text,
+                    &mut total_chars,
+                    &normalized,
+                    max_chars,
+                    max_bytes,
+                );
+
+                if outcome.added_chars == 0 {
+                    truncated = true;
+                    omitted_pages.push(page_number);
+                    pages_out.push(PdfExtractedPageMeta {
+                        page_number,
+                        char_count: 0,
+                        byte_count: 0,
+                        has_text: true,
+                        status: PdfExtractedPageStatus::Omitted,
+                    });
+                } else {
+                    let page_truncated = hit_pdfium_page_cap || outcome.hit_budget;
+                    if page_truncated {
+                        truncated = true;
+                    }
+                    included_pages.push(page_number);
+                    pages_out.push(PdfExtractedPageMeta {
+                        page_number,
+                        char_count: outcome.added_chars,
+                        byte_count: outcome.added_bytes,
+                        has_text: true,
+                        status: if page_truncated {
+                            PdfExtractedPageStatus::Truncated
+                        } else {
+                            PdfExtractedPageStatus::Included
+                        },
+                    });
+                }
+            }
+
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document.pdf".to_string());
+            let total_bytes = combined_text.len();
+            let extracted_page_count = included_pages.len();
+
+            Ok(PdfExtractPagesTextResult {
+                path: path.to_string_lossy().into_owned(),
+                file_name,
+                total_pages,
+                requested_pages: deduped,
+                included_pages,
+                scanned_pages,
+                omitted_pages,
+                pages: pages_out,
+                combined_text,
+                extracted_page_count,
+                total_chars,
+                total_bytes,
+                truncated,
+            })
+        })
+    }
 }
 
 #[cfg(windows)]
 pub use win_impl::{
     extract_page_char_rects_with_pdfium, extract_page_text_with_pdfium,
+    extract_pages_text_for_tts_with_pdfium, extract_pages_text_for_tts_with_pdfium_limits,
     inspect_pages_text_status_with_pdfium, inspect_with_pdfium, render_page_png_with_pdfium,
     render_page_rgba_with_pdfium, search_document_with_pdfium,
 };
+
+#[cfg(not(windows))]
+pub fn extract_pages_text_for_tts_with_pdfium_limits(
+    _resource_dir: Option<&Path>,
+    _path: &Path,
+    _requested_pages: &[usize],
+    _max_chars: usize,
+    _max_bytes: usize,
+    _page_raw_char_cap: usize,
+) -> Result<PdfExtractPagesTextResult, AppError> {
+    Err(AppError::new(
+        "PDF_ENGINE_MISSING",
+        "Bundled Windows PDFium engine is only available on Windows.",
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn extract_pages_text_for_tts_with_pdfium(
+    _resource_dir: Option<&Path>,
+    _path: &Path,
+    _requested_pages: &[usize],
+    _max_chars: usize,
+    _max_bytes: usize,
+) -> Result<PdfExtractPagesTextResult, AppError> {
+    Err(AppError::new(
+        "PDF_ENGINE_MISSING",
+        "Bundled Windows PDFium engine is only available on Windows.",
+    ))
+}
 
 #[cfg(not(windows))]
 pub fn extract_page_char_rects_with_pdfium(

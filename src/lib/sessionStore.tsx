@@ -94,6 +94,7 @@ import type {
   StripMetadataBatchRequest,
   TransformStep,
 } from "../tools/image-batch/imageBatchModel";
+import { formatCompactPages } from "../tools/pdf-shared/pageRangeUtils";
 import {
   beautifyImagesBatch,
   bindDisposableListener,
@@ -344,12 +345,31 @@ export interface CaseConverterSessionState {
   selectedStyle: CaseStyleId;
 }
 
+export type TtsSourceKind = "none" | "txt" | "pdf";
+
+export interface TtsPdfHandoffPayload {
+  path: string;
+  fileName: string;
+  text: string;
+  includedPages: number[];
+  skippedScannedPages: number[];
+  omittedPages: number[];
+  truncated: boolean;
+}
+
 export interface TextToSpeechSessionState {
   sourceGeneration: number;
   loadingFile: boolean;
   text: string;
+  sourceKind: TtsSourceKind;
   sourceFilePath: string | null;
   sourceFileName: string | null;
+  sourcePageSummary: string | null;
+  sourceSkippedScannedPages: number[];
+  sourceOmittedPages: number[];
+  sourceTruncated: boolean;
+  pendingPdfHandoff: TtsPdfHandoffPayload | null;
+  pendingPdfHandoffNeedsConfirm: boolean;
   voices: TtsVoiceInfo[];
   voicesLoaded: boolean;
   voicesLoading: boolean;
@@ -1138,8 +1158,15 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     sourceGeneration: 0,
     loadingFile: false,
     text: "",
+    sourceKind: "none",
     sourceFilePath: null,
     sourceFileName: null,
+    sourcePageSummary: null,
+    sourceSkippedScannedPages: [],
+    sourceOmittedPages: [],
+    sourceTruncated: false,
+    pendingPdfHandoff: null,
+    pendingPdfHandoffNeedsConfirm: false,
     voices: [],
     voicesLoaded: false,
     voicesLoading: false,
@@ -1453,6 +1480,9 @@ interface SessionStoreContextValue {
     rawPath: string,
     formatError: (err: unknown) => string,
   ) => Promise<boolean>;
+  handoffPdfTextToTts: (payload: TtsPdfHandoffPayload) => void;
+  applyPendingPdfHandoff: () => void;
+  dismissPendingPdfHandoff: () => void;
   startTextToSpeech: (
     req: SynthesizeTtsRequest,
     formatError: (err: unknown) => string,
@@ -3241,8 +3271,13 @@ export function SessionStoreProvider({
             sourceGeneration: nextGen,
             loadingFile: false,
             text: payload.content,
+            sourceKind: "txt",
             sourceFilePath: payload.path,
             sourceFileName: payload.fileName,
+            sourcePageSummary: null,
+            sourceSkippedScannedPages: [],
+            sourceOmittedPages: [],
+            sourceTruncated: false,
             status: "idle",
             activeTaskId: null,
             liveProgress: null,
@@ -3270,6 +3305,109 @@ export function SessionStoreProvider({
     },
     [],
   );
+
+  const applyPdfHandoffIntoState = (
+    curr: TextToSpeechSessionState,
+    payload: TtsPdfHandoffPayload,
+  ): TextToSpeechSessionState => {
+    ttsFileLoadSeqRef.current += 1;
+    const nextGen = ++ttsSourceGenRef.current;
+    void clearTtsSession();
+    const sortedIncluded = Array.from(new Set(payload.includedPages)).sort((a, b) => a - b);
+    const pageSummary = sortedIncluded.length > 0 ? formatCompactPages(sortedIncluded) : null;
+    return {
+      ...curr,
+      sourceGeneration: nextGen,
+      loadingFile: false,
+      text: payload.text,
+      sourceKind: "pdf",
+      sourceFilePath: payload.path,
+      sourceFileName: payload.fileName,
+      sourcePageSummary: pageSummary,
+      sourceSkippedScannedPages: [...payload.skippedScannedPages],
+      sourceOmittedPages: [...payload.omittedPages],
+      sourceTruncated: payload.truncated,
+      pendingPdfHandoff: null,
+      pendingPdfHandoffNeedsConfirm: false,
+      status: "idle",
+      activeTaskId: null,
+      liveProgress: null,
+      result: null,
+      errorMessage: null,
+      lastSavedMessage: null,
+      lastSavedPath: null,
+    };
+  };
+
+  const handoffPdfTextToTts = useCallback((payload: TtsPdfHandoffPayload) => {
+    const normalizedPayload: TtsPdfHandoffPayload = {
+      ...payload,
+      includedPages: Array.from(new Set(payload.includedPages)).sort((a, b) => a - b),
+      skippedScannedPages: Array.from(new Set(payload.skippedScannedPages)).sort((a, b) => a - b),
+      omittedPages: Array.from(new Set(payload.omittedPages)).sort((a, b) => a - b),
+    };
+
+    setSession((prev) => {
+      const curr = prev.textToSpeech;
+      const isSynthesizing = curr.status === "running" || activeTtsTaskRef.current !== null;
+      if (isSynthesizing) {
+        return {
+          ...prev,
+          textToSpeech: {
+            ...curr,
+            pendingPdfHandoff: normalizedPayload,
+            pendingPdfHandoffNeedsConfirm: false,
+          },
+        };
+      }
+
+      const hasDraftOrAudition = curr.text.trim().length > 0 || curr.result !== null;
+      if (hasDraftOrAudition) {
+        return {
+          ...prev,
+          textToSpeech: {
+            ...curr,
+            pendingPdfHandoff: normalizedPayload,
+            pendingPdfHandoffNeedsConfirm: true,
+          },
+        };
+      }
+
+      return {
+        ...prev,
+        textToSpeech: applyPdfHandoffIntoState(curr, normalizedPayload),
+      };
+    });
+    navRef.current?.("T06");
+  }, []);
+
+  const applyPendingPdfHandoff = useCallback(() => {
+    setSession((prev) => {
+      const curr = prev.textToSpeech;
+      if (
+        !curr.pendingPdfHandoff ||
+        curr.status === "running" ||
+        activeTtsTaskRef.current !== null
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        textToSpeech: applyPdfHandoffIntoState(curr, curr.pendingPdfHandoff),
+      };
+    });
+  }, []);
+
+  const dismissPendingPdfHandoff = useCallback(() => {
+    setSession((prev) => ({
+      ...prev,
+      textToSpeech: {
+        ...prev.textToSpeech,
+        pendingPdfHandoff: null,
+        pendingPdfHandoffNeedsConfirm: false,
+      },
+    }));
+  }, []);
 
   const startTextToSpeech = useCallback(
     async (
@@ -3381,8 +3519,15 @@ export function SessionStoreProvider({
         sourceGeneration: gen,
         loadingFile: false,
         text: "",
+        sourceKind: "none",
         sourceFilePath: null,
         sourceFileName: null,
+        sourcePageSummary: null,
+        sourceSkippedScannedPages: [],
+        sourceOmittedPages: [],
+        sourceTruncated: false,
+        pendingPdfHandoff: null,
+        pendingPdfHandoffNeedsConfirm: false,
         status: "idle",
         activeTaskId: null,
         liveProgress: null,
@@ -3461,6 +3606,9 @@ export function SessionStoreProvider({
         updateTextToSpeechSession,
         refreshTtsVoices,
         loadTextToSpeechFile,
+        handoffPdfTextToTts,
+        applyPendingPdfHandoff,
+        dismissPendingPdfHandoff,
         startTextToSpeech,
         cancelTextToSpeech,
         clearTextToSpeechSession,
@@ -3477,4 +3625,8 @@ export function useSessionStore(): SessionStoreContextValue {
     throw new Error("useSessionStore must be used inside SessionStoreProvider");
   }
   return ctx;
+}
+
+export function useOptionalSessionStore(): SessionStoreContextValue | null {
+  return useContext(SessionStoreContext);
 }

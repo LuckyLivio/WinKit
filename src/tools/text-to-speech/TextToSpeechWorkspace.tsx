@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  BookOpen,
   ClipboardPaste,
   Download,
   Eraser,
@@ -16,7 +17,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { MediaToolsSetupPanel } from "../../components/MediaToolsSetupPanel";
 import { useI18n } from "../../i18n/I18nContext";
+import { useOptionalPdfSession } from "../../lib/pdfSessionStore";
 import { useSessionStore } from "../../lib/sessionStore";
+import { formatCompactPages } from "../pdf-shared/pageRangeUtils";
 import {
   bindDisposableListener,
   exportTtsAudio,
@@ -122,10 +125,13 @@ export function TextToSpeechWorkspace() {
     updateTextToSpeechSession,
     refreshTtsVoices,
     loadTextToSpeechFile,
+    applyPendingPdfHandoff,
+    dismissPendingPdfHandoff,
     startTextToSpeech,
     cancelTextToSpeech,
     clearTextToSpeechSession,
   } = useSessionStore();
+  const pdfSession = useOptionalPdfSession();
   const state = session.textToSpeech;
 
   const [dragging, setDragging] = useState(false);
@@ -133,6 +139,7 @@ export function TextToSpeechWorkspace() {
   const [localError, setLocalError] = useState<string | null>(null);
   const [mediaToolsStatus, setMediaToolsStatus] = useState<MediaToolsStatus | null>(null);
   const [pendingOverwrite, setPendingOverwrite] = useState<PendingOverwriteExport | null>(null);
+  const [confirmPendingQueue, setConfirmPendingQueue] = useState(false);
 
   const mountedRef = useRef(true);
   const exportSeqRef = useRef(0);
@@ -196,6 +203,12 @@ export function TextToSpeechWorkspace() {
     setPendingOverwrite(null);
     setExporting(false);
   }, [exportBindingKey]);
+
+  useEffect(() => {
+    if (state.status === "running" || !state.pendingPdfHandoff) {
+      setConfirmPendingQueue(false);
+    }
+  }, [state.status, state.pendingPdfHandoff, state.sourceGeneration]);
 
   const handleRefreshVoices = useCallback(async () => {
     setLocalError(null);
@@ -267,8 +280,13 @@ export function TextToSpeechWorkspace() {
       updateTextToSpeechSession((prev) => ({
         ...prev,
         text: pasted,
+        sourceKind: "none",
         sourceFilePath: null,
         sourceFileName: null,
+        sourcePageSummary: null,
+        sourceSkippedScannedPages: [],
+        sourceOmittedPages: [],
+        sourceTruncated: false,
         errorMessage: null,
       }));
     } catch (err) {
@@ -469,7 +487,42 @@ export function TextToSpeechWorkspace() {
   ]);
 
   const isRunning = state.status === "running";
+  const hasDraftOrAudition = Boolean(state.text.trim().length > 0 || state.result !== null);
   const hasAnyContent = Boolean(state.text.length > 0 || state.sourceFilePath || state.result);
+  const pendingPdf = state.pendingPdfHandoff;
+  const pendingPdfPagesLabel = useMemo(() => {
+    if (!pendingPdf || pendingPdf.includedPages.length === 0) return null;
+    return formatCompactPages(pendingPdf.includedPages);
+  }, [pendingPdf]);
+  const showPendingPdfBanner = Boolean(pendingPdf && !state.pendingPdfHandoffNeedsConfirm);
+  const replacePdfConfirmOpen = Boolean(
+    !isRunning && pendingPdf && (state.pendingPdfHandoffNeedsConfirm || confirmPendingQueue),
+  );
+
+  const handleRequestLoadPendingPdf = () => {
+    if (!pendingPdf || isRunning) return;
+    if (hasDraftOrAudition) {
+      setConfirmPendingQueue(true);
+      return;
+    }
+    setLocalError(null);
+    setPendingOverwrite(null);
+    applyPendingPdfHandoff();
+  };
+
+  const handleConfirmReplacePdf = () => {
+    setConfirmPendingQueue(false);
+    setLocalError(null);
+    setPendingOverwrite(null);
+    applyPendingPdfHandoff();
+  };
+
+  const handleCancelReplacePdf = () => {
+    setConfirmPendingQueue(false);
+    if (state.pendingPdfHandoffNeedsConfirm) {
+      dismissPendingPdfHandoff();
+    }
+  };
   const canStart = Boolean(
     state.text.trim().length > 0 &&
     state.selectedVoiceId &&
@@ -493,8 +546,8 @@ export function TextToSpeechWorkspace() {
           <h2 className="workspace-title">{isZh ? "文本朗读" : "Read Text Aloud"}</h2>
           <p className="workspace-subtitle">
             {isZh
-              ? "调用 Windows 本机已安装的离线语音将粘贴文本或 .txt 按段落顺序合成自然语音，支持直接试听与 WAV / MP3 安全导出"
-              : "Synthesize pasted text or .txt files paragraph-by-paragraph with installed offline Windows voices, audition inline, and save as WAV or MP3"}
+              ? "调用 Windows 本机已安装的离线语音将粘贴文本、.txt 或从「PDF 快速预览 (C08)」提取的页面文本按段落顺序合成自然语音，支持试听与 WAV / MP3 安全导出"
+              : "Synthesize pasted text, .txt files, or PDF pages extracted via C08 paragraph-by-paragraph with installed offline Windows voices, audition inline, and save as WAV or MP3"}
           </p>
         </div>
         <div className="media-actions-row" style={{ flexWrap: "wrap" }}>
@@ -507,6 +560,17 @@ export function TextToSpeechWorkspace() {
             <FileText size={14} aria-hidden="true" />
             <span>{isZh ? "打开 .txt 文件" : "Open .txt"}</span>
           </button>
+          {pdfSession && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => pdfSession.navigateToPdfReader()}
+              data-testid="t06-open-pdf-reader-btn"
+            >
+              <BookOpen size={14} aria-hidden="true" />
+              <span>{isZh ? "从 PDF 朗读 (C08)" : "Read from PDF (C08)"}</span>
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-ghost"
@@ -530,6 +594,56 @@ export function TextToSpeechWorkspace() {
         </div>
       </div>
 
+      {showPendingPdfBanner && pendingPdf && (
+        <div className="tts-guidance-banner" role="status" data-testid="t06-pending-handoff-banner">
+          <div className="tts-guidance-head">
+            <BookOpen size={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontWeight: 500, color: "var(--text-primary)" }}>
+                {isRunning
+                  ? isZh
+                    ? "已暂存来自「PDF 快速预览 (C08)」的朗读文本，待当前合成完成或取消后可选择载入："
+                    : "PDF text queued from Quick PDF Preview (C08). You can load it once the current synthesis finishes or is cancelled:"
+                  : isZh
+                    ? "有待处理的 PDF 朗读交接（已保留当前文本与试听结果）："
+                    : "Pending PDF read-aloud handoff ready (current draft and audio preserved):"}
+              </span>
+              <span className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
+                {pendingPdf.fileName}
+                {pendingPdfPagesLabel
+                  ? isZh
+                    ? ` · 第 ${pendingPdfPagesLabel} 页`
+                    : ` · p. ${pendingPdfPagesLabel}`
+                  : ""}
+              </span>
+            </div>
+          </div>
+          <div className="tts-guidance-actions">
+            {!isRunning && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleRequestLoadPendingPdf}
+                data-testid="t06-load-pending-btn"
+              >
+                <span>{isZh ? "载入待处理 PDF" : "Load Pending PDF"}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setConfirmPendingQueue(false);
+                dismissPendingPdfHandoff();
+              }}
+              data-testid="t06-dismiss-pending-btn"
+            >
+              <span>{isZh ? "放弃" : "Dismiss"}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="tts-layout">
         {/* Left: Text Editor + File Drop + Missing Voice Guidance */}
         <section
@@ -542,6 +656,13 @@ export function TextToSpeechWorkspace() {
                 <span className="tts-pill is-source" data-testid="t06-source-file-badge">
                   <FileText size={12} aria-hidden="true" />
                   <span>{state.sourceFileName}</span>
+                </span>
+              )}
+              {state.sourceKind === "pdf" && state.sourcePageSummary && (
+                <span className="tts-pill mono is-source" data-testid="t06-source-pages-badge">
+                  {isZh
+                    ? `PDF 第 ${state.sourcePageSummary} 页`
+                    : `PDF p. ${state.sourcePageSummary}`}
                 </span>
               )}
               <span className="tts-pill mono" data-testid="t06-char-count">
@@ -578,6 +699,65 @@ export function TextToSpeechWorkspace() {
             aria-label={isZh ? "朗读文本输入框" : "Text to synthesize"}
             data-testid="t06-text-input"
           />
+
+          {state.sourceKind === "pdf" && state.sourceSkippedScannedPages.length > 0 && (
+            <div
+              className="tts-guidance-banner"
+              role="status"
+              data-testid="t06-pdf-scanned-pages-notice"
+            >
+              <div className="tts-guidance-head">
+                <AlertTriangle
+                  size={15}
+                  aria-hidden="true"
+                  style={{ flexShrink: 0, marginTop: 2 }}
+                />
+                <span>
+                  {isZh
+                    ? `原 PDF 第 ${formatCompactPages(state.sourceSkippedScannedPages)} 页未检测到可选文字层（纯扫描页），已跳过。如需朗读这些页面，请先使用「扫描版 PDF 转可搜索 (P04)」生成文字层。`
+                    : `Page(s) ${formatCompactPages(state.sourceSkippedScannedPages)} of the PDF had no selectable text layer (pure scanned pages) and were skipped. Use Make PDF Searchable (P04) to add an OCR text layer first.`}
+                </span>
+              </div>
+              {pdfSession && state.sourceFilePath && (
+                <div className="tts-guidance-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => pdfSession.sendPdfToTool(state.sourceFilePath!, "P04")}
+                    data-testid="t06-goto-p04-btn"
+                  >
+                    <span>{isZh ? "前往 P04 转为可搜索 PDF" : "Make Searchable (P04)"}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {state.sourceKind === "pdf" &&
+            (state.sourceTruncated || state.sourceOmittedPages.length > 0) && (
+              <div
+                className="tts-guidance-banner is-warn"
+                role="status"
+                data-testid="t06-pdf-truncated-notice"
+              >
+                <div className="tts-guidance-head">
+                  <AlertTriangle
+                    size={15}
+                    aria-hidden="true"
+                    style={{ flexShrink: 0, marginTop: 2 }}
+                  />
+                  <span>
+                    {state.sourceOmittedPages.length > 0
+                      ? isZh
+                        ? `所选 PDF 页面文字超过单次离线合成上限（1 MiB / 200,000 字符），已按安全边界截断；第 ${formatCompactPages(state.sourceOmittedPages)} 页因超出上限已省略。建议分批按页范围提取朗读。`
+                        : `Extracted PDF text exceeded the single-run offline ceiling (1 MiB / 200,000 chars) and was safely truncated; page(s) ${formatCompactPages(state.sourceOmittedPages)} were omitted. Consider reading smaller page ranges in batches.`
+                      : isZh
+                        ? "所选 PDF 页面文字超过单次离线合成上限（1 MiB / 200,000 字符），当前页面已按安全边界截断。建议分批按页范围提取朗读。"
+                        : "Extracted PDF text exceeded the single-run offline ceiling (1 MiB / 200,000 chars) and was safely truncated. Consider reading smaller page ranges in batches."}
+                  </span>
+                </div>
+              </div>
+            )}
 
           {guidance && (
             <div
@@ -909,20 +1089,37 @@ export function TextToSpeechWorkspace() {
 
             <p className="tts-scope-note">
               {isZh
-                ? "当前支持粘贴文本与 .txt 纯文本的本机离线朗读、试听与 WAV / MP3 导出；PDF 与 Office 文档直接朗读保留于后续规划。"
-                : "Currently supports pasted text and .txt plain text for offline speech synthesis, audition, and WAV / MP3 export. Direct PDF/document reading is tracked for a later update."}
+                ? "当前支持粘贴文本、.txt 纯文本及经「PDF 快速预览 (C08)」按页提取朗读（含 P04 OCR 可搜索 PDF）与 WAV / MP3 导出；Office 文档直接朗读保留于后续规划。"
+                : "Currently supports pasted text, .txt plain text, and page-by-page PDF reading via C08 (including P04 OCR searchable PDFs) with WAV / MP3 export. Direct Office document reading is tracked separately."}
             </p>
           </div>
         </aside>
       </div>
 
       <ConfirmDialog
+        open={replacePdfConfirmOpen}
+        title={isZh ? "替换当前朗读稿与试听结果？" : "Replace Current Draft & Audio?"}
+        body={
+          pendingPdf
+            ? isZh
+              ? `当前工作区已有编辑文本或可试听音频。是否载入来自「PDF 快速预览 (C08)」的「${pendingPdf.fileName}${pendingPdfPagesLabel ? `（第 ${pendingPdfPagesLabel} 页）` : ""}」？确认后将替换当前文本并清空旧试听；取消则完整保留原稿与试听。`
+              : `This workspace already has draft text or synthesized audio. Load "${pendingPdf.fileName}${pendingPdfPagesLabel ? ` (p. ${pendingPdfPagesLabel})` : ""}" from Quick PDF Preview (C08)? Confirming replaces the current text and clears existing audio; cancelling preserves both.`
+            : ""
+        }
+        confirmLabel={isZh ? "确认载入" : "Load PDF Text"}
+        cancelLabel={isZh ? "保留原稿与试听" : "Keep Current"}
+        danger
+        onConfirm={handleConfirmReplacePdf}
+        onCancel={handleCancelReplacePdf}
+      />
+
+      <ConfirmDialog
         open={pendingOverwrite != null}
         title={isZh ? "覆盖已存在的音频文件？" : "Overwrite Existing Audio File?"}
         body={
           isZh
-            ? `目标路径已存在文件：${pendingOverwrite?.request.outputPath ?? ""}。是否确认覆盖？（源文本文件始终受保护，不会被覆盖）`
-            : `A file already exists at: ${pendingOverwrite?.request.outputPath ?? ""}. Overwrite it? (Your source text file is always protected.)`
+            ? `目标路径已存在文件：${pendingOverwrite?.request.outputPath ?? ""}。是否确认覆盖？（源文本或源 PDF 文件始终受保护，不会被覆盖）`
+            : `A file already exists at: ${pendingOverwrite?.request.outputPath ?? ""}. Overwrite it? (Your source text or PDF file is always protected.)`
         }
         confirmLabel={isZh ? "确认覆盖" : "Overwrite"}
         cancelLabel={isZh ? "取消" : "Cancel"}

@@ -793,6 +793,7 @@ export interface PdfSessionContextValue {
     updater: (prev: PdfSearchableSessionState) => PdfSearchableSessionState,
   ) => void;
   openInPdfReader: (path: string) => void;
+  navigateToPdfReader: () => void;
   sendPdfToTool: (path: string, toolId: PdfTargetToolId) => void;
   pendingReaderPath: string | null;
   clearPendingReaderPath: () => void;
@@ -952,6 +953,10 @@ export function PdfSessionProvider({
     [onNavigateToReader],
   );
 
+  const navigateToPdfReader = useCallback(() => {
+    onNavigateToReader();
+  }, [onNavigateToReader]);
+
   const sendPdfToTool = useCallback(
     (path: string, toolId: PdfTargetToolId) => {
       setPendingToolIntake({ toolId, path });
@@ -991,6 +996,7 @@ export function PdfSessionProvider({
         updateCaptureTextSession,
         updateSearchablePdfSession,
         openInPdfReader,
+        navigateToPdfReader,
         sendPdfToTool,
         pendingReaderPath,
         clearPendingReaderPath,

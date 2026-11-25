@@ -14,6 +14,7 @@ import {
   PanelLeft,
   Scissors,
   Search,
+  Volume2,
   X,
   ZoomIn,
   ZoomOut,
@@ -23,8 +24,10 @@ import { useI18n } from "../i18n/I18nContext";
 import { PDF_MESSAGES } from "../i18n/pdfMessages";
 import { usePdfSession } from "../lib/pdfSessionStore";
 import { openQrHttpUrl } from "../lib/qrBridge";
+import { useOptionalSessionStore } from "../lib/sessionStore";
 import {
   bindDisposableListener,
+  extractPdfPagesText,
   formatLocalizedError,
   getPdfPageText,
   inspectPdfDocument,
@@ -37,6 +40,7 @@ import {
   type PdfPageGeometry,
   type PdfPageTextPayload,
 } from "../lib/tauriBridge";
+import { formatCompactPages, parseClientPageRanges } from "../tools/pdf-shared/pageRangeUtils";
 import "./PdfReaderView.css";
 
 const MAX_CLIENT_PAGES = 18;
@@ -98,6 +102,7 @@ function OutlineTree({
 
 export function PdfReaderView() {
   const { locale, t } = useI18n();
+  const isZh = locale === "zh-CN";
   const pm = PDF_MESSAGES[locale];
   const {
     pdfSession,
@@ -106,6 +111,7 @@ export function PdfReaderView() {
     pendingReaderPath,
     clearPendingReaderPath,
   } = usePdfSession();
+  const sessionStore = useOptionalSessionStore();
   const state = pdfSession.reader;
 
   const [dropHover, setDropHover] = useState(false);
@@ -113,10 +119,18 @@ export function PdfReaderView() {
   const [viewportWidth, setViewportWidth] = useState(860);
   const [viewportHeight, setViewportHeight] = useState(640);
   const [renderedPages, setRenderedPages] = useState<Map<string, string>>(() => new Map());
-  const [renderedThumbs, setRenderedThumbs] = useState<Map<number, string>>(() => new Map());
-  const [pageTexts, setPageTexts] = useState<Map<number, PdfPageTextPayload>>(() => new Map());
+  const [renderedThumbs, setRenderedThumbs] = useState<Map<string, string>>(() => new Map());
+  const [pageTexts, setPageTexts] = useState<Map<string, PdfPageTextPayload>>(() => new Map());
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set([1]));
   const [visibleThumbs, setVisibleThumbs] = useState<Set<number>>(() => new Set([1, 2, 3, 4]));
+  const [ttsPanelOpen, setTtsPanelOpen] = useState(false);
+  const [ttsRangeInput, setTtsRangeInput] = useState("");
+  const [ttsBusy, setTtsBusy] = useState(false);
+  const [ttsScannedNotice, setTtsScannedNotice] = useState<{
+    path: string;
+    pages: number[];
+  } | null>(null);
+  const [ttsError, setTtsError] = useState<string | null>(null);
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const thumbScrollRef = useRef<HTMLDivElement | null>(null);
@@ -124,18 +138,45 @@ export function PdfReaderView() {
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const thumbRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
   const inFlightPagesRef = useRef<Set<string>>(new Set());
-  const inFlightThumbsRef = useRef<Set<number>>(new Set());
-  const inFlightTextRef = useRef<Set<number>>(new Set());
+  const inFlightThumbsRef = useRef<Set<string>>(new Set());
+  const inFlightTextRef = useRef<Set<string>>(new Set());
   const docGenerationRef = useRef(0);
+  const ttsExtractGenRef = useRef(0);
+  const mountedRef = useRef(true);
+  const activeDocPathRef = useRef<string | null>(state.activePath);
+  const docLoadingRef = useRef<boolean>(state.loading);
+  activeDocPathRef.current = state.activePath;
+  docLoadingRef.current = state.loading;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      ttsExtractGenRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    ttsExtractGenRef.current += 1;
+    setTtsBusy(false);
+  }, [state.activePath]);
 
   const openDocument = useCallback(
     async (path: string) => {
       const gen = ++docGenerationRef.current;
+      ttsExtractGenRef.current += 1;
+      activeDocPathRef.current = path;
+      docLoadingRef.current = true;
       setRenderedPages(new Map());
       setRenderedThumbs(new Map());
       setPageTexts(new Map());
       setVisiblePages(new Set([1]));
       setVisibleThumbs(new Set([1, 2, 3, 4]));
+      setTtsPanelOpen(false);
+      setTtsRangeInput("");
+      setTtsBusy(false);
+      setTtsScannedNotice(null);
+      setTtsError(null);
       inFlightPagesRef.current.clear();
       inFlightThumbsRef.current.clear();
       inFlightTextRef.current.clear();
@@ -155,6 +196,8 @@ export function PdfReaderView() {
       try {
         const info = await inspectPdfDocument(path);
         if (docGenerationRef.current !== gen) return;
+        activeDocPathRef.current = info.path;
+        docLoadingRef.current = false;
         updateReaderSession((prev) => ({
           ...prev,
           activePath: info.path,
@@ -166,6 +209,7 @@ export function PdfReaderView() {
         }));
       } catch (err) {
         if (docGenerationRef.current !== gen) return;
+        docLoadingRef.current = false;
         const parsed = parseBackendError(err);
         updateReaderSession((prev) => ({
           ...prev,
@@ -402,7 +446,7 @@ export function PdfReaderView() {
       const disp = computePageDisplaySize(pageGeom);
       // Quantize render width to 64px buckets to maximize backend & frontend cache hits
       const renderW = Math.min(2400, Math.max(240, Math.ceil((disp.width * dpr) / 64) * 64));
-      const key = `${pageNumber}@${renderW}`;
+      const key = `${info.path}#${pageNumber}@${renderW}`;
       if (!renderedPages.has(key) && !inFlightPagesRef.current.has(key)) {
         inFlightPagesRef.current.add(key);
         void renderPdfPage({
@@ -420,20 +464,17 @@ export function PdfReaderView() {
           });
       }
 
-      if (
-        info.hasTextLayer &&
-        !pageTexts.has(pageNumber) &&
-        !inFlightTextRef.current.has(pageNumber)
-      ) {
-        inFlightTextRef.current.add(pageNumber);
+      const textKey = `${info.path}#${pageNumber}`;
+      if (info.hasTextLayer && !pageTexts.has(textKey) && !inFlightTextRef.current.has(textKey)) {
+        inFlightTextRef.current.add(textKey);
         void getPdfPageText(info.path, pageNumber)
           .then((payload) => {
-            inFlightTextRef.current.delete(pageNumber);
+            inFlightTextRef.current.delete(textKey);
             if (docGenerationRef.current !== gen) return;
-            setPageTexts((prev) => setLru(prev, pageNumber, payload, MAX_CLIENT_TEXT_PAGES));
+            setPageTexts((prev) => setLru(prev, textKey, payload, MAX_CLIENT_TEXT_PAGES));
           })
           .catch(() => {
-            inFlightTextRef.current.delete(pageNumber);
+            inFlightTextRef.current.delete(textKey);
           });
       }
     }
@@ -453,20 +494,21 @@ export function PdfReaderView() {
     const gen = docGenerationRef.current;
 
     for (const pageNumber of visibleThumbs) {
-      if (renderedThumbs.has(pageNumber) || inFlightThumbsRef.current.has(pageNumber)) continue;
-      inFlightThumbsRef.current.add(pageNumber);
+      const thumbKey = `${info.path}#${pageNumber}`;
+      if (renderedThumbs.has(thumbKey) || inFlightThumbsRef.current.has(thumbKey)) continue;
+      inFlightThumbsRef.current.add(thumbKey);
       void renderPdfPage({
         path: info.path,
         pageNumber,
         targetWidthPx: 180,
       })
         .then((res) => {
-          inFlightThumbsRef.current.delete(pageNumber);
+          inFlightThumbsRef.current.delete(thumbKey);
           if (docGenerationRef.current !== gen) return;
-          setRenderedThumbs((prev) => setLru(prev, pageNumber, res.dataUrl, MAX_CLIENT_THUMBS));
+          setRenderedThumbs((prev) => setLru(prev, thumbKey, res.dataUrl, MAX_CLIENT_THUMBS));
         })
         .catch(() => {
-          inFlightThumbsRef.current.delete(pageNumber);
+          inFlightThumbsRef.current.delete(thumbKey);
         });
     }
   }, [state.inspection, state.sidebarOpen, state.sidebarTab, visibleThumbs, renderedThumbs]);
@@ -571,6 +613,113 @@ export function PdfReaderView() {
   };
 
   const info = state.inspection;
+  const isDocReady = Boolean(info && !state.loading && state.activePath === info.path);
+
+  const parsedTtsSelection = useMemo(() => {
+    if (!info) {
+      return { valid: false, pages: [], uniqueSorted: [], duplicateCount: 0, error: null };
+    }
+    return parseClientPageRanges(ttsRangeInput, info.pageCount);
+  }, [info, ttsRangeInput]);
+
+  const selectedTtsPageSet = useMemo(
+    () => new Set(parsedTtsSelection.uniqueSorted),
+    [parsedTtsSelection.uniqueSorted],
+  );
+
+  const toggleThumbPageForTts = useCallback(
+    (pageNumber: number) => {
+      if (!info) return;
+      const next = new Set(parsedTtsSelection.uniqueSorted);
+      if (next.has(pageNumber)) {
+        next.delete(pageNumber);
+      } else {
+        next.add(pageNumber);
+      }
+      const sorted = Array.from(next).sort((a, b) => a - b);
+      setTtsRangeInput(formatCompactPages(sorted));
+    },
+    [info, parsedTtsSelection.uniqueSorted],
+  );
+
+  const handleOpenSelectedPagesTts = useCallback(() => {
+    if (!info || !isDocReady) return;
+    setTtsScannedNotice(null);
+    setTtsError(null);
+    setTtsPanelOpen((prev) => {
+      const nextOpen = !prev;
+      if (nextOpen) {
+        const defaultRange = info.pageCount > 1 ? `1-${info.pageCount}` : "1";
+        setTtsRangeInput((curr) => (curr.trim() ? curr : defaultRange));
+        if (!state.sidebarOpen) {
+          updateReaderSession((s) => ({ ...s, sidebarOpen: true, sidebarTab: "thumbs" }));
+        }
+      }
+      return nextOpen;
+    });
+  }, [info, isDocReady, state.sidebarOpen, updateReaderSession]);
+
+  const handleReadPagesAloud = useCallback(
+    async (pages: number[]) => {
+      if (!info || !isDocReady || !sessionStore || ttsBusy || pages.length === 0) return;
+      const boundPath = info.path;
+      const boundDocGen = docGenerationRef.current;
+      const boundExtractGen = ++ttsExtractGenRef.current;
+      const isExtractionStillValid = () =>
+        mountedRef.current &&
+        docGenerationRef.current === boundDocGen &&
+        ttsExtractGenRef.current === boundExtractGen &&
+        !docLoadingRef.current &&
+        activeDocPathRef.current === boundPath;
+
+      setTtsBusy(true);
+      setTtsError(null);
+      setTtsScannedNotice(null);
+      try {
+        const extracted = await extractPdfPagesText(boundPath, pages);
+        if (!isExtractionStillValid()) return;
+        const includedPages =
+          extracted.includedPages && extracted.includedPages.length > 0
+            ? extracted.includedPages
+            : extracted.pages
+                .filter((p) => p.status === "included" || p.status === "truncated")
+                .map((p) => p.pageNumber);
+        if (
+          extracted.extractedPageCount === 0 ||
+          includedPages.length === 0 ||
+          !extracted.combinedText.trim()
+        ) {
+          setTtsScannedNotice({
+            path: boundPath,
+            pages: extracted.scannedPages.length > 0 ? extracted.scannedPages : pages,
+          });
+          return;
+        }
+        setTtsPanelOpen(false);
+        sessionStore.handoffPdfTextToTts({
+          path: extracted.path,
+          fileName: extracted.fileName,
+          text: extracted.combinedText,
+          includedPages,
+          skippedScannedPages: extracted.scannedPages,
+          omittedPages: extracted.omittedPages ?? [],
+          truncated: extracted.truncated,
+        });
+      } catch (err) {
+        if (!isExtractionStillValid()) return;
+        setTtsError(formatLocalizedError(err, t));
+      } finally {
+        if (
+          mountedRef.current &&
+          docGenerationRef.current === boundDocGen &&
+          ttsExtractGenRef.current === boundExtractGen
+        ) {
+          setTtsBusy(false);
+        }
+      }
+    },
+    [info, isDocReady, sessionStore, ttsBusy, t],
+  );
 
   return (
     <div
@@ -736,6 +885,42 @@ export function PdfReaderView() {
             </button>
 
             <div className="pdf-toolbar-divider" aria-hidden="true" />
+
+            {sessionStore && (
+              <>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={ttsBusy || !isDocReady}
+                  onClick={() => void handleReadPagesAloud([state.currentPage])}
+                  title={
+                    isZh
+                      ? `提取第 ${state.currentPage} 页文字并送入「文本朗读 (T06)」`
+                      : `Extract page ${state.currentPage} text and open in Read Text Aloud (T06)`
+                  }
+                  data-testid="c08-read-current-page-btn"
+                >
+                  <Volume2 size={14} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{isZh ? "朗读当前页" : "Read Page"}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${ttsPanelOpen ? "is-active" : ""}`}
+                  disabled={ttsBusy || !isDocReady}
+                  aria-expanded={ttsPanelOpen}
+                  onClick={handleOpenSelectedPagesTts}
+                  title={
+                    isZh
+                      ? "按页码范围或缩略图勾选多页提取文字并送入「文本朗读 (T06)」"
+                      : "Select a page range or thumbnails to extract and open in Read Text Aloud (T06)"
+                  }
+                  data-testid="c08-read-selected-pages-btn"
+                >
+                  <span>{isZh ? "朗读所选页" : "Read Pages"}</span>
+                </button>
+                <div className="pdf-toolbar-divider" aria-hidden="true" />
+              </>
+            )}
 
             <button
               type="button"
@@ -908,7 +1093,152 @@ export function PdfReaderView() {
         </div>
       )}
 
+      {/* Inline Selected-Pages PDF Read-Aloud Bar (C08 -> T06) */}
+      {info && sessionStore && ttsPanelOpen && (
+        <div
+          className="pdf-search-bar pdf-tts-bar"
+          role="region"
+          aria-label={isZh ? "选择 PDF 朗读页面" : "Select PDF pages to read aloud"}
+          data-testid="c08-tts-selected-bar"
+        >
+          <form
+            className="pdf-tts-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (parsedTtsSelection.valid && !ttsBusy && isDocReady) {
+                void handleReadPagesAloud(parsedTtsSelection.uniqueSorted);
+              }
+            }}
+          >
+            <Volume2 size={15} strokeWidth={1.75} aria-hidden="true" style={{ flexShrink: 0 }} />
+            <label className="pdf-tts-label" htmlFor="c08-tts-range">
+              {isZh ? "朗读页码" : "Pages"}
+            </label>
+            <input
+              id="c08-tts-range"
+              type="text"
+              className="pdf-search-input mono"
+              style={{ maxWidth: 200 }}
+              value={ttsRangeInput}
+              onChange={(e) => {
+                setTtsScannedNotice(null);
+                setTtsError(null);
+                setTtsRangeInput(e.target.value);
+              }}
+              placeholder={
+                isZh ? `例如 1-${info.pageCount} 或 1, 3-5` : `e.g. 1-${info.pageCount} or 1, 3-5`
+              }
+              data-testid="c08-tts-page-range-input"
+            />
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setTtsRangeInput(info.pageCount > 1 ? `1-${info.pageCount}` : "1")}
+              data-testid="c08-tts-select-all-btn"
+            >
+              {isZh ? `全部 (1-${info.pageCount})` : `All (1-${info.pageCount})`}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setTtsRangeInput(String(state.currentPage))}
+              data-testid="c08-tts-select-current-btn"
+            >
+              {isZh ? `当前页 (${state.currentPage})` : `Current (${state.currentPage})`}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setTtsRangeInput("")}
+              data-testid="c08-tts-clear-pages-btn"
+            >
+              {isZh ? "清空" : "Clear"}
+            </button>
+            <span className="pdf-tts-summary mono" data-testid="c08-tts-selection-summary">
+              {parsedTtsSelection.valid
+                ? isZh
+                  ? `已选 ${parsedTtsSelection.uniqueSorted.length} 页（${formatCompactPages(parsedTtsSelection.uniqueSorted)}）`
+                  : `${parsedTtsSelection.uniqueSorted.length} page(s) (${formatCompactPages(parsedTtsSelection.uniqueSorted)})`
+                : isZh
+                  ? `请输入 1-${info.pageCount} 范围内的页码`
+                  : `Enter pages within 1-${info.pageCount}`}
+            </span>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={!parsedTtsSelection.valid || ttsBusy || !isDocReady}
+              data-testid="c08-tts-send-selected-btn"
+            >
+              {ttsBusy
+                ? isZh
+                  ? "正在提取文字…"
+                  : "Extracting..."
+                : isZh
+                  ? "提取并送入朗读 (T06)"
+                  : "Send to Read Aloud (T06)"}
+            </button>
+          </form>
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            title={isZh ? "关闭选页朗读栏" : "Close page selection bar"}
+            aria-label={isZh ? "关闭选页朗读栏" : "Close page selection bar"}
+            onClick={() => setTtsPanelOpen(false)}
+          >
+            <X size={15} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
       {/* Honest Document Status Banners */}
+      {ttsError && (
+        <div
+          className="pdf-banner pdf-banner-error"
+          role="alert"
+          data-testid="c08-tts-error-banner"
+        >
+          <AlertTriangle size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span style={{ flex: 1 }}>{ttsError}</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            aria-label={isZh ? "关闭提示" : "Dismiss"}
+            onClick={() => setTtsError(null)}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+      {ttsScannedNotice && info && ttsScannedNotice.path === info.path && (
+        <div
+          className="pdf-banner pdf-banner-warn"
+          role="status"
+          data-testid="c08-tts-scanned-banner"
+        >
+          <AlertTriangle size={16} strokeWidth={1.75} aria-hidden="true" />
+          <span style={{ flex: 1 }}>
+            {isZh
+              ? `第 ${formatCompactPages(ttsScannedNotice.pages)} 页未检测到可选文字层（纯扫描页），无法直接提取朗读文本。请先使用「扫描版 PDF 转可搜索 (P04)」识别叠加文字层，再直接朗读。`
+              : `No selectable text layer was found on page(s) ${formatCompactPages(ttsScannedNotice.pages)} (pure scanned page). Convert it with Make PDF Searchable (P04) first, then read it aloud directly.`}
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => sendPdfToTool(info.path, "P04")}
+            data-testid="c08-tts-goto-p04-btn"
+          >
+            {isZh ? "转为可搜索 PDF (P04)" : "Make Searchable (P04)"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            aria-label={isZh ? "关闭提示" : "Dismiss"}
+            onClick={() => setTtsScannedNotice(null)}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      )}
       {state.errorMessage && (
         <div className="pdf-banner pdf-banner-error" role="alert">
           <AlertTriangle size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1018,32 +1348,59 @@ export function PdfReaderView() {
               {state.sidebarTab === "thumbs" && (
                 <div className="pdf-thumb-list" ref={thumbScrollRef}>
                   {info.pages.map((page) => {
-                    const thumbUrl = renderedThumbs.get(page.pageNumber);
+                    const thumbUrl = renderedThumbs.get(`${info.path}#${page.pageNumber}`);
                     const aspect =
                       page.heightPt > 0 ? page.heightPt / Math.max(page.widthPt, 1) : 1.414;
                     const thumbH = Math.round(Math.min(220, Math.max(84, 140 * aspect)));
                     const active = state.currentPage === page.pageNumber;
+                    const checkedForTts = ttsPanelOpen && selectedTtsPageSet.has(page.pageNumber);
                     return (
-                      <button
+                      <div
                         key={page.pageNumber}
-                        type="button"
-                        data-thumb-page={page.pageNumber}
-                        ref={(el) => {
-                          if (el) thumbRefs.current.set(page.pageNumber, el);
-                          else thumbRefs.current.delete(page.pageNumber);
-                        }}
-                        className={`pdf-thumb-item ${active ? "is-active" : ""}`}
-                        onClick={() => jumpToPage(page.pageNumber)}
+                        className={`pdf-thumb-row ${checkedForTts ? "is-tts-selected" : ""}`}
                       >
-                        <div className="pdf-thumb-frame" style={{ height: `${thumbH}px` }}>
-                          {thumbUrl ? (
-                            <img src={thumbUrl} alt={`Page ${page.pageNumber}`} loading="lazy" />
-                          ) : (
-                            <span className="pdf-thumb-placeholder mono">{page.pageNumber}</span>
-                          )}
-                        </div>
-                        <span className="pdf-thumb-label mono">{page.pageNumber}</span>
-                      </button>
+                        {ttsPanelOpen && sessionStore && (
+                          <label
+                            className="pdf-thumb-check-wrap"
+                            title={
+                              isZh
+                                ? `勾选/取消第 ${page.pageNumber} 页用于朗读`
+                                : `Toggle page ${page.pageNumber} for reading aloud`
+                            }
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checkedForTts}
+                              onChange={() => toggleThumbPageForTts(page.pageNumber)}
+                              aria-label={
+                                isZh
+                                  ? `勾选第 ${page.pageNumber} 页用于朗读`
+                                  : `Select page ${page.pageNumber} for reading aloud`
+                              }
+                              data-testid={`c08-thumb-check-${page.pageNumber}`}
+                            />
+                          </label>
+                        )}
+                        <button
+                          type="button"
+                          data-thumb-page={page.pageNumber}
+                          ref={(el) => {
+                            if (el) thumbRefs.current.set(page.pageNumber, el);
+                            else thumbRefs.current.delete(page.pageNumber);
+                          }}
+                          className={`pdf-thumb-item ${active ? "is-active" : ""}`}
+                          onClick={() => jumpToPage(page.pageNumber)}
+                        >
+                          <div className="pdf-thumb-frame" style={{ height: `${thumbH}px` }}>
+                            {thumbUrl ? (
+                              <img src={thumbUrl} alt={`Page ${page.pageNumber}`} loading="lazy" />
+                            ) : (
+                              <span className="pdf-thumb-placeholder mono">{page.pageNumber}</span>
+                            )}
+                          </div>
+                          <span className="pdf-thumb-label mono">{page.pageNumber}</span>
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -1123,9 +1480,9 @@ export function PdfReaderView() {
                   2400,
                   Math.max(240, Math.ceil((disp.width * dpr) / 64) * 64),
                 );
-                const key = `${page.pageNumber}@${renderW}`;
+                const key = `${info.path}#${page.pageNumber}@${renderW}`;
                 const dataUrl = renderedPages.get(key);
-                const textPayload = pageTexts.get(page.pageNumber);
+                const textPayload = pageTexts.get(`${info.path}#${page.pageNumber}`);
                 const pageHighlights = matchesByPage.get(page.pageNumber) ?? [];
 
                 return (

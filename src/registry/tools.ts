@@ -714,14 +714,16 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     },
     summary: {
       "zh-CN":
-        "调用 Windows 本机已安装的离线语音将粘贴文本或 .txt 按段落顺序合成自然语音，支持直接试听与 WAV / MP3 导出",
+        "调用 Windows 本机已安装的离线语音将粘贴文本、.txt 或经 C08 提取的 PDF 页面按段落顺序合成自然语音，支持试听与 WAV / MP3 导出",
       "en-US":
-        "Convert pasted text or .txt files into offline speech with installed Windows voices, audition inline, and save as WAV or MP3",
+        "Convert pasted text, .txt files, or PDF pages extracted via C08 into offline speech with installed Windows voices, audition inline, and save as WAV or MP3",
     },
     keywords: [
       "tts",
       "text to speech",
       "read aloud",
+      "pdf",
+      "read pdf",
       "speech",
       "voice",
       "audio",
@@ -729,6 +731,7 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
       "mp3",
       "narrate",
       "文本朗读",
+      "PDF朗读",
       "文字转语音",
       "语音合成",
       "离线朗读",

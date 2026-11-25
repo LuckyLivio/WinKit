@@ -1477,4 +1477,397 @@ mod tests {
 
         tts.cleanup_on_exit();
     }
+
+    #[test]
+    fn pdf_text_normalization_cleans_whitespace_soft_hyphens_and_preserves_paragraphs() {
+        use crate::pdf_pdfium::normalize_pdf_text_for_speech;
+
+        let raw = "\u{FEFF}  第一段\u{00AD}内容   测试\r\n\r\n\r\n  Second\t\tline\u{200B} text \r\n\x07Third line  ";
+        let cleaned = normalize_pdf_text_for_speech(raw);
+        assert_eq!(cleaned, "第一段内容 测试\n\nSecond line text\nThird line");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pdf_pages_extraction_handles_ranges_scanned_pages_and_protects_source_pdf_on_tts_export() {
+        use crate::pdf_core::PdfSessionManager;
+        use lopdf::{Dictionary, Document, Object, Stream};
+
+        let dir = tempdir().expect("tempdir");
+        let pdf_path = dir.path().join("tts_source_pages.pdf");
+
+        // Build a 3-page PDF: page 1 text, page 2 pure non-text (scanned-like), page 3 text
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let mut font_dict = Dictionary::new();
+        font_dict.set("Type", Object::Name(b"Font".to_vec()));
+        font_dict.set("Subtype", Object::Name(b"Type1".to_vec()));
+        font_dict.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
+        let font_id = doc.add_object(Object::Dictionary(font_dict));
+        let mut fonts = Dictionary::new();
+        fonts.set("F1", Object::Reference(font_id));
+        let mut resources = Dictionary::new();
+        resources.set("Font", Object::Dictionary(fonts));
+        let resources_id = doc.add_object(Object::Dictionary(resources));
+
+        let contents = [
+            "BT /F1 16 Tf 50 740 Td (Page one offline PDF speech sample.) Tj ET\n",
+            "q 0.92 0.92 0.95 rg 40 40 500 720 re f Q\n",
+            "BT /F1 16 Tf 50 740 Td (Page three final paragraph for WinKit.) Tj ET\n",
+        ];
+        let mut page_ids = Vec::new();
+        for content in contents {
+            let cid = doc.add_object(Object::Stream(Stream::new(
+                Dictionary::new(),
+                content.as_bytes().to_vec(),
+            )));
+            let mut page = Dictionary::new();
+            page.set("Type", Object::Name(b"Page".to_vec()));
+            page.set("Parent", Object::Reference(pages_id));
+            page.set(
+                "MediaBox",
+                Object::Array(vec![0.into(), 0.into(), 595.into(), 842.into()]),
+            );
+            page.set("Resources", Object::Reference(resources_id));
+            page.set("Contents", Object::Reference(cid));
+            page_ids.push(Object::Reference(doc.add_object(Object::Dictionary(page))));
+        }
+        let mut pages_dict = Dictionary::new();
+        pages_dict.set("Type", Object::Name(b"Pages".to_vec()));
+        pages_dict.set("Kids", Object::Array(page_ids));
+        pages_dict.set("Count", Object::Integer(3));
+        doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", Object::Reference(pages_id));
+        let catalog_id = doc.add_object(Object::Dictionary(catalog));
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+        doc.save(&pdf_path).expect("save test pdf");
+        let original_pdf_bytes = fs::read(&pdf_path).expect("read original pdf");
+
+        let pdf_mgr = PdfSessionManager::default();
+        let pdf_str = pdf_path.to_string_lossy().into_owned();
+
+        // Pure scanned page 2 -> 0 extracted pages, reported in scanned_pages
+        let scanned_only = pdf_mgr
+            .extract_pages_text(&pdf_str, vec![2])
+            .expect("extract page 2");
+        assert_eq!(scanned_only.extracted_page_count, 0);
+        assert!(scanned_only.included_pages.is_empty());
+        assert_eq!(scanned_only.scanned_pages, vec![2]);
+        assert!(scanned_only.omitted_pages.is_empty());
+        assert_eq!(scanned_only.total_bytes, 0);
+        assert!(!scanned_only.truncated);
+        assert!(scanned_only.combined_text.is_empty());
+
+        // Mixed range [1, 2, 3] -> skips page 2 cleanly and orders page 1 before page 3
+        let mixed = pdf_mgr
+            .extract_pages_text(&pdf_str, vec![1, 2, 3])
+            .expect("extract pages 1-3");
+        assert_eq!(mixed.total_pages, 3);
+        assert_eq!(mixed.extracted_page_count, 2);
+        assert_eq!(mixed.included_pages, vec![1, 3]);
+        assert_eq!(mixed.scanned_pages, vec![2]);
+        assert!(mixed.omitted_pages.is_empty());
+        assert_eq!(mixed.total_bytes, mixed.combined_text.len());
+        assert!(!mixed.truncated);
+        let idx1 = mixed
+            .combined_text
+            .find("Page one offline PDF speech sample.")
+            .expect("page 1 text");
+        let idx3 = mixed
+            .combined_text
+            .find("Page three final paragraph for WinKit.")
+            .expect("page 3 text");
+        assert!(idx1 < idx3);
+
+        // Out-of-bounds page rejected
+        let err_oob = pdf_mgr.extract_pages_text(&pdf_str, vec![4]).unwrap_err();
+        assert_eq!(err_oob.code, "INVALID_PARAMETER");
+
+        // Synthesize from extracted PDF text and verify audio export can NEVER overwrite source PDF
+        let tts = TtsSessionManager::new_in_dir(dir.path().join("tts_pdf_temp"));
+        let preview = MediaPreviewRegistry::default();
+        let voices = tts.list_voices().expect("voices");
+        let voice_id = voices
+            .default_voice_id
+            .clone()
+            .unwrap_or_else(|| voices.voices[0].id.clone());
+        let active = Arc::new(AtomicBool::new(false));
+        let synth = synthesize_tts_impl(
+            "t06-pdf-src-guard",
+            &tts,
+            &preview,
+            &SynthesizeTtsRequest {
+                text: mixed.combined_text.clone(),
+                voice_id,
+                rate: 1.0,
+                source_path: Some(pdf_str.clone()),
+            },
+            &active,
+            |_| {},
+        )
+        .expect("pdf tts synth ok");
+
+        let err_overwrite_pdf = export_tts_audio_impl(
+            &tts,
+            dir.path(),
+            &ExportTtsAudioRequest {
+                result_id: synth.result_id.clone(),
+                output_path: pdf_str,
+                source_path: None,
+                format: TtsExportFormat::Wav,
+                mp3_bitrate_kbps: None,
+                overwrite: true,
+            },
+            &active,
+        )
+        .unwrap_err();
+        assert_eq!(err_overwrite_pdf.code, "SAME_INPUT_AND_OUTPUT");
+        assert_eq!(fs::read(&pdf_path).unwrap(), original_pdf_bytes);
+
+        tts.cleanup_on_exit();
+    }
+
+    #[cfg(windows)]
+    fn build_text_stream_for_test(lines: &[String]) -> Vec<u8> {
+        let mut out = String::from("BT /F1 8 Tf 20 800 Td 10 TL\n");
+        for line in lines {
+            out.push('(');
+            for ch in line.chars() {
+                match ch {
+                    '\\' => out.push_str("\\\\"),
+                    '(' => out.push_str("\\("),
+                    ')' => out.push_str("\\)"),
+                    c => out.push(c),
+                }
+            }
+            out.push_str(") Tj T*\n");
+        }
+        out.push_str("ET\n");
+        out.into_bytes()
+    }
+
+    #[cfg(windows)]
+    fn write_test_pdf_with_streams(path: &std::path::Path, page_streams: &[Vec<u8>]) {
+        use lopdf::{Dictionary, Document, Object, Stream};
+
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let mut font_dict = Dictionary::new();
+        font_dict.set("Type", Object::Name(b"Font".to_vec()));
+        font_dict.set("Subtype", Object::Name(b"Type1".to_vec()));
+        font_dict.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
+        let font_id = doc.add_object(Object::Dictionary(font_dict));
+        let mut fonts = Dictionary::new();
+        fonts.set("F1", Object::Reference(font_id));
+        let mut resources = Dictionary::new();
+        resources.set("Font", Object::Dictionary(fonts));
+        let resources_id = doc.add_object(Object::Dictionary(resources));
+
+        let mut page_ids = Vec::with_capacity(page_streams.len());
+        for bytes in page_streams {
+            let mut stream = Stream::new(Dictionary::new(), bytes.clone());
+            let _ = stream.compress();
+            let cid = doc.add_object(Object::Stream(stream));
+            let mut page = Dictionary::new();
+            page.set("Type", Object::Name(b"Page".to_vec()));
+            page.set("Parent", Object::Reference(pages_id));
+            page.set(
+                "MediaBox",
+                Object::Array(vec![0.into(), 0.into(), 595.into(), 842.into()]),
+            );
+            page.set("Resources", Object::Reference(resources_id));
+            page.set("Contents", Object::Reference(cid));
+            page_ids.push(Object::Reference(doc.add_object(Object::Dictionary(page))));
+        }
+
+        let mut pages_dict = Dictionary::new();
+        pages_dict.set("Type", Object::Name(b"Pages".to_vec()));
+        pages_dict.set("Kids", Object::Array(page_ids));
+        pages_dict.set("Count", Object::Integer(page_streams.len() as i64));
+        doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
+
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", Object::Reference(pages_id));
+        let catalog_id = doc.add_object(Object::Dictionary(catalog));
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+        doc.save(path).expect("save budget test pdf");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pdf_single_page_exceeding_pdfium_char_cap_marks_truncated_and_stays_within_budget() {
+        use crate::pdf_core::PdfSessionManager;
+        use crate::pdf_pdfium::{
+            extract_pages_text_for_tts_with_pdfium, PdfExtractedPageStatus,
+            MAX_PDFIUM_PAGE_RAW_CHARS,
+        };
+        use crate::tts_core::{MAX_TTS_INPUT_BYTES, MAX_TTS_INPUT_CHARS};
+
+        let dir = tempdir().expect("tempdir");
+
+        // Case A: Single page with >200,000 raw PDFium UTF-16 code units (2,500 lines × 80 chars
+        // + PDFium CRLF line breaks = ~205,000 raw chars) where normalizing CRLF -> LF leaves
+        // <200,000 normalized chars -> MUST still mark truncated = true!
+        let pdf_spaced = dir.path().join("long_single_crlf_cap.pdf");
+        let line_80 = "A".repeat(80);
+        let crlf_lines = vec![line_80; 2_500];
+        write_test_pdf_with_streams(&pdf_spaced, &[build_text_stream_for_test(&crlf_lines)]);
+
+        let res_spaced = extract_pages_text_for_tts_with_pdfium(
+            None,
+            &pdf_spaced,
+            &[1],
+            MAX_TTS_INPUT_CHARS,
+            MAX_TTS_INPUT_BYTES,
+        )
+        .expect("extract single page hitting PDFium raw char cap");
+        assert!(
+            res_spaced.total_chars < MAX_TTS_INPUT_CHARS,
+            "normalized char count ({}) should be below {MAX_TTS_INPUT_CHARS} so this proves raw PDFium cap detection",
+            res_spaced.total_chars
+        );
+        assert!(
+            res_spaced.truncated,
+            "hitting PDFium raw page cap ({MAX_PDFIUM_PAGE_RAW_CHARS}) must mark truncated even when normalized chars ({}) < {MAX_TTS_INPUT_CHARS}",
+            res_spaced.total_chars
+        );
+        assert_eq!(res_spaced.included_pages, vec![1]);
+        assert!(res_spaced.scanned_pages.is_empty());
+        assert!(res_spaced.omitted_pages.is_empty());
+        assert_eq!(res_spaced.pages.len(), 1);
+        assert_eq!(
+            res_spaced.pages[0].status,
+            PdfExtractedPageStatus::Truncated
+        );
+        assert!(res_spaced.total_chars <= MAX_TTS_INPUT_CHARS);
+        assert!(res_spaced.total_bytes <= MAX_TTS_INPUT_BYTES);
+        assert_eq!(res_spaced.total_bytes, res_spaced.combined_text.len());
+
+        // Case B: Dense single page >200,000 non-whitespace chars via PdfSessionManager
+        let pdf_dense = dir.path().join("long_single_dense.pdf");
+        let dense_line = "X".repeat(100);
+        let dense_lines = vec![dense_line; 2_150]; // 215,000+ chars
+        write_test_pdf_with_streams(&pdf_dense, &[build_text_stream_for_test(&dense_lines)]);
+
+        let pdf_mgr = PdfSessionManager::default();
+        let res_dense = pdf_mgr
+            .extract_pages_text(&pdf_dense.to_string_lossy(), vec![1])
+            .expect("extract dense single page");
+        assert!(res_dense.truncated);
+        assert_eq!(res_dense.included_pages, vec![1]);
+        assert!(res_dense.omitted_pages.is_empty());
+        assert!(res_dense.total_chars <= MAX_TTS_INPUT_CHARS);
+        assert!(res_dense.combined_text.chars().count() <= MAX_TTS_INPUT_CHARS);
+        assert!(res_dense.combined_text.len() <= MAX_TTS_INPUT_BYTES);
+
+        // Verify serialized JSON contains only ONE copy of the extracted text (no per-page duplicate)
+        let serialized = serde_json::to_string(&res_dense).expect("serialize result");
+        assert!(
+            serialized.len() < res_dense.combined_text.len() + 8_192,
+            "serialized payload ({} B) must not duplicate combined_text ({} B)",
+            serialized.len(),
+            res_dense.combined_text.len()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pdf_multipage_cumulative_budget_distinguishes_included_scanned_and_omitted_pages() {
+        use crate::pdf_core::PdfSessionManager;
+        use crate::pdf_pdfium::{
+            extract_pages_text_for_tts_with_pdfium_limits, PdfExtractedPageStatus,
+        };
+        use crate::tts_core::{MAX_TTS_INPUT_BYTES, MAX_TTS_INPUT_CHARS};
+
+        let dir = tempdir().expect("tempdir");
+        let pdf_path = dir.path().join("multipage_budget.pdf");
+
+        // 5 pages:
+        // P1: 80,000 chars -> Included
+        // P2: pure vector rectangle (no text) -> Scanned
+        // P3: 80,000 chars -> Included (cumulative ~160,000)
+        // P4: 80,000 chars -> Truncated at 200,000 cumulative cap
+        // P5: 40,000 chars -> Omitted (budget already exhausted)
+        let block_80k = build_text_stream_for_test(&vec!["B".repeat(100); 800]);
+        let scanned_page = b"q 0.9 0.9 0.9 rg 40 40 500 720 re f Q\n".to_vec();
+        let block_40k = build_text_stream_for_test(&vec!["E".repeat(100); 400]);
+
+        write_test_pdf_with_streams(
+            &pdf_path,
+            &[
+                block_80k.clone(),
+                scanned_page,
+                block_80k.clone(),
+                block_80k,
+                block_40k,
+            ],
+        );
+
+        let pdf_mgr = PdfSessionManager::default();
+        let res = pdf_mgr
+            .extract_pages_text(&pdf_path.to_string_lossy(), vec![1, 2, 3, 4, 5])
+            .expect("extract 5-page cumulative budget pdf");
+
+        assert!(res.truncated);
+        assert_eq!(res.included_pages, vec![1, 3, 4]);
+        assert_eq!(res.scanned_pages, vec![2]);
+        assert_eq!(res.omitted_pages, vec![5]);
+        assert_eq!(res.extracted_page_count, 3);
+        assert_eq!(res.total_chars, MAX_TTS_INPUT_CHARS);
+        assert_eq!(res.combined_text.chars().count(), MAX_TTS_INPUT_CHARS);
+        assert_eq!(res.total_bytes, res.combined_text.len());
+        assert!(res.total_bytes <= MAX_TTS_INPUT_BYTES);
+        assert_eq!(
+            res.pages
+                .iter()
+                .map(|p| (p.page_number, p.status))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, PdfExtractedPageStatus::Included),
+                (2, PdfExtractedPageStatus::Scanned),
+                (3, PdfExtractedPageStatus::Included),
+                (4, PdfExtractedPageStatus::Truncated),
+                (5, PdfExtractedPageStatus::Omitted),
+            ]
+        );
+        assert!(!res.combined_text.contains('E'));
+
+        // Serialized payload stays tightly bounded around ONE copy of combined_text
+        let serialized = serde_json::to_string(&res).expect("serialize multipage result");
+        assert!(
+            serialized.len() < res.combined_text.len() + 8_192,
+            "multipage serialized payload ({} B) must not duplicate combined_text ({} B)",
+            serialized.len(),
+            res.combined_text.len()
+        );
+
+        // Byte ceiling edge case: exact budget filled on page 1 -> page 2 scanned, page 3 omitted cleanly
+        let tight_pdf = dir.path().join("exact_byte_cap.pdf");
+        write_test_pdf_with_streams(
+            &tight_pdf,
+            &[
+                build_text_stream_for_test(&["ABCDE".to_string()]),
+                b"q 0.9 0.9 0.9 rg 10 10 50 50 re f Q\n".to_vec(),
+                build_text_stream_for_test(&["FGHIJ".to_string()]),
+                build_text_stream_for_test(&["KLMNO".to_string()]),
+            ],
+        );
+        let tight = extract_pages_text_for_tts_with_pdfium_limits(
+            None,
+            &tight_pdf,
+            &[1, 2, 3, 4],
+            100,
+            6, // Fits "ABCDE" (5 bytes), leaves 1 byte -> cannot fit "\n\n" + "F"
+            1_000,
+        )
+        .expect("extract tight byte cap");
+        assert!(tight.truncated);
+        assert_eq!(tight.combined_text, "ABCDE");
+        assert_eq!(tight.included_pages, vec![1]);
+        assert_eq!(tight.scanned_pages, vec![2]);
+        assert_eq!(tight.omitted_pages, vec![3, 4]);
+    }
 }

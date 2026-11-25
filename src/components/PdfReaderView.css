@@ -234,6 +234,48 @@
   gap: 10px;
 }
 
+.pdf-thumb-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+}
+
+.pdf-thumb-row.is-tts-selected .pdf-thumb-item {
+  border-color: var(--accent);
+}
+
+.pdf-thumb-check-wrap {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.pdf-tts-bar {
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-surface));
+}
+
+.pdf-tts-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+}
+
+.pdf-tts-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pdf-tts-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .pdf-thumb-item {
   display: flex;
   flex-direction: column;
