@@ -163,7 +163,7 @@ async function fetchWithMirrors(urls, label) {
       console.log(`[ensure-ocr-runtime] Downloading ${label} from ${url}...`);
       const resp = await fetch(url, {
         redirect: "follow",
-        headers: { "User-Agent": "WinKit-Build/0.18.0" },
+        headers: { "User-Agent": "WinKit-Build/0.19.0" },
       });
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status} ${resp.statusText}`);

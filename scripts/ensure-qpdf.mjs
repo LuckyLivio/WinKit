@@ -229,7 +229,7 @@ async function main() {
   console.log(`[ensure-qpdf] Downloading ${ARCHIVE_FILENAME} (qpdf ${QPDF_VERSION})...`);
   const resp = await fetch(ARCHIVE_URL, {
     redirect: "follow",
-    headers: { "User-Agent": "WinKit-Build/0.18.0" },
+    headers: { "User-Agent": "WinKit-Build/0.19.0" },
   });
   if (!resp.ok) {
     throw new Error(`Failed to fetch ${ARCHIVE_URL}: HTTP ${resp.status} ${resp.statusText}`);
