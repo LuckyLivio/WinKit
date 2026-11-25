@@ -94,6 +94,7 @@ import type {
   StripMetadataBatchRequest,
   TransformStep,
 } from "../tools/image-batch/imageBatchModel";
+import { formatCompactPages } from "../tools/pdf-shared/pageRangeUtils";
 import {
   beautifyImagesBatch,
   bindDisposableListener,
@@ -344,12 +345,27 @@ export interface CaseConverterSessionState {
   selectedStyle: CaseStyleId;
 }
 
+export type TtsSourceKind = "none" | "txt" | "pdf";
+
+export interface TtsPdfHandoffPayload {
+  path: string;
+  fileName: string;
+  text: string;
+  pages: number[];
+  skippedScannedPages: number[];
+  truncated: boolean;
+}
+
 export interface TextToSpeechSessionState {
   sourceGeneration: number;
   loadingFile: boolean;
   text: string;
+  sourceKind: TtsSourceKind;
   sourceFilePath: string | null;
   sourceFileName: string | null;
+  sourcePageSummary: string | null;
+  sourceSkippedScannedPages: number[];
+  sourceTruncated: boolean;
   voices: TtsVoiceInfo[];
   voicesLoaded: boolean;
   voicesLoading: boolean;
@@ -1138,8 +1154,12 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     sourceGeneration: 0,
     loadingFile: false,
     text: "",
+    sourceKind: "none",
     sourceFilePath: null,
     sourceFileName: null,
+    sourcePageSummary: null,
+    sourceSkippedScannedPages: [],
+    sourceTruncated: false,
     voices: [],
     voicesLoaded: false,
     voicesLoading: false,
@@ -1453,6 +1473,7 @@ interface SessionStoreContextValue {
     rawPath: string,
     formatError: (err: unknown) => string,
   ) => Promise<boolean>;
+  handoffPdfTextToTts: (payload: TtsPdfHandoffPayload) => void;
   startTextToSpeech: (
     req: SynthesizeTtsRequest,
     formatError: (err: unknown) => string,
@@ -3241,8 +3262,12 @@ export function SessionStoreProvider({
             sourceGeneration: nextGen,
             loadingFile: false,
             text: payload.content,
+            sourceKind: "txt",
             sourceFilePath: payload.path,
             sourceFileName: payload.fileName,
+            sourcePageSummary: null,
+            sourceSkippedScannedPages: [],
+            sourceTruncated: false,
             status: "idle",
             activeTaskId: null,
             liveProgress: null,
@@ -3270,6 +3295,42 @@ export function SessionStoreProvider({
     },
     [],
   );
+
+  const handoffPdfTextToTts = useCallback((payload: TtsPdfHandoffPayload) => {
+    ttsFileLoadSeqRef.current += 1;
+    const nextGen = ++ttsSourceGenRef.current;
+    const runningId = activeTtsTaskRef.current;
+    if (runningId) {
+      activeTtsTaskRef.current = null;
+      void cancelBackendTask(runningId);
+    }
+    void clearTtsSession();
+    const sortedPages = Array.from(new Set(payload.pages)).sort((a, b) => a - b);
+    const pageSummary = sortedPages.length > 0 ? formatCompactPages(sortedPages) : null;
+    setSession((prev) => ({
+      ...prev,
+      textToSpeech: {
+        ...prev.textToSpeech,
+        sourceGeneration: nextGen,
+        loadingFile: false,
+        text: payload.text,
+        sourceKind: "pdf",
+        sourceFilePath: payload.path,
+        sourceFileName: payload.fileName,
+        sourcePageSummary: pageSummary,
+        sourceSkippedScannedPages: [...payload.skippedScannedPages],
+        sourceTruncated: payload.truncated,
+        status: "idle",
+        activeTaskId: null,
+        liveProgress: null,
+        result: null,
+        errorMessage: null,
+        lastSavedMessage: null,
+        lastSavedPath: null,
+      },
+    }));
+    navRef.current?.("T06");
+  }, []);
 
   const startTextToSpeech = useCallback(
     async (
@@ -3381,8 +3442,12 @@ export function SessionStoreProvider({
         sourceGeneration: gen,
         loadingFile: false,
         text: "",
+        sourceKind: "none",
         sourceFilePath: null,
         sourceFileName: null,
+        sourcePageSummary: null,
+        sourceSkippedScannedPages: [],
+        sourceTruncated: false,
         status: "idle",
         activeTaskId: null,
         liveProgress: null,
@@ -3461,6 +3526,7 @@ export function SessionStoreProvider({
         updateTextToSpeechSession,
         refreshTtsVoices,
         loadTextToSpeechFile,
+        handoffPdfTextToTts,
         startTextToSpeech,
         cancelTextToSpeech,
         clearTextToSpeechSession,
@@ -3477,4 +3543,8 @@ export function useSessionStore(): SessionStoreContextValue {
     throw new Error("useSessionStore must be used inside SessionStoreProvider");
   }
   return ctx;
+}
+
+export function useOptionalSessionStore(): SessionStoreContextValue | null {
+  return useContext(SessionStoreContext);
 }

@@ -1477,4 +1477,147 @@ mod tests {
 
         tts.cleanup_on_exit();
     }
+
+    #[test]
+    fn pdf_text_normalization_cleans_whitespace_soft_hyphens_and_preserves_paragraphs() {
+        use crate::pdf_pdfium::normalize_pdf_text_for_speech;
+
+        let raw = "\u{FEFF}  第一段\u{00AD}内容   测试\r\n\r\n\r\n  Second\t\tline\u{200B} text \r\n\x07Third line  ";
+        let cleaned = normalize_pdf_text_for_speech(raw);
+        assert_eq!(cleaned, "第一段内容 测试\n\nSecond line text\nThird line");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pdf_pages_extraction_handles_ranges_scanned_pages_and_protects_source_pdf_on_tts_export() {
+        use crate::pdf_core::PdfSessionManager;
+        use lopdf::{Dictionary, Document, Object, Stream};
+
+        let dir = tempdir().expect("tempdir");
+        let pdf_path = dir.path().join("tts_source_pages.pdf");
+
+        // Build a 3-page PDF: page 1 text, page 2 pure non-text (scanned-like), page 3 text
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let mut font_dict = Dictionary::new();
+        font_dict.set("Type", Object::Name(b"Font".to_vec()));
+        font_dict.set("Subtype", Object::Name(b"Type1".to_vec()));
+        font_dict.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
+        let font_id = doc.add_object(Object::Dictionary(font_dict));
+        let mut fonts = Dictionary::new();
+        fonts.set("F1", Object::Reference(font_id));
+        let mut resources = Dictionary::new();
+        resources.set("Font", Object::Dictionary(fonts));
+        let resources_id = doc.add_object(Object::Dictionary(resources));
+
+        let contents = [
+            "BT /F1 16 Tf 50 740 Td (Page one offline PDF speech sample.) Tj ET\n",
+            "q 0.92 0.92 0.95 rg 40 40 500 720 re f Q\n",
+            "BT /F1 16 Tf 50 740 Td (Page three final paragraph for WinKit.) Tj ET\n",
+        ];
+        let mut page_ids = Vec::new();
+        for content in contents {
+            let cid = doc.add_object(Object::Stream(Stream::new(
+                Dictionary::new(),
+                content.as_bytes().to_vec(),
+            )));
+            let mut page = Dictionary::new();
+            page.set("Type", Object::Name(b"Page".to_vec()));
+            page.set("Parent", Object::Reference(pages_id));
+            page.set(
+                "MediaBox",
+                Object::Array(vec![0.into(), 0.into(), 595.into(), 842.into()]),
+            );
+            page.set("Resources", Object::Reference(resources_id));
+            page.set("Contents", Object::Reference(cid));
+            page_ids.push(Object::Reference(doc.add_object(Object::Dictionary(page))));
+        }
+        let mut pages_dict = Dictionary::new();
+        pages_dict.set("Type", Object::Name(b"Pages".to_vec()));
+        pages_dict.set("Kids", Object::Array(page_ids));
+        pages_dict.set("Count", Object::Integer(3));
+        doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", Object::Reference(pages_id));
+        let catalog_id = doc.add_object(Object::Dictionary(catalog));
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+        doc.save(&pdf_path).expect("save test pdf");
+        let original_pdf_bytes = fs::read(&pdf_path).expect("read original pdf");
+
+        let pdf_mgr = PdfSessionManager::default();
+        let pdf_str = pdf_path.to_string_lossy().into_owned();
+
+        // Pure scanned page 2 -> 0 extracted pages, reported in scanned_pages
+        let scanned_only = pdf_mgr
+            .extract_pages_text(&pdf_str, vec![2])
+            .expect("extract page 2");
+        assert_eq!(scanned_only.extracted_page_count, 0);
+        assert_eq!(scanned_only.scanned_pages, vec![2]);
+        assert!(scanned_only.combined_text.is_empty());
+
+        // Mixed range [1, 2, 3] -> skips page 2 cleanly and orders page 1 before page 3
+        let mixed = pdf_mgr
+            .extract_pages_text(&pdf_str, vec![1, 2, 3])
+            .expect("extract pages 1-3");
+        assert_eq!(mixed.total_pages, 3);
+        assert_eq!(mixed.extracted_page_count, 2);
+        assert_eq!(mixed.scanned_pages, vec![2]);
+        let idx1 = mixed
+            .combined_text
+            .find("Page one offline PDF speech sample.")
+            .expect("page 1 text");
+        let idx3 = mixed
+            .combined_text
+            .find("Page three final paragraph for WinKit.")
+            .expect("page 3 text");
+        assert!(idx1 < idx3);
+
+        // Out-of-bounds page rejected
+        let err_oob = pdf_mgr.extract_pages_text(&pdf_str, vec![4]).unwrap_err();
+        assert_eq!(err_oob.code, "INVALID_PARAMETER");
+
+        // Synthesize from extracted PDF text and verify audio export can NEVER overwrite source PDF
+        let tts = TtsSessionManager::new_in_dir(dir.path().join("tts_pdf_temp"));
+        let preview = MediaPreviewRegistry::default();
+        let voices = tts.list_voices().expect("voices");
+        let voice_id = voices
+            .default_voice_id
+            .clone()
+            .unwrap_or_else(|| voices.voices[0].id.clone());
+        let active = Arc::new(AtomicBool::new(false));
+        let synth = synthesize_tts_impl(
+            "t06-pdf-src-guard",
+            &tts,
+            &preview,
+            &SynthesizeTtsRequest {
+                text: mixed.combined_text.clone(),
+                voice_id,
+                rate: 1.0,
+                source_path: Some(pdf_str.clone()),
+            },
+            &active,
+            |_| {},
+        )
+        .expect("pdf tts synth ok");
+
+        let err_overwrite_pdf = export_tts_audio_impl(
+            &tts,
+            dir.path(),
+            &ExportTtsAudioRequest {
+                result_id: synth.result_id.clone(),
+                output_path: pdf_str,
+                source_path: None,
+                format: TtsExportFormat::Wav,
+                mp3_bitrate_kbps: None,
+                overwrite: true,
+            },
+            &active,
+        )
+        .unwrap_err();
+        assert_eq!(err_overwrite_pdf.code, "SAME_INPUT_AND_OUTPUT");
+        assert_eq!(fs::read(&pdf_path).unwrap(), original_pdf_bytes);
+
+        tts.cleanup_on_exit();
+    }
 }

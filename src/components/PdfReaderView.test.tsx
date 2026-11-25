@@ -1,10 +1,13 @@
+import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nContext } from "../i18n/I18nContext";
 import { MESSAGES } from "../i18n/messages";
 import { PdfSessionProvider } from "../lib/pdfSessionStore";
+import { SessionStoreProvider } from "../lib/sessionStore";
 import * as bridge from "../lib/tauriBridge";
+import { TextToSpeechWorkspace } from "../tools/text-to-speech/TextToSpeechWorkspace";
 import { PdfReaderView } from "./PdfReaderView";
 
 vi.mock("../lib/tauriBridge", async (importOriginal) => {
@@ -15,8 +18,56 @@ vi.mock("../lib/tauriBridge", async (importOriginal) => {
     inspectPdfDocument: vi.fn(),
     renderPdfPage: vi.fn(),
     getPdfPageText: vi.fn(),
+    extractPdfPagesText: vi.fn(),
     searchPdfText: vi.fn(),
     subscribeFileDrop: vi.fn().mockResolvedValue(() => {}),
+    listTtsVoices: vi.fn().mockResolvedValue({
+      voices: [
+        {
+          id: "winrt::huihui",
+          name: "Microsoft Huihui",
+          language: "zh-CN",
+          gender: "female",
+          engine: "winrt_one_core",
+          isDefault: true,
+        },
+      ],
+      defaultVoiceId: "winrt::huihui",
+      hasChineseVoice: true,
+      hasEnglishVoice: false,
+      winrtCount: 1,
+      sapiCount: 0,
+    }),
+    synthesizeTtsSpeech: vi.fn(),
+    subscribeTtsProgress: vi.fn().mockResolvedValue(() => {}),
+    clearTtsSession: vi.fn().mockResolvedValue(undefined),
+    cancelBackendTask: vi.fn().mockResolvedValue(true),
+    getMediaToolsStatus: vi.fn().mockResolvedValue({
+      ready: false,
+      source: "missing",
+      mode: "auto",
+      customDir: null,
+      ffmpegPath: null,
+      ffprobePath: null,
+      ffmpegVersion: null,
+      ffprobeVersion: null,
+      installDir: "C:\\Users\\Test\\media-tools",
+      managedInstalledBytes: null,
+      licensePath: null,
+      error: null,
+      spec: {
+        version: "9.1",
+        sourceName: "GyanD/codexffmpeg",
+        releaseUrl: "",
+        sourceCommitUrl: "",
+        downloadUrl: "",
+        downloadBytes: 0,
+        sha256: "",
+        estimatedInstalledBytes: 0,
+        licenseName: "GPL-3.0",
+      },
+    }),
+    subscribeMediaSetupProgress: vi.fn().mockResolvedValue(() => {}),
   };
 });
 
@@ -192,5 +243,240 @@ describe("C08 PdfReaderView", () => {
     });
     await user.click(screen.getByRole("button", { name: /使用 P16 输入密码解锁/ }));
     expect(onNavTool).toHaveBeenCalledWith("P16");
+  });
+
+  it("extracts current page or selected page range from C08 into T06 for user preview/edit before manual synthesis", async () => {
+    const user = userEvent.setup();
+    vi.mocked(bridge.pickSingleFile).mockResolvedValue("C:\\Samples\\bilingual.pdf");
+    vi.mocked(bridge.inspectPdfDocument).mockResolvedValue({
+      path: "C:\\Samples\\bilingual.pdf",
+      fileName: "bilingual.pdf",
+      byteLength: 64000,
+      pageCount: 3,
+      pages: [
+        { pageNumber: 1, widthPt: 595, heightPt: 842, rotation: 0, isOversized: false },
+        { pageNumber: 2, widthPt: 595, heightPt: 842, rotation: 0, isOversized: false },
+        { pageNumber: 3, widthPt: 595, heightPt: 842, rotation: 0, isOversized: false },
+      ],
+      hasTextLayer: true,
+      sampledTextPages: 3,
+      isLikelyScanned: false,
+      hasOutlines: false,
+      outlines: [],
+      hasAcroform: false,
+      hasSignatures: false,
+      signatureCount: 0,
+      isEncrypted: false,
+      title: null,
+      author: null,
+      subject: null,
+      creator: null,
+      producer: null,
+      warnings: [],
+    });
+    vi.mocked(bridge.renderPdfPage).mockResolvedValue({
+      meta: {
+        pageNumber: 1,
+        widthPx: 640,
+        heightPx: 906,
+        pageWidthPt: 595,
+        pageHeightPt: 842,
+        rotation: 0,
+        capped: false,
+      },
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      fromCache: false,
+    });
+    vi.mocked(bridge.getPdfPageText).mockResolvedValue({
+      pageNumber: 1,
+      fullText: "第一页中文朗读内容。",
+      charCount: 10,
+      spans: [],
+      links: [],
+    });
+    vi.mocked(bridge.extractPdfPagesText).mockResolvedValue({
+      path: "C:\\Samples\\bilingual.pdf",
+      fileName: "bilingual.pdf",
+      totalPages: 3,
+      requestedPages: [1, 2, 3],
+      pages: [
+        { pageNumber: 1, text: "第一页中文朗读内容。", charCount: 10, hasText: true },
+        { pageNumber: 2, text: "", charCount: 0, hasText: false },
+        { pageNumber: 3, text: "Page three English speech.", charCount: 26, hasText: true },
+      ],
+      combinedText: "第一页中文朗读内容。\n\nPage three English speech.",
+      extractedPageCount: 2,
+      scannedPages: [2],
+      totalChars: 38,
+      truncated: false,
+    });
+    vi.mocked(bridge.synthesizeTtsSpeech).mockResolvedValue({
+      resultId: "tts-pdf-1",
+      voiceId: "winrt::huihui",
+      voiceName: "Microsoft Huihui",
+      voiceLanguage: "zh-CN",
+      engine: "winrt_one_core",
+      rate: 1,
+      segmentCount: 2,
+      paragraphCount: 2,
+      charCount: 40,
+      sampleRate: 16000,
+      channels: 1,
+      bitsPerSample: 16,
+      durationSec: 4.2,
+      wavByteLength: 134444,
+      previewUrl: "http://winkitmedia.localhost/preview/tts-pdf-1",
+      elapsedMs: 95,
+      sourcePath: "C:\\Samples\\bilingual.pdf",
+      supportedMp3BitratesKbps: [64, 96, 128, 160],
+    });
+
+    const navSpy = vi.fn();
+    function Harness() {
+      const [view, setView] = useState<"reader" | "T06">("reader");
+      const handleNav = (toolId: string) => {
+        navSpy(toolId);
+        if (toolId === "T06") setView("T06");
+      };
+      return (
+        <I18nContext.Provider
+          value={{ locale: "zh-CN", t: MESSAGES["zh-CN"], setLocale: () => {} }}
+        >
+          <SessionStoreProvider onNavigateToTool={handleNav}>
+            <PdfSessionProvider
+              onNavigateToReader={() => setView("reader")}
+              onNavigateToTool={handleNav}
+            >
+              {view === "reader" ? <PdfReaderView /> : <TextToSpeechWorkspace />}
+            </PdfSessionProvider>
+          </SessionStoreProvider>
+        </I18nContext.Provider>
+      );
+    }
+
+    render(<Harness />);
+    await user.click(screen.getAllByRole("button", { name: /打开 PDF/ })[0]!);
+    await waitFor(() => {
+      expect(screen.getByTestId("c08-read-selected-pages-btn")).toBeInTheDocument();
+    });
+
+    // Open selected pages bar, type 1-3, and send to T06
+    await user.click(screen.getByTestId("c08-read-selected-pages-btn"));
+    const rangeInput = screen.getByTestId("c08-tts-page-range-input");
+    await user.clear(rangeInput);
+    await user.type(rangeInput, "1-3");
+    await user.click(screen.getByTestId("c08-tts-send-selected-btn"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-to-speech-workspace")).toBeInTheDocument();
+    });
+    expect(bridge.extractPdfPagesText).toHaveBeenCalledWith(
+      "C:\\Samples\\bilingual.pdf",
+      [1, 2, 3],
+    );
+    // Must NOT auto-synthesize; user reviews & edits first
+    expect(bridge.synthesizeTtsSpeech).not.toHaveBeenCalled();
+    expect(screen.getByTestId("t06-source-file-badge")).toHaveTextContent("bilingual.pdf");
+    expect(screen.getByTestId("t06-source-pages-badge")).toHaveTextContent("1, 3");
+    expect(screen.getByTestId("t06-pdf-scanned-pages-notice")).toHaveTextContent("第 2 页");
+    expect(screen.getByTestId("t06-text-input")).toHaveValue(
+      "第一页中文朗读内容。\n\nPage three English speech.",
+    );
+
+    // Edit text and manually start synthesis -> preserves sourcePath = PDF path
+    await user.type(screen.getByTestId("t06-text-input"), " 已校对。");
+    await waitFor(() => expect(screen.getByTestId("t06-start-btn")).toBeEnabled());
+    await user.click(screen.getByTestId("t06-start-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument();
+    });
+    expect(bridge.synthesizeTtsSpeech).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        sourcePath: "C:\\Samples\\bilingual.pdf",
+        text: "第一页中文朗读内容。\n\nPage three English speech. 已校对。",
+      }),
+    );
+
+    // Click skipped scanned page P04 button
+    await user.click(screen.getByTestId("t06-goto-p04-btn"));
+    expect(navSpy).toHaveBeenCalledWith("P04");
+  });
+
+  it("shows a direct jump to P04 when trying to read a pure scanned page in C08", async () => {
+    const user = userEvent.setup();
+    vi.mocked(bridge.pickSingleFile).mockResolvedValue("C:\\Samples\\pure_scan.pdf");
+    vi.mocked(bridge.inspectPdfDocument).mockResolvedValue({
+      path: "C:\\Samples\\pure_scan.pdf",
+      fileName: "pure_scan.pdf",
+      byteLength: 96000,
+      pageCount: 1,
+      pages: [{ pageNumber: 1, widthPt: 595, heightPt: 842, rotation: 0, isOversized: false }],
+      hasTextLayer: false,
+      sampledTextPages: 1,
+      isLikelyScanned: true,
+      hasOutlines: false,
+      outlines: [],
+      hasAcroform: false,
+      hasSignatures: false,
+      signatureCount: 0,
+      isEncrypted: false,
+      title: null,
+      author: null,
+      subject: null,
+      creator: null,
+      producer: null,
+      warnings: [],
+    });
+    vi.mocked(bridge.renderPdfPage).mockResolvedValue({
+      meta: {
+        pageNumber: 1,
+        widthPx: 640,
+        heightPx: 906,
+        pageWidthPt: 595,
+        pageHeightPt: 842,
+        rotation: 0,
+        capped: false,
+      },
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      fromCache: false,
+    });
+    vi.mocked(bridge.extractPdfPagesText).mockResolvedValue({
+      path: "C:\\Samples\\pure_scan.pdf",
+      fileName: "pure_scan.pdf",
+      totalPages: 1,
+      requestedPages: [1],
+      pages: [{ pageNumber: 1, text: "", charCount: 0, hasText: false }],
+      combinedText: "",
+      extractedPageCount: 0,
+      scannedPages: [1],
+      totalChars: 0,
+      truncated: false,
+    });
+
+    const navSpy = vi.fn();
+    render(
+      <I18nContext.Provider value={{ locale: "zh-CN", t: MESSAGES["zh-CN"], setLocale: () => {} }}>
+        <SessionStoreProvider onNavigateToTool={navSpy}>
+          <PdfSessionProvider onNavigateToReader={() => {}} onNavigateToTool={navSpy}>
+            <PdfReaderView />
+          </PdfSessionProvider>
+        </SessionStoreProvider>
+      </I18nContext.Provider>,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: /打开 PDF/ })[0]!);
+    await waitFor(() => {
+      expect(screen.getByTestId("c08-read-current-page-btn")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("c08-read-current-page-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("c08-tts-scanned-banner")).toBeInTheDocument();
+    });
+    expect(navSpy).not.toHaveBeenCalledWith("T06");
+
+    await user.click(screen.getByTestId("c08-tts-goto-p04-btn"));
+    expect(navSpy).toHaveBeenCalledWith("P04");
   });
 });

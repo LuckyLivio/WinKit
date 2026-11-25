@@ -107,6 +107,123 @@ pub struct PdfPageTextPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PdfExtractedPageText {
+    pub page_number: usize,
+    pub text: String,
+    pub char_count: usize,
+    pub has_text: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfExtractPagesTextResult {
+    pub path: String,
+    pub file_name: String,
+    pub total_pages: usize,
+    pub requested_pages: Vec<usize>,
+    pub pages: Vec<PdfExtractedPageText>,
+    pub combined_text: String,
+    pub extracted_page_count: usize,
+    pub scanned_pages: Vec<usize>,
+    pub total_chars: usize,
+    pub truncated: bool,
+}
+
+/// Normalizes raw PDFium `FPDFText_GetText` page text for clean editing and natural offline
+/// speech synthesis while preserving paragraph boundaries.
+pub fn normalize_pdf_text_for_speech(raw: &str) -> String {
+    let cleaned: String = raw
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|&c| {
+            !matches!(
+                c,
+                '\u{FEFF}' | '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}'
+            ) && (!c.is_control() || c == '\n' || c == '\t')
+        })
+        .collect();
+
+    let mut out_lines: Vec<String> = Vec::new();
+    let mut consecutive_empty = 0usize;
+
+    for raw_line in cleaned.split('\n') {
+        let mut norm_line = String::new();
+        let mut prev_space = false;
+        for ch in raw_line.trim().chars() {
+            if ch == '\t' || ch == ' ' || ch == '\u{00A0}' {
+                if !prev_space && !norm_line.is_empty() {
+                    norm_line.push(' ');
+                    prev_space = true;
+                }
+            } else {
+                norm_line.push(ch);
+                prev_space = false;
+            }
+        }
+        let trimmed = norm_line.trim();
+        if trimmed.is_empty() {
+            if !out_lines.is_empty() && consecutive_empty == 0 {
+                out_lines.push(String::new());
+                consecutive_empty = 1;
+            }
+        } else {
+            out_lines.push(trimmed.to_string());
+            consecutive_empty = 0;
+        }
+    }
+
+    while out_lines.last().is_some_and(|l| l.is_empty()) {
+        out_lines.pop();
+    }
+
+    out_lines.join("\n")
+}
+
+fn append_bounded_tts_text(
+    combined: &mut String,
+    total_chars: &mut usize,
+    piece: &str,
+    max_chars: usize,
+    max_bytes: usize,
+) -> bool {
+    if piece.is_empty() {
+        return false;
+    }
+    let sep = if combined.is_empty() { "" } else { "\n\n" };
+    let sep_chars = sep.chars().count();
+    let sep_bytes = sep.len();
+
+    if *total_chars + sep_chars >= max_chars || combined.len() + sep_bytes >= max_bytes {
+        return true;
+    }
+
+    let piece_chars = piece.chars().count();
+    if *total_chars + sep_chars + piece_chars <= max_chars
+        && combined.len() + sep_bytes + piece.len() <= max_bytes
+    {
+        combined.push_str(sep);
+        combined.push_str(piece);
+        *total_chars += sep_chars + piece_chars;
+        return false;
+    }
+
+    // Truncate cleanly on UTF-8 character boundary within both char and byte ceilings.
+    combined.push_str(sep);
+    *total_chars += sep_chars;
+    for ch in piece.chars() {
+        let ch_bytes = ch.len_utf8();
+        if *total_chars + 1 > max_chars || combined.len() + ch_bytes > max_bytes {
+            break;
+        }
+        combined.push(ch);
+        *total_chars += 1;
+    }
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PdfSearchMatch {
     pub page_number: usize,
     pub match_index: usize,
@@ -1765,14 +1882,162 @@ mod win_impl {
             Ok(out)
         })
     }
+
+    /// Reuses PDFium text extraction (`FPDFText_LoadPage` + `FPDFText_GetText`) in a single
+    /// document open to extract ordered, normalized per-page text for offline `T06` reading.
+    pub fn extract_pages_text_for_tts_with_pdfium(
+        resource_dir: Option<&Path>,
+        path: &Path,
+        requested_pages: &[usize],
+        max_chars: usize,
+        max_bytes: usize,
+    ) -> Result<PdfExtractPagesTextResult, AppError> {
+        if requested_pages.is_empty() {
+            return Err(AppError::invalid_param(
+                "Please select at least one PDF page to read aloud.",
+            ));
+        }
+
+        let mut deduped: Vec<usize> = Vec::with_capacity(requested_pages.len());
+        let mut seen = HashSet::new();
+        for &p in requested_pages {
+            if p == 0 {
+                return Err(AppError::invalid_param("Page number must be >= 1."));
+            }
+            if seen.insert(p) {
+                deduped.push(p);
+            }
+        }
+
+        with_pdfium(resource_dir, |api| {
+            let loaded = open_pdf_doc(api, path)?;
+            let total_pages = unsafe { (api.FPDF_GetPageCount)(loaded.doc) }.max(0) as usize;
+            if total_pages == 0 {
+                return Err(AppError::new(
+                    "PDF_CORRUPT_OR_INVALID",
+                    "PDF document contains no pages.",
+                ));
+            }
+            for &p in &deduped {
+                if p > total_pages {
+                    return Err(AppError::invalid_param(format!(
+                        "Requested page {p} is out of bounds (document has {total_pages} pages)."
+                    )));
+                }
+            }
+
+            let mut pages_out = Vec::with_capacity(deduped.len());
+            let mut scanned_pages = Vec::new();
+            let mut combined_text = String::new();
+            let mut extracted_page_count = 0usize;
+            let mut total_chars = 0usize;
+            let mut truncated = false;
+
+            for &page_number in &deduped {
+                let page = unsafe { (api.FPDF_LoadPage)(loaded.doc, (page_number - 1) as c_int) };
+                if page.is_null() {
+                    return Err(AppError::new(
+                        "PDF_PAGE_ERROR",
+                        format!("Failed to load PDF page {page_number}."),
+                    ));
+                }
+
+                let mut raw_text = String::new();
+                let text_page = unsafe { (api.FPDFText_LoadPage)(page) };
+                if !text_page.is_null() {
+                    let raw_count = unsafe { (api.FPDFText_CountChars)(text_page) };
+                    if raw_count > 0 {
+                        let capped = (raw_count as usize).min(200_000);
+                        let mut full_buf = vec![0u16; capped + 1];
+                        let got = unsafe {
+                            (api.FPDFText_GetText)(
+                                text_page,
+                                0,
+                                capped as c_int,
+                                full_buf.as_mut_ptr(),
+                            )
+                        };
+                        if got > 1 {
+                            raw_text = String::from_utf16_lossy(
+                                &full_buf[..(got as usize).saturating_sub(1)],
+                            );
+                        }
+                    }
+                    unsafe { (api.FPDFText_ClosePage)(text_page) };
+                }
+                unsafe { (api.FPDF_ClosePage)(page) };
+
+                let normalized = normalize_pdf_text_for_speech(&raw_text);
+                let has_text = normalized.chars().any(|c| !c.is_whitespace());
+                let char_count = normalized.chars().count();
+
+                if has_text {
+                    extracted_page_count += 1;
+                    if !truncated
+                        && append_bounded_tts_text(
+                            &mut combined_text,
+                            &mut total_chars,
+                            &normalized,
+                            max_chars,
+                            max_bytes,
+                        )
+                    {
+                        truncated = true;
+                    }
+                } else {
+                    scanned_pages.push(page_number);
+                }
+
+                pages_out.push(PdfExtractedPageText {
+                    page_number,
+                    text: normalized,
+                    char_count,
+                    has_text,
+                });
+            }
+
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document.pdf".to_string());
+
+            Ok(PdfExtractPagesTextResult {
+                path: path.to_string_lossy().into_owned(),
+                file_name,
+                total_pages,
+                requested_pages: deduped,
+                pages: pages_out,
+                combined_text,
+                extracted_page_count,
+                scanned_pages,
+                total_chars,
+                truncated,
+            })
+        })
+    }
 }
 
 #[cfg(windows)]
 pub use win_impl::{
     extract_page_char_rects_with_pdfium, extract_page_text_with_pdfium,
-    inspect_pages_text_status_with_pdfium, inspect_with_pdfium, render_page_png_with_pdfium,
-    render_page_rgba_with_pdfium, search_document_with_pdfium,
+    extract_pages_text_for_tts_with_pdfium, inspect_pages_text_status_with_pdfium,
+    inspect_with_pdfium, render_page_png_with_pdfium, render_page_rgba_with_pdfium,
+    search_document_with_pdfium,
 };
+
+#[cfg(not(windows))]
+pub fn extract_pages_text_for_tts_with_pdfium(
+    _resource_dir: Option<&Path>,
+    _path: &Path,
+    _requested_pages: &[usize],
+    _max_chars: usize,
+    _max_bytes: usize,
+) -> Result<PdfExtractPagesTextResult, AppError> {
+    Err(AppError::new(
+        "PDF_ENGINE_MISSING",
+        "Bundled Windows PDFium engine is only available on Windows.",
+    ))
+}
 
 #[cfg(not(windows))]
 pub fn extract_page_char_rects_with_pdfium(

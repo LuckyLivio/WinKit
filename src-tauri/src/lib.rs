@@ -266,7 +266,7 @@ use crate::pdf_ops::{
     ImagesToPdfResult, MergePdfsRequest, MergePdfsResult, OrganizePdfRequest, OrganizePdfResult,
     SplitPdfPlanPreview, SplitPdfPlanRequest, SplitPdfRequest, SplitPdfResult,
 };
-use crate::pdf_pdfium::{PdfPageTextPayload, PdfSearchResult};
+use crate::pdf_pdfium::{PdfExtractPagesTextResult, PdfPageTextPayload, PdfSearchResult};
 use crate::pdf_searchable::{
     inspect_searchable_pdf_pages_impl, make_pdf_searchable_impl, MakePdfSearchableRequest,
     MakePdfSearchableResult, PdfSearchableInspectResult,
@@ -4137,6 +4137,22 @@ async fn get_pdf_page_text(
 }
 
 #[tauri::command]
+async fn extract_pdf_pages_text(
+    app: AppHandle,
+    pdf: State<'_, PdfSessionManager>,
+    path: String,
+    pages: Vec<usize>,
+) -> Result<PdfExtractPagesTextResult, AppError> {
+    let mgr = pdf.inner().clone();
+    if let Ok(res_dir) = app.path().resource_dir() {
+        mgr.set_resource_dir(res_dir);
+    }
+    tauri::async_runtime::spawn_blocking(move || mgr.extract_pages_text(&path, pages))
+        .await
+        .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "PDF page text worker failed."))?
+}
+
+#[tauri::command]
 async fn search_pdf_text(
     app: AppHandle,
     pdf: State<'_, PdfSessionManager>,
@@ -6448,6 +6464,7 @@ pub fn run() {
             inspect_pdf_document,
             render_pdf_page,
             get_pdf_page_text,
+            extract_pdf_pages_text,
             search_pdf_text,
             clear_pdf_render_cache,
             merge_pdfs,
