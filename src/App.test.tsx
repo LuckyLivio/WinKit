@@ -92,7 +92,7 @@ describe("WinKit desktop workbench shell", () => {
     expect(storedRaw).toContain('"D01"');
   });
 
-  it("registers all 71 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
+  it("registers all 72 active tools with unique IDs, complete bilingual metadata, and search aliases", () => {
     const ids = REGISTERED_TOOLS.map((t) => t.id);
     expect(ids).toEqual([
       "D01",
@@ -112,6 +112,7 @@ describe("WinKit desktop workbench shell", () => {
       "T01",
       "T03",
       "T04",
+      "T06",
       "T08",
       "T09",
       "I01",
@@ -205,6 +206,11 @@ describe("WinKit desktop workbench shell", () => {
     for (const query of ["屏幕区域取字", "capture text", "框选取字", "screen ocr"]) {
       expect(filterTools(REGISTERED_TOOLS, { query, category: "all" }).map((t) => t.id)).toContain(
         "T04",
+      );
+    }
+    for (const query of ["文本朗读", "文字转语音", "tts", "read aloud", "语音合成"]) {
+      expect(filterTools(REGISTERED_TOOLS, { query, category: "all" }).map((t) => t.id)).toContain(
+        "T06",
       );
     }
     for (const query of ["扫描版pdf", "searchable pdf", "双层pdf", "文字层"]) {

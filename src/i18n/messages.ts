@@ -160,6 +160,17 @@ export interface Messages {
     MATTING_WORKER_CRASHED: string;
     MATTING_WORKER_ERROR: string;
     MATTING_RESULT_EXPIRED: string;
+    TTS_NO_VOICES_INSTALLED: string;
+    TTS_VOICE_NOT_FOUND: string;
+    TTS_VOICE_LIST_FAILED: string;
+    TTS_ENGINE_ERROR: string;
+    TTS_SYNTHESIS_FAILED: string;
+    TTS_WORKER_TIMEOUT: string;
+    TTS_WORKER_CRASHED: string;
+    TTS_WORKER_ERROR: string;
+    TTS_RESULT_EXPIRED: string;
+    TTS_UNSUPPORTED_PLATFORM: string;
+    OPEN_SETTINGS_FAILED: string;
     ORT_RUNTIME_MISSING: string;
     PDF_WRITE_FAILED: string;
     TASK_CANCELLED: string;
@@ -1187,6 +1198,19 @@ export const MESSAGES: Record<Locale, Messages> = {
       MATTING_WORKER_CRASHED: "隔离抠图子进程异常退出，原图片未受影响，请重试。",
       MATTING_WORKER_ERROR: "离线抠图进程通信失败，请重试。",
       MATTING_RESULT_EXPIRED: "内存中的抠图结果已过期或被清理，请重新执行离线抠图。",
+      TTS_NO_VOICES_INSTALLED:
+        "当前 Windows 系统未安装可用的本地离线语音，请先在 Windows 语音设置中添加语音包。",
+      TTS_VOICE_NOT_FOUND: "所选系统语音已不可用，请刷新语音列表后重新选择。",
+      TTS_VOICE_LIST_FAILED: "无法读取系统已安装的离线语音列表，请重试。",
+      TTS_ENGINE_ERROR: "初始化 Windows 离线语音引擎失败，请检查系统语音服务后重试。",
+      TTS_SYNTHESIS_FAILED: "离线语音合成失败，请检查所选语音是否支持当前文本内容。",
+      TTS_WORKER_TIMEOUT: "离线语音合成超时，隔离工作进程已安全回收，请重试。",
+      TTS_WORKER_CRASHED: "离线语音合成工作进程异常退出，请重试。",
+      TTS_WORKER_ERROR: "离线语音合成进程通信失败，请重试。",
+      TTS_RESULT_EXPIRED: "当前会话的试听音频已清理或过期，请重新合成后再导出。",
+      TTS_UNSUPPORTED_PLATFORM: "本地系统离线文本朗读仅在 Windows 桌面环境下可用。",
+      OPEN_SETTINGS_FAILED:
+        "无法打开 Windows 语音设置，请在系统「设置 → 时间和语言 → 语音」中手动打开。",
       ORT_RUNTIME_MISSING: "内置 ONNX Runtime 运行库缺失，请重新安装官方安装包。",
       PDF_WRITE_FAILED: "写入目标 PDF 文件失败，请检查磁盘空间与目录权限。",
       TASK_CANCELLED: "任务已按请求取消。",
@@ -2367,6 +2391,25 @@ export const MESSAGES: Record<Locale, Messages> = {
       MATTING_WORKER_ERROR: "Isolated background-removal worker communication error. Please retry.",
       MATTING_RESULT_EXPIRED:
         "The in-memory cutout result expired or was cleared. Please run background removal again.",
+      TTS_NO_VOICES_INSTALLED:
+        "No Windows offline speech voices are installed. Add a voice in Windows Speech Settings first.",
+      TTS_VOICE_NOT_FOUND:
+        "The selected system voice is no longer available. Refresh the voice list and pick another voice.",
+      TTS_VOICE_LIST_FAILED: "Unable to enumerate installed Windows speech voices. Please retry.",
+      TTS_ENGINE_ERROR:
+        "Failed to initialize the Windows offline speech engine. Check Windows Speech services and retry.",
+      TTS_SYNTHESIS_FAILED:
+        "Offline speech synthesis failed. Verify that the chosen voice supports the input text.",
+      TTS_WORKER_TIMEOUT:
+        "Offline speech synthesis timed out and the isolated worker was recycled. Please retry.",
+      TTS_WORKER_CRASHED: "The isolated offline speech worker exited unexpectedly. Please retry.",
+      TTS_WORKER_ERROR: "Isolated speech worker communication error. Please retry.",
+      TTS_RESULT_EXPIRED:
+        "The synthesized audition audio expired or was cleared. Synthesize again before exporting.",
+      TTS_UNSUPPORTED_PLATFORM:
+        "Windows native offline text-to-speech is only available on Windows desktop.",
+      OPEN_SETTINGS_FAILED:
+        "Unable to open Windows Speech Settings. Open Settings -> Time & language -> Speech manually.",
       ORT_RUNTIME_MISSING:
         "The bundled ONNX Runtime (onnxruntime.dll) is missing. Please reinstall WinKit.",
       PDF_WRITE_FAILED: "Failed to write output PDF file. Check disk space and folder permissions.",

@@ -72,6 +72,7 @@ import { PdfSearchableWorkspace } from "../tools/pdf-searchable/PdfSearchableWor
 import { ExtractTextWorkspace } from "../tools/extract-text/ExtractTextWorkspace";
 import { CaptureTextWorkspace } from "../tools/capture-text/CaptureTextWorkspace";
 import { TranscribeMediaWorkspace } from "../tools/transcribe-media/TranscribeMediaWorkspace";
+import { TextToSpeechWorkspace } from "../tools/text-to-speech/TextToSpeechWorkspace";
 
 export type ToolCategory = "pdf" | "video" | "audio" | "developer" | "text" | "image" | "file";
 export type ToolImplementationStatus = "full" | "partial";
@@ -89,6 +90,7 @@ export type ToolIconName =
   | "scan-text"
   | "capture-text"
   | "transcribe-media"
+  | "read-aloud"
   | "text-quote"
   | "lock-keyhole"
   | "table-2"
@@ -702,6 +704,39 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     icon: "capture-text",
     implementationStatus: "full",
     component: CaptureTextWorkspace,
+  },
+  {
+    id: "T06",
+    category: "text",
+    name: {
+      "zh-CN": "文本朗读",
+      "en-US": "Read Text Aloud",
+    },
+    summary: {
+      "zh-CN":
+        "调用 Windows 本机已安装的离线语音将粘贴文本或 .txt 按段落顺序合成自然语音，支持直接试听与 WAV / MP3 导出",
+      "en-US":
+        "Convert pasted text or .txt files into offline speech with installed Windows voices, audition inline, and save as WAV or MP3",
+    },
+    keywords: [
+      "tts",
+      "text to speech",
+      "read aloud",
+      "speech",
+      "voice",
+      "audio",
+      "wav",
+      "mp3",
+      "narrate",
+      "文本朗读",
+      "文字转语音",
+      "语音合成",
+      "离线朗读",
+      "朗读",
+    ],
+    icon: "read-aloud",
+    implementationStatus: "partial",
+    component: TextToSpeechWorkspace,
   },
   {
     id: "T08",

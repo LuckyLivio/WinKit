@@ -75,5 +75,13 @@ fn main() {
         std::process::exit(code);
     }
 
+    if args
+        .iter()
+        .any(|a| a == winkit_lib::tts_worker::TTS_WORKER_FLAG)
+    {
+        let code = winkit_lib::tts_worker::run_tts_worker_stdio_loop();
+        std::process::exit(code);
+    }
+
     winkit_lib::run();
 }
