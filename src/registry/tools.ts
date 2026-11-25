@@ -1334,14 +1334,16 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
     name: { "zh-CN": "视频烧录字幕", "en-US": "Burn In Subtitles" },
     summary: {
       "zh-CN":
-        "离线导入 SRT / WebVTT 字幕文件，点击任意时间轴字幕即刻预览烧录帧，调整字号、顶部/底部位置及描边或半透明黑底框后永久烧录至视频像素（支持中文）",
+        "支持从含音轨视频一键跳转到 T01 离线语音转字幕并校对回填原视频，或手动导入 SRT / WebVTT，点击任意字幕即刻预览烧录帧并永久烧录至视频像素（支持中文）",
       "en-US":
-        "Import SRT or WebVTT subtitles offline, click any cue to preview burned-in frames with CJK fonts, customize size/position/outline or black box, and permanently burn into video pixels",
+        "Generate and proofread offline speech subtitles via T01 back to the source video or import SRT/WebVTT manually, click any cue to preview burned-in frames with CJK fonts, and permanently burn into video pixels",
     },
     keywords: [
       "subtitle",
       "subtitles",
+      "auto subtitles",
       "captions",
+      "transcribe",
       "burn in",
       "hardsub",
       "srt",
@@ -1349,12 +1351,14 @@ export const REGISTERED_TOOLS: RegisteredTool[] = [
       "webvtt",
       "video",
       "字幕",
+      "自动字幕",
+      "语音转字幕",
       "烧录字幕",
       "硬字幕",
       "加字幕",
     ],
     icon: "video-subtitles",
-    implementationStatus: "partial",
+    implementationStatus: "full",
     component: VideoSubtitlesWorkspace,
   },
   {

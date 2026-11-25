@@ -122,8 +122,9 @@ export function TranscribeMediaWorkspace() {
     startTranscribeMediaTask,
     cancelTranscribeMediaTask,
     handoffMediaFileToTool,
+    handoffSubtitlePairToV02,
     pendingHandoff,
-    consumePendingHandoff,
+    consumePendingHandoffEntry,
   } = useMediaSession();
 
   const st = mediaSession.transcribeMedia;
@@ -223,12 +224,17 @@ export function TranscribeMediaWorkspace() {
   const requestLoadMediaFile = useCallback(
     (
       filePath: string,
-      opts?: { fromPendingQueue?: boolean; preserveExistingOnFailure?: boolean },
+      opts?: {
+        fromPendingQueue?: boolean;
+        preserveExistingOnFailure?: boolean;
+        incomingSource?: "A02" | "V02";
+      },
     ) => {
       if (running) {
         updateTranscribeMediaSession((prev) => ({
           ...prev,
           pendingIncomingPath: filePath,
+          pendingIncomingSource: opts?.incomingSource ?? prev.pendingIncomingSource ?? "A02",
         }));
         return;
       }
@@ -276,22 +282,27 @@ export function TranscribeMediaWorkspace() {
     });
   };
 
-  // Clean handoff intake hook for A02 / media tools sending audio to T01.
+  // Clean handoff intake hook for A02 / V02 sending audio or video to T01.
   useEffect(() => {
     if (!pendingHandoff || pendingHandoff.toolId !== "T01") return;
-    const handed = consumePendingHandoff("T01");
-    if (!handed) return;
+    const entry = consumePendingHandoffEntry("T01");
+    if (!entry) return;
+    const incomingSource: "A02" | "V02" = entry.sourceToolId === "V02" ? "V02" : "A02";
     if (running) {
       updateTranscribeMediaSession((prev) => ({
         ...prev,
-        pendingIncomingPath: handed,
+        pendingIncomingPath: entry.path,
+        pendingIncomingSource: incomingSource,
       }));
       return;
     }
-    requestLoadMediaFile(handed, { preserveExistingOnFailure: st.segments.length > 0 });
+    requestLoadMediaFile(entry.path, {
+      preserveExistingOnFailure: st.segments.length > 0,
+      incomingSource,
+    });
   }, [
     pendingHandoff,
-    consumePendingHandoff,
+    consumePendingHandoffEntry,
     requestLoadMediaFile,
     running,
     st.segments.length,
@@ -924,13 +935,21 @@ export function TranscribeMediaWorkspace() {
                 data-testid="t01-pending-handoff-banner"
               >
                 <div style={{ fontWeight: 500 }}>
-                  {running
-                    ? isZh
-                      ? "已暂存来自录音机的新录音，待当前转写完成或取消后可选择载入："
-                      : "New recording queued from Audio Recorder. You can load it once the current transcription finishes or is cancelled:"
-                    : isZh
-                      ? "有待处理的录音交接（已保留当前转写结果）："
-                      : "Pending recording handoff ready (current transcript preserved):"}
+                  {st.pendingIncomingSource === "V02"
+                    ? running
+                      ? isZh
+                        ? "已暂存来自「视频加字幕」的新视频，待当前转写完成或取消后可选择载入："
+                        : "New video queued from Add Subtitles. You can load it once the current transcription finishes or is cancelled:"
+                      : isZh
+                        ? "有待处理的视频交接（已保留当前转写结果）："
+                        : "Pending video handoff ready (current transcript preserved):"
+                    : running
+                      ? isZh
+                        ? "已暂存来自录音机的新录音，待当前转写完成或取消后可选择载入："
+                        : "New recording queued from Audio Recorder. You can load it once the current transcription finishes or is cancelled:"
+                      : isZh
+                        ? "有待处理的录音交接（已保留当前转写结果）："
+                        : "Pending recording handoff ready (current transcript preserved):"}
                 </div>
                 <div className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
                   {st.pendingIncomingPath}
@@ -949,7 +968,15 @@ export function TranscribeMediaWorkspace() {
                       }
                       data-testid="t01-load-pending-btn"
                     >
-                      <span>{isZh ? "载入待处理录音" : "Load Pending Recording"}</span>
+                      <span>
+                        {st.pendingIncomingSource === "V02"
+                          ? isZh
+                            ? "载入待处理视频"
+                            : "Load Pending Video"
+                          : isZh
+                            ? "载入待处理录音"
+                            : "Load Pending Recording"}
+                      </span>
                     </button>
                   )}
                   <button
@@ -960,6 +987,7 @@ export function TranscribeMediaWorkspace() {
                       updateTranscribeMediaSession((prev) => ({
                         ...prev,
                         pendingIncomingPath: null,
+                        pendingIncomingSource: null,
                       }))
                     }
                     data-testid="t01-dismiss-pending-btn"
@@ -1189,20 +1217,34 @@ export function TranscribeMediaWorkspace() {
                       <FolderOpen size={14} aria-hidden="true" />
                       <span>{isZh ? "打开所在目录" : "Open Folder"}</span>
                     </button>
-                    {st.lastExportedFormat === "srt" && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        disabled={running}
-                        onClick={() => handoffMediaFileToTool("V02", st.lastExportedPath!)}
-                        data-testid="t01-send-v02-btn"
-                      >
-                        <Captions size={14} aria-hidden="true" />
-                        <span>
-                          {isZh ? "发送到视频加字幕 (V02)" : "Send to Add Subtitles (V02)"}
-                        </span>
-                      </button>
-                    )}
+                    {st.lastExportedFormat === "srt" &&
+                      (st.inspect?.hasVideo && st.sourcePath ? (
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={running}
+                          onClick={() =>
+                            handoffSubtitlePairToV02(st.sourcePath!, st.lastExportedPath!)
+                          }
+                          data-testid="t01-apply-v02-btn"
+                        >
+                          <Captions size={14} aria-hidden="true" />
+                          <span>{isZh ? "应用到原视频" : "Apply to Source Video"}</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={running}
+                          onClick={() => handoffMediaFileToTool("V02", st.lastExportedPath!, "T01")}
+                          data-testid="t01-send-v02-btn"
+                        >
+                          <Captions size={14} aria-hidden="true" />
+                          <span>
+                            {isZh ? "发送到视频加字幕 (V02)" : "Send to Add Subtitles (V02)"}
+                          </span>
+                        </button>
+                      ))}
                   </div>
                 </div>
               )}

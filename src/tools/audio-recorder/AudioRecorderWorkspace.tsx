@@ -795,7 +795,7 @@ export function AudioRecorderWorkspace() {
                 <button
                   type="button"
                   className="btn btn-primary"
-                  onClick={() => handoffMediaFileToTool("T01", lastSaved.outputPath)}
+                  onClick={() => handoffMediaFileToTool("T01", lastSaved.outputPath, "A02")}
                   data-testid="a02-handoff-t01"
                 >
                   <Captions size={14} aria-hidden="true" />

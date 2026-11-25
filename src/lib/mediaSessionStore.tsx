@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { getFileStemAndExt, suggestMediaOutputPath } from "../tools/media-shared/mediaFormat";
 import {
   bindDisposableListener,
   burnInSubtitles,
@@ -19,10 +20,15 @@ import {
   convertVideoToGif,
   cropRotateVideo,
   extractAudioBatch,
+  extractMediaPosterDataUrl,
   extractVideoFrames,
   inspectTranscribeMedia,
   mergeVideos,
   muteVideosBatch,
+  parseBackendError,
+  parseSubtitleFile,
+  previewBurnedSubtitleFrame,
+  probeMediaInfo,
   registerMediaPreviewPath,
   replaceVideoAudio,
   resizeVideosBatch,
@@ -46,6 +52,7 @@ import {
   type ParsedSubtitleFile,
   type PreviewSubtitleFrameResult,
   type SubtitleBoxStyle,
+  type SubtitleBurnStyle,
   type SubtitlePosition,
   type WatermarkVideoRequest,
   type WatermarkVideoResult,
@@ -402,6 +409,27 @@ export interface VideoReplaceAudioSessionState {
   errorMessage: string | null;
 }
 
+function buildDefaultSubtitledOutputPath(videoPath: string): string {
+  const { ext } = getFileStemAndExt(videoPath);
+  const cleanExt = ext.toLowerCase();
+  const outExt = ["mp4", "mov", "mkv", "webm", "m4v"].includes(cleanExt) ? cleanExt : "mp4";
+  return suggestMediaOutputPath(videoPath, "_subtitled", outExt);
+}
+
+export interface VideoSubtitlesPairHandoff {
+  videoPath: string;
+  subtitlePath: string;
+}
+
+export interface PendingV02PairHandoff extends VideoSubtitlesPairHandoff {
+  nonce: number;
+}
+
+export interface VideoSubtitlesTaskOutcome {
+  result: BurnInSubtitlesResult | null;
+  errorCode: string | null;
+}
+
 export interface VideoSubtitlesSessionState {
   videoPath: string | null;
   videoProbe: MediaProbeReport | null;
@@ -414,6 +442,11 @@ export interface VideoSubtitlesSessionState {
   previewFrame: PreviewSubtitleFrameResult | null;
   previewLoading: boolean;
   previewError: string | null;
+  loadingVideo: boolean;
+  loadingSubtitle: boolean;
+  loadingPair: boolean;
+  sourceGeneration: number;
+  pendingPairHandoff: VideoSubtitlesPairHandoff | null;
   fontSize: number;
   position: SubtitlePosition;
   boxStyle: SubtitleBoxStyle;
@@ -465,6 +498,7 @@ export interface TranscribeMediaSessionState {
   lastExportedFormat: TranscriptExportFormat | null;
   lastExportedSourcePath: string | null;
   pendingIncomingPath: string | null;
+  pendingIncomingSource: "A02" | "V02" | null;
   errorMessage: string | null;
 }
 
@@ -755,6 +789,11 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     previewFrame: null,
     previewLoading: false,
     previewError: null,
+    loadingVideo: false,
+    loadingSubtitle: false,
+    loadingPair: false,
+    sourceGeneration: 0,
+    pendingPairHandoff: null,
     fontSize: 38,
     position: "bottom",
     boxStyle: "outline_shadow",
@@ -797,6 +836,7 @@ const INITIAL_MEDIA_SESSION: MediaSessionRoot = {
     lastExportedFormat: null,
     lastExportedSourcePath: null,
     pendingIncomingPath: null,
+    pendingIncomingSource: null,
     errorMessage: null,
   },
 };
@@ -917,10 +957,35 @@ export interface MediaSessionContextValue {
   updateVideoSubtitlesSession: (
     updater: (prev: VideoSubtitlesSessionState) => VideoSubtitlesSessionState,
   ) => void;
+  renderVideoSubtitlesPreview: (
+    videoPath: string,
+    subtitlePath: string,
+    timestampSec: number,
+    style: SubtitleBurnStyle,
+    cueIndex: number | null,
+    expectedGeneration?: number,
+    formatError?: (err: unknown) => string,
+  ) => Promise<void>;
+  loadVideoSubtitlesVideo: (
+    filePath: string,
+    formatError: (err: unknown) => string,
+    noVideoMessage: string,
+  ) => Promise<boolean>;
+  loadVideoSubtitlesSubtitle: (
+    filePath: string,
+    formatError: (err: unknown) => string,
+  ) => Promise<boolean>;
+  loadVideoSubtitlesPair: (
+    videoPath: string,
+    subtitlePath: string,
+    formatError: (err: unknown) => string,
+    noVideoMessage: string,
+    options?: { clearPendingOnSuccess?: boolean },
+  ) => Promise<boolean>;
   startVideoSubtitlesTask: (
     req: Omit<BurnInSubtitlesRequest, "taskId">,
     formatError: (err: unknown) => string,
-  ) => Promise<BurnInSubtitlesResult | null>;
+  ) => Promise<VideoSubtitlesTaskOutcome>;
   cancelVideoSubtitlesTask: () => Promise<void>;
   updateVideoWatermarkSession: (
     updater: (prev: VideoWatermarkSessionState) => VideoWatermarkSessionState,
@@ -945,9 +1010,13 @@ export interface MediaSessionContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<TranscribeMediaResult | null>;
   cancelTranscribeMediaTask: () => Promise<void>;
-  handoffMediaFileToTool: (toolId: string, filePath: string) => void;
-  pendingHandoff: { toolId: string; path: string; nonce: number } | null;
+  handoffMediaFileToTool: (toolId: string, filePath: string, sourceToolId?: string) => void;
+  pendingHandoff: { toolId: string; path: string; sourceToolId?: string; nonce: number } | null;
   consumePendingHandoff: (toolId: string) => string | null;
+  consumePendingHandoffEntry: (toolId: string) => { path: string; sourceToolId?: string } | null;
+  handoffSubtitlePairToV02: (videoPath: string, subtitlePath: string) => void;
+  pendingV02PairHandoff: PendingV02PairHandoff | null;
+  consumePendingV02PairHandoff: () => VideoSubtitlesPairHandoff | null;
 }
 
 const MediaSessionContext = createContext<MediaSessionContextValue | null>(null);
@@ -963,8 +1032,12 @@ export function MediaSessionProvider({
   const [pendingHandoff, setPendingHandoff] = useState<{
     toolId: string;
     path: string;
+    sourceToolId?: string;
     nonce: number;
   } | null>(null);
+  const [pendingV02PairHandoff, setPendingV02PairHandoff] = useState<PendingV02PairHandoff | null>(
+    null,
+  );
 
   const taskSeqRef = useRef(1);
   const activeTrimTaskRef = useRef<string | null>(null);
@@ -987,8 +1060,17 @@ export function MediaSessionProvider({
   const activeTranscribeTaskRef = useRef<string | null>(null);
   const transcribeLoadSeqRef = useRef(0);
   const transcribeGenRef = useRef(0);
+  const v02VideoSeqRef = useRef(0);
+  const v02SubSeqRef = useRef(0);
+  const v02PairSeqRef = useRef(0);
+  const v02PreviewSeqRef = useRef(0);
+  const v02GenRef = useRef(0);
+  const v02StateRef = useRef(mediaSession.videoSubtitles);
+  v02StateRef.current = mediaSession.videoSubtitles;
   const pendingHandoffRef = useRef(pendingHandoff);
   pendingHandoffRef.current = pendingHandoff;
+  const pendingV02PairHandoffRef = useRef(pendingV02PairHandoff);
+  pendingV02PairHandoffRef.current = pendingV02PairHandoff;
 
   useEffect(() => {
     return bindDisposableListener(
@@ -2260,12 +2342,402 @@ export function MediaSessionProvider({
     [],
   );
 
+  const renderVideoSubtitlesPreview = useCallback(
+    async (
+      videoPath: string,
+      subtitlePath: string,
+      timestampSec: number,
+      style: SubtitleBurnStyle,
+      cueIndex: number | null,
+      expectedGeneration?: number,
+      formatError?: (err: unknown) => string,
+    ): Promise<void> => {
+      const seq = ++v02PreviewSeqRef.current;
+      const genAtStart = expectedGeneration ?? v02GenRef.current;
+      setMediaSession((prev) => {
+        if (prev.videoSubtitles.sourceGeneration !== genAtStart) return prev;
+        return {
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            selectedCueIndex: cueIndex,
+            previewTimestampSec: timestampSec,
+            previewLoading: true,
+            previewError: null,
+          },
+        };
+      });
+      try {
+        const res = await previewBurnedSubtitleFrame({
+          videoPath,
+          subtitlePath,
+          timestampSec,
+          style,
+        });
+        if (v02PreviewSeqRef.current !== seq || v02GenRef.current !== genAtStart) return;
+        setMediaSession((prev) => {
+          if (prev.videoSubtitles.sourceGeneration !== genAtStart) return prev;
+          return {
+            ...prev,
+            videoSubtitles: {
+              ...prev.videoSubtitles,
+              previewFrame: res,
+              previewLoading: false,
+              previewError: null,
+            },
+          };
+        });
+      } catch (err) {
+        if (v02PreviewSeqRef.current !== seq || v02GenRef.current !== genAtStart) return;
+        const msg = formatError
+          ? formatError(err)
+          : err instanceof Error
+            ? err.message
+            : String(err);
+        setMediaSession((prev) => {
+          if (prev.videoSubtitles.sourceGeneration !== genAtStart) return prev;
+          return {
+            ...prev,
+            videoSubtitles: {
+              ...prev.videoSubtitles,
+              previewLoading: false,
+              previewError: msg,
+            },
+          };
+        });
+      }
+    },
+    [],
+  );
+
+  const loadVideoSubtitlesVideo = useCallback(
+    async (
+      filePath: string,
+      formatError: (err: unknown) => string,
+      noVideoMessage: string,
+    ): Promise<boolean> => {
+      if (activeVideoSubtitlesTaskRef.current) return false;
+      const seq = ++v02VideoSeqRef.current;
+      const pairSeqAtStart = v02PairSeqRef.current;
+      const gen = ++v02GenRef.current;
+      v02PreviewSeqRef.current += 1;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoSubtitles: {
+          ...prev.videoSubtitles,
+          videoPath: filePath,
+          sourceGeneration: gen,
+          loadingVideo: true,
+          loadingPair: false,
+          videoProbe: null,
+          posterUrl: null,
+          previewFrame: null,
+          previewLoading: false,
+          previewError: null,
+          lastResult: null,
+          errorMessage: null,
+        },
+      }));
+      try {
+        const probe = await probeMediaInfo(filePath);
+        if (
+          v02VideoSeqRef.current !== seq ||
+          v02PairSeqRef.current !== pairSeqAtStart ||
+          activeVideoSubtitlesTaskRef.current
+        ) {
+          return false;
+        }
+        if (!probe.hasVideo) {
+          throw new Error(noVideoMessage);
+        }
+        const poster = await extractMediaPosterDataUrl(filePath, 0.25).catch(() => null);
+        if (
+          v02VideoSeqRef.current !== seq ||
+          v02PairSeqRef.current !== pairSeqAtStart ||
+          activeVideoSubtitlesTaskRef.current
+        ) {
+          return false;
+        }
+        const outPath = buildDefaultSubtitledOutputPath(filePath);
+        const commitGen = v02GenRef.current;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            videoPath: filePath,
+            videoProbe: probe,
+            posterUrl: poster,
+            outputPath: outPath,
+            loadingVideo: false,
+            lastResult: null,
+            errorMessage: null,
+          },
+        }));
+        const cur = v02StateRef.current;
+        if (cur.subtitlePath && cur.parsedSubtitle && cur.parsedSubtitle.cues.length > 0) {
+          const firstCue = cur.parsedSubtitle.cues[0]!;
+          const mid = (firstCue.startSec + firstCue.endSec) / 2;
+          await renderVideoSubtitlesPreview(
+            filePath,
+            cur.subtitlePath,
+            mid,
+            {
+              fontSize: cur.fontSize,
+              position: cur.position,
+              boxStyle: cur.boxStyle,
+              marginV: cur.marginV,
+            },
+            firstCue.index,
+            commitGen,
+            formatError,
+          );
+        }
+        return true;
+      } catch (err) {
+        if (v02VideoSeqRef.current !== seq || v02PairSeqRef.current !== pairSeqAtStart) {
+          return false;
+        }
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            loadingVideo: false,
+            errorMessage: formatError(err),
+          },
+        }));
+        return false;
+      }
+    },
+    [renderVideoSubtitlesPreview],
+  );
+
+  const loadVideoSubtitlesSubtitle = useCallback(
+    async (filePath: string, formatError: (err: unknown) => string): Promise<boolean> => {
+      if (activeVideoSubtitlesTaskRef.current) return false;
+      const seq = ++v02SubSeqRef.current;
+      const pairSeqAtStart = v02PairSeqRef.current;
+      const gen = ++v02GenRef.current;
+      v02PreviewSeqRef.current += 1;
+      setMediaSession((prev) => ({
+        ...prev,
+        videoSubtitles: {
+          ...prev.videoSubtitles,
+          subtitlePath: filePath,
+          sourceGeneration: gen,
+          loadingSubtitle: true,
+          loadingPair: false,
+          parsedSubtitle: null,
+          subtitleParseError: null,
+          selectedCueIndex: null,
+          previewFrame: null,
+          previewLoading: false,
+          previewError: null,
+          lastResult: null,
+        },
+      }));
+      try {
+        const parsed = await parseSubtitleFile(filePath);
+        if (
+          v02SubSeqRef.current !== seq ||
+          v02PairSeqRef.current !== pairSeqAtStart ||
+          activeVideoSubtitlesTaskRef.current
+        ) {
+          return false;
+        }
+        const firstCue = parsed.cues[0] ?? null;
+        const mid = firstCue ? (firstCue.startSec + firstCue.endSec) / 2 : 0;
+        const commitGen = v02GenRef.current;
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            subtitlePath: filePath,
+            parsedSubtitle: parsed,
+            subtitleParseError: null,
+            selectedCueIndex: firstCue?.index ?? null,
+            previewTimestampSec: mid,
+            loadingSubtitle: false,
+          },
+        }));
+        const cur = v02StateRef.current;
+        if (cur.videoPath && cur.videoProbe?.hasVideo && firstCue) {
+          await renderVideoSubtitlesPreview(
+            cur.videoPath,
+            filePath,
+            mid,
+            {
+              fontSize: cur.fontSize,
+              position: cur.position,
+              boxStyle: cur.boxStyle,
+              marginV: cur.marginV,
+            },
+            firstCue.index,
+            commitGen,
+            formatError,
+          );
+        }
+        return true;
+      } catch (err) {
+        if (v02SubSeqRef.current !== seq || v02PairSeqRef.current !== pairSeqAtStart) {
+          return false;
+        }
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            parsedSubtitle: null,
+            loadingSubtitle: false,
+            subtitleParseError: formatError(err),
+          },
+        }));
+        return false;
+      }
+    },
+    [renderVideoSubtitlesPreview],
+  );
+
+  const loadVideoSubtitlesPair = useCallback(
+    async (
+      videoPath: string,
+      subtitlePath: string,
+      formatError: (err: unknown) => string,
+      noVideoMessage: string,
+      options?: { clearPendingOnSuccess?: boolean },
+    ): Promise<boolean> => {
+      if (activeVideoSubtitlesTaskRef.current) {
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            pendingPairHandoff: { videoPath, subtitlePath },
+          },
+        }));
+        return false;
+      }
+      const pairSeq = ++v02PairSeqRef.current;
+      const videoSeqAtStart = v02VideoSeqRef.current;
+      const subSeqAtStart = v02SubSeqRef.current;
+
+      // Validate BOTH video & subtitle before mutating existing V02 state.
+      setMediaSession((prev) => ({
+        ...prev,
+        videoSubtitles: {
+          ...prev.videoSubtitles,
+          loadingPair: true,
+          errorMessage: null,
+        },
+      }));
+
+      try {
+        const [probe, parsed] = await Promise.all([
+          probeMediaInfo(videoPath),
+          parseSubtitleFile(subtitlePath),
+        ]);
+        if (!probe.hasVideo) {
+          throw new Error(noVideoMessage);
+        }
+        const poster = await extractMediaPosterDataUrl(videoPath, 0.25).catch(() => null);
+
+        // Stale handoff guard: if user selected newer media, queued another pair, or started a burn-in,
+        // discard this late result without overwriting the newer selection.
+        if (
+          v02PairSeqRef.current !== pairSeq ||
+          v02VideoSeqRef.current !== videoSeqAtStart ||
+          v02SubSeqRef.current !== subSeqAtStart ||
+          activeVideoSubtitlesTaskRef.current
+        ) {
+          if (v02PairSeqRef.current === pairSeq) {
+            setMediaSession((prev) => ({
+              ...prev,
+              videoSubtitles: { ...prev.videoSubtitles, loadingPair: false },
+            }));
+          }
+          return false;
+        }
+
+        const nextGen = ++v02GenRef.current;
+        v02PreviewSeqRef.current += 1;
+        const resolvedVideoPath = probe.path || videoPath;
+        const resolvedSubPath = parsed.path || subtitlePath;
+        const firstCue = parsed.cues[0] ?? null;
+        const mid = firstCue ? (firstCue.startSec + firstCue.endSec) / 2 : 0;
+        const outPath = buildDefaultSubtitledOutputPath(resolvedVideoPath);
+
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            videoPath: resolvedVideoPath,
+            videoProbe: probe,
+            posterUrl: poster,
+            subtitlePath: resolvedSubPath,
+            parsedSubtitle: parsed,
+            subtitleParseError: null,
+            selectedCueIndex: firstCue?.index ?? null,
+            previewTimestampSec: mid,
+            previewFrame: null,
+            previewLoading: false,
+            previewError: null,
+            outputPath: outPath,
+            sourceGeneration: nextGen,
+            loadingVideo: false,
+            loadingSubtitle: false,
+            loadingPair: false,
+            pendingPairHandoff: options?.clearPendingOnSuccess
+              ? null
+              : prev.videoSubtitles.pendingPairHandoff,
+            lastResult: null,
+            errorMessage: null,
+          },
+        }));
+
+        if (firstCue) {
+          const cur = v02StateRef.current;
+          await renderVideoSubtitlesPreview(
+            resolvedVideoPath,
+            resolvedSubPath,
+            mid,
+            {
+              fontSize: cur.fontSize,
+              position: cur.position,
+              boxStyle: cur.boxStyle,
+              marginV: cur.marginV,
+            },
+            firstCue.index,
+            nextGen,
+            formatError,
+          );
+        }
+        return true;
+      } catch (err) {
+        if (
+          v02PairSeqRef.current !== pairSeq ||
+          v02VideoSeqRef.current !== videoSeqAtStart ||
+          v02SubSeqRef.current !== subSeqAtStart
+        ) {
+          return false;
+        }
+        // Keep previous V02 video, subtitle, preview, and output intact on validation failure!
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            loadingPair: false,
+            errorMessage: formatError(err),
+          },
+        }));
+        return false;
+      }
+    },
+    [renderVideoSubtitlesPreview],
+  );
+
   const startVideoSubtitlesTask = useCallback(
     async (
       req: Omit<BurnInSubtitlesRequest, "taskId">,
       formatError: (err: unknown) => string,
-    ): Promise<BurnInSubtitlesResult | null> => {
-      if (activeVideoSubtitlesTaskRef.current) return null;
+    ): Promise<VideoSubtitlesTaskOutcome> => {
+      if (activeVideoSubtitlesTaskRef.current) return { result: null, errorCode: null };
       const taskId = `v02-sub-${Date.now()}-${taskSeqRef.current++}`;
       activeVideoSubtitlesTaskRef.current = taskId;
       setMediaSession((prev) => ({
@@ -2290,7 +2762,9 @@ export function MediaSessionProvider({
       }));
       try {
         const res = await burnInSubtitles({ ...req, taskId });
-        if (activeVideoSubtitlesTaskRef.current !== taskId) return null;
+        if (activeVideoSubtitlesTaskRef.current !== taskId) {
+          return { result: null, errorCode: null };
+        }
         activeVideoSubtitlesTaskRef.current = null;
         setMediaSession((prev) => ({
           ...prev,
@@ -2303,10 +2777,14 @@ export function MediaSessionProvider({
             errorMessage: null,
           },
         }));
-        return res;
+        return { result: res, errorCode: null };
       } catch (err) {
-        if (activeVideoSubtitlesTaskRef.current !== taskId) return null;
+        if (activeVideoSubtitlesTaskRef.current !== taskId) {
+          return { result: null, errorCode: null };
+        }
         activeVideoSubtitlesTaskRef.current = null;
+        const parsed = parseBackendError(err);
+        const isOverwritePrompt = !req.allowOverwrite && parsed.code === "TARGET_ALREADY_EXISTS";
         setMediaSession((prev) => ({
           ...prev,
           videoSubtitles: {
@@ -2314,10 +2792,10 @@ export function MediaSessionProvider({
             taskStatus: "idle",
             activeTaskId: null,
             liveProgress: null,
-            errorMessage: formatError(err),
+            errorMessage: isOverwritePrompt ? null : formatError(err),
           },
         }));
-        return null;
+        return { result: null, errorCode: parsed.code };
       }
     },
     [],
@@ -2468,6 +2946,9 @@ export function MediaSessionProvider({
               lastExportedFormat: null,
               lastExportedSourcePath: null,
               pendingIncomingPath: clearPending ? null : prev.transcribeMedia.pendingIncomingPath,
+              pendingIncomingSource: clearPending
+                ? null
+                : prev.transcribeMedia.pendingIncomingSource,
               errorMessage: null,
             },
           }));
@@ -2522,6 +3003,9 @@ export function MediaSessionProvider({
               inspect: inspected,
               previewUrl: preview?.url ?? null,
               pendingIncomingPath: clearPending ? null : prev.transcribeMedia.pendingIncomingPath,
+              pendingIncomingSource: clearPending
+                ? null
+                : prev.transcribeMedia.pendingIncomingSource,
               errorMessage: inspected.hasAudio ? null : noAudioMessage,
             },
           };
@@ -2662,8 +3146,13 @@ export function MediaSessionProvider({
   }, []);
 
   const handoffMediaFileToTool = useCallback(
-    (toolId: string, filePath: string) => {
-      const next = { toolId, path: filePath, nonce: Date.now() + taskSeqRef.current++ };
+    (toolId: string, filePath: string, sourceToolId?: string) => {
+      const next = {
+        toolId,
+        path: filePath,
+        sourceToolId,
+        nonce: Date.now() + taskSeqRef.current++,
+      };
       pendingHandoffRef.current = next;
       setPendingHandoff(next);
       onNavigateToTool?.(toolId);
@@ -2671,14 +3160,59 @@ export function MediaSessionProvider({
     [onNavigateToTool],
   );
 
-  const consumePendingHandoff = useCallback((toolId: string): string | null => {
-    const cur = pendingHandoffRef.current;
-    if (cur && cur.toolId === toolId) {
-      pendingHandoffRef.current = null;
-      setPendingHandoff(null);
-      return cur.path;
-    }
-    return null;
+  const consumePendingHandoffEntry = useCallback(
+    (toolId: string): { path: string; sourceToolId?: string } | null => {
+      const cur = pendingHandoffRef.current;
+      if (cur && cur.toolId === toolId) {
+        pendingHandoffRef.current = null;
+        setPendingHandoff(null);
+        return { path: cur.path, sourceToolId: cur.sourceToolId };
+      }
+      return null;
+    },
+    [],
+  );
+
+  const consumePendingHandoff = useCallback(
+    (toolId: string): string | null => {
+      return consumePendingHandoffEntry(toolId)?.path ?? null;
+    },
+    [consumePendingHandoffEntry],
+  );
+
+  const handoffSubtitlePairToV02 = useCallback(
+    (videoPath: string, subtitlePath: string) => {
+      if (activeVideoSubtitlesTaskRef.current) {
+        pendingV02PairHandoffRef.current = null;
+        setPendingV02PairHandoff(null);
+        setMediaSession((prev) => ({
+          ...prev,
+          videoSubtitles: {
+            ...prev.videoSubtitles,
+            pendingPairHandoff: { videoPath, subtitlePath },
+          },
+        }));
+        onNavigateToTool?.("V02");
+        return;
+      }
+      const next: PendingV02PairHandoff = {
+        videoPath,
+        subtitlePath,
+        nonce: Date.now() + taskSeqRef.current++,
+      };
+      pendingV02PairHandoffRef.current = next;
+      setPendingV02PairHandoff(next);
+      onNavigateToTool?.("V02");
+    },
+    [onNavigateToTool],
+  );
+
+  const consumePendingV02PairHandoff = useCallback((): VideoSubtitlesPairHandoff | null => {
+    const cur = pendingV02PairHandoffRef.current;
+    if (!cur) return null;
+    pendingV02PairHandoffRef.current = null;
+    setPendingV02PairHandoff(null);
+    return { videoPath: cur.videoPath, subtitlePath: cur.subtitlePath };
   }, []);
 
   return (
@@ -2732,6 +3266,10 @@ export function MediaSessionProvider({
         startVideoReplaceAudioTask,
         cancelVideoReplaceAudioTask,
         updateVideoSubtitlesSession,
+        renderVideoSubtitlesPreview,
+        loadVideoSubtitlesVideo,
+        loadVideoSubtitlesSubtitle,
+        loadVideoSubtitlesPair,
         startVideoSubtitlesTask,
         cancelVideoSubtitlesTask,
         updateVideoWatermarkSession,
@@ -2745,6 +3283,10 @@ export function MediaSessionProvider({
         handoffMediaFileToTool,
         pendingHandoff,
         consumePendingHandoff,
+        consumePendingHandoffEntry,
+        handoffSubtitlePairToV02,
+        pendingV02PairHandoff,
+        consumePendingV02PairHandoff,
       }}
     >
       {children}

@@ -4,7 +4,9 @@
 //! and full video subtitle burn-in baking upright orientation and preserving audio.
 
 use crate::error::AppError;
-use crate::fs_guard::validate_existing_input_file;
+use crate::fs_guard::{
+    paths_refer_to_same_location, validate_existing_input_file, validate_user_path,
+};
 use crate::media_core::{
     configure_hidden_command, require_media_tools, run_ffmpeg_cancellable_in_dir,
     AtomicMediaOutput, MediaTaskProgressPayload,
@@ -15,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -675,8 +677,15 @@ pub fn burn_in_subtitles_impl(
         .map_err(|e| AppError::from_io(e, "Failed writing temporary ASS subtitle file"))?;
     let _ass_guard = ScopedTempFile(ass_path);
 
-    let allow_overwrite = req.allow_overwrite.unwrap_or(true);
-    let final_path = PathBuf::from(req.output_path.trim());
+    let allow_overwrite = req.allow_overwrite.unwrap_or(false);
+    let final_path = validate_user_path(&req.output_path, "Subtitle burn-in output path")?;
+    let subtitle_path = PathBuf::from(&parsed.path);
+    if paths_refer_to_same_location(&subtitle_path, &final_path) {
+        return Err(AppError::new(
+            "SAME_INPUT_AND_OUTPUT",
+            "Output path cannot overwrite the source subtitle file. Choose a different output path.",
+        ));
+    }
     let ext = final_path
         .extension()
         .and_then(|e| e.to_str())
@@ -856,6 +865,9 @@ pub fn burn_in_subtitles_impl(
         },
     )?;
 
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(AppError::cancelled());
+    }
     let (committed_path, byte_size) = atomic.commit(allow_overwrite)?;
     let final_str = committed_path.to_string_lossy().to_string();
     let verified = probe_media_info_impl(media_root, &final_str).ok();
@@ -1086,6 +1098,144 @@ mod tests {
             during_c2 > 200,
             "Expected visible white subtitle glyph pixels for cue 2 at 3.40s, got {during_c2}"
         );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn protects_source_video_source_subtitle_and_existing_output_until_overwrite_confirmed() {
+        let tmp = std::env::temp_dir().join(format!("winkit_v02_guard_{}", Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let Ok(tools) = require_media_tools(&tmp) else {
+            let _ = fs::remove_dir_all(&tmp);
+            return;
+        };
+
+        let src_vid = tmp.join("source.mp4");
+        let mut cmd = Command::new(&tools.ffmpeg);
+        configure_hidden_command(&mut cmd);
+        let status = cmd
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=0x111111:s=320x180:r=15:d=2.0",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=2.0",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+                src_vid.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let srt_path = tmp.join("subs.srt");
+        let srt_bytes = b"1\r\n00:00:00,200 --> 00:00:01,600\r\nGuard test subtitle\r\n\r\n";
+        fs::write(&srt_path, srt_bytes).unwrap();
+        let orig_vid_bytes = fs::read(&src_vid).unwrap();
+
+        let existing_out = tmp.join("existing_target.mp4");
+        let sentinel = b"EXISTING_VIDEO_SENTINEL_DO_NOT_OVERWRITE";
+        fs::write(&existing_out, sentinel).unwrap();
+
+        let style = SubtitleBurnStyle {
+            font_size: 36,
+            position: SubtitlePosition::Bottom,
+            box_style: SubtitleBoxStyle::OutlineShadow,
+            font_name: None,
+            margin_v: Some(24),
+        };
+        let cancel = AtomicBool::new(false);
+
+        // 1. Overwriting source video must be rejected even with allow_overwrite = Some(true)
+        let err_vid = burn_in_subtitles_impl(
+            &tmp,
+            &BurnInSubtitlesRequest {
+                task_id: "guard-vid".into(),
+                video_path: src_vid.to_string_lossy().into_owned(),
+                subtitle_path: srt_path.to_string_lossy().into_owned(),
+                output_path: src_vid.to_string_lossy().into_owned(),
+                style: style.clone(),
+                allow_overwrite: Some(true),
+            },
+            &cancel,
+            |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(err_vid.code, "SAME_INPUT_AND_OUTPUT");
+        assert_eq!(fs::read(&src_vid).unwrap(), orig_vid_bytes);
+
+        // 2. Overwriting source subtitle must be rejected even with allow_overwrite = Some(true)
+        let err_sub = burn_in_subtitles_impl(
+            &tmp,
+            &BurnInSubtitlesRequest {
+                task_id: "guard-sub".into(),
+                video_path: src_vid.to_string_lossy().into_owned(),
+                subtitle_path: srt_path.to_string_lossy().into_owned(),
+                output_path: srt_path.to_string_lossy().into_owned(),
+                style: style.clone(),
+                allow_overwrite: Some(true),
+            },
+            &cancel,
+            |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(err_sub.code, "SAME_INPUT_AND_OUTPUT");
+        assert_eq!(fs::read(&srt_path).unwrap(), srt_bytes);
+
+        // 3. Existing target rejected by default (allow_overwrite = None and Some(false))
+        for flag in [None, Some(false)] {
+            let err_exists = burn_in_subtitles_impl(
+                &tmp,
+                &BurnInSubtitlesRequest {
+                    task_id: "guard-exists".into(),
+                    video_path: src_vid.to_string_lossy().into_owned(),
+                    subtitle_path: srt_path.to_string_lossy().into_owned(),
+                    output_path: existing_out.to_string_lossy().into_owned(),
+                    style: style.clone(),
+                    allow_overwrite: flag,
+                },
+                &cancel,
+                |_| {},
+            )
+            .unwrap_err();
+            assert_eq!(err_exists.code, "TARGET_ALREADY_EXISTS");
+            assert_eq!(fs::read(&existing_out).unwrap(), sentinel);
+        }
+
+        // 4. Explicit allow_overwrite = Some(true) succeeds and replaces sentinel cleanly
+        let ok_res = burn_in_subtitles_impl(
+            &tmp,
+            &BurnInSubtitlesRequest {
+                task_id: "guard-confirm".into(),
+                video_path: src_vid.to_string_lossy().into_owned(),
+                subtitle_path: srt_path.to_string_lossy().into_owned(),
+                output_path: existing_out.to_string_lossy().into_owned(),
+                style,
+                allow_overwrite: Some(true),
+            },
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        assert!(ok_res.byte_size > sentinel.len() as u64);
+        assert_eq!(fs::read(&src_vid).unwrap(), orig_vid_bytes);
+        assert_eq!(fs::read(&srt_path).unwrap(), srt_bytes);
 
         let _ = fs::remove_dir_all(&tmp);
     }
