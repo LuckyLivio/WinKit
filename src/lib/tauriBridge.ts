@@ -3289,11 +3289,14 @@ export async function renderPdfPage(request: PdfRenderRequest): Promise<Rendered
   return invoke<RenderedPdfPagePayload>("render_pdf_page", { request });
 }
 
-export interface PdfExtractedPageText {
+export type PdfExtractedPageStatus = "included" | "truncated" | "scanned" | "omitted";
+
+export interface PdfExtractedPageMeta {
   pageNumber: number;
-  text: string;
   charCount: number;
+  byteCount: number;
   hasText: boolean;
+  status: PdfExtractedPageStatus;
 }
 
 export interface PdfExtractPagesTextResult {
@@ -3301,11 +3304,14 @@ export interface PdfExtractPagesTextResult {
   fileName: string;
   totalPages: number;
   requestedPages: number[];
-  pages: PdfExtractedPageText[];
+  includedPages: number[];
+  scannedPages: number[];
+  omittedPages: number[];
+  pages: PdfExtractedPageMeta[];
   combinedText: string;
   extractedPageCount: number;
-  scannedPages: number[];
   totalChars: number;
+  totalBytes: number;
   truncated: boolean;
 }
 

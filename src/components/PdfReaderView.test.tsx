@@ -299,15 +299,18 @@ describe("C08 PdfReaderView", () => {
       fileName: "bilingual.pdf",
       totalPages: 3,
       requestedPages: [1, 2, 3],
+      includedPages: [1, 3],
+      scannedPages: [2],
+      omittedPages: [],
       pages: [
-        { pageNumber: 1, text: "第一页中文朗读内容。", charCount: 10, hasText: true },
-        { pageNumber: 2, text: "", charCount: 0, hasText: false },
-        { pageNumber: 3, text: "Page three English speech.", charCount: 26, hasText: true },
+        { pageNumber: 1, charCount: 10, byteCount: 30, hasText: true, status: "included" },
+        { pageNumber: 2, charCount: 0, byteCount: 0, hasText: false, status: "scanned" },
+        { pageNumber: 3, charCount: 26, byteCount: 26, hasText: true, status: "included" },
       ],
       combinedText: "第一页中文朗读内容。\n\nPage three English speech.",
       extractedPageCount: 2,
-      scannedPages: [2],
       totalChars: 38,
+      totalBytes: 58,
       truncated: false,
     });
     vi.mocked(bridge.synthesizeTtsSpeech).mockResolvedValue({
@@ -446,11 +449,14 @@ describe("C08 PdfReaderView", () => {
       fileName: "pure_scan.pdf",
       totalPages: 1,
       requestedPages: [1],
-      pages: [{ pageNumber: 1, text: "", charCount: 0, hasText: false }],
+      includedPages: [],
+      scannedPages: [1],
+      omittedPages: [],
+      pages: [{ pageNumber: 1, charCount: 0, byteCount: 0, hasText: false, status: "scanned" }],
       combinedText: "",
       extractedPageCount: 0,
-      scannedPages: [1],
       totalChars: 0,
+      totalBytes: 0,
       truncated: false,
     });
 
@@ -478,5 +484,383 @@ describe("C08 PdfReaderView", () => {
 
     await user.click(screen.getByTestId("c08-tts-goto-p04-btn"));
     expect(navSpy).toHaveBeenCalledWith("P04");
+  });
+
+  it("disables read-aloud while switching to document B and ignores late extraction after leaving C08", async () => {
+    const user = userEvent.setup();
+    const docA: bridge.PdfDocumentInspection = {
+      path: "C:\\Samples\\docA.pdf",
+      fileName: "docA.pdf",
+      byteLength: 12000,
+      pageCount: 1,
+      pages: [{ pageNumber: 1, widthPt: 595, heightPt: 842, rotation: 0, isOversized: false }],
+      hasTextLayer: true,
+      sampledTextPages: 1,
+      isLikelyScanned: false,
+      hasOutlines: false,
+      outlines: [],
+      hasAcroform: false,
+      hasSignatures: false,
+      signatureCount: 0,
+      isEncrypted: false,
+      title: null,
+      author: null,
+      subject: null,
+      creator: null,
+      producer: null,
+      warnings: [],
+    };
+    const docB: bridge.PdfDocumentInspection = {
+      ...docA,
+      path: "C:\\Samples\\docB.pdf",
+      fileName: "docB.pdf",
+    };
+
+    let resolveInspectB!: (info: bridge.PdfDocumentInspection) => void;
+    vi.mocked(bridge.pickSingleFile)
+      .mockResolvedValueOnce(docA.path)
+      .mockResolvedValueOnce(docB.path);
+    vi.mocked(bridge.inspectPdfDocument)
+      .mockResolvedValueOnce(docA)
+      .mockImplementationOnce(
+        () =>
+          new Promise<bridge.PdfDocumentInspection>((resolve) => {
+            resolveInspectB = resolve;
+          }),
+      );
+    vi.mocked(bridge.renderPdfPage).mockResolvedValue({
+      meta: {
+        pageNumber: 1,
+        widthPx: 640,
+        heightPx: 906,
+        pageWidthPt: 595,
+        pageHeightPt: 842,
+        rotation: 0,
+        capped: false,
+      },
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      fromCache: false,
+    });
+    vi.mocked(bridge.getPdfPageText).mockResolvedValue({
+      pageNumber: 1,
+      fullText: "Doc text",
+      charCount: 8,
+      spans: [],
+      links: [],
+    });
+
+    let resolveLateExtract!: (res: bridge.PdfExtractPagesTextResult) => void;
+    vi.mocked(bridge.extractPdfPagesText).mockImplementationOnce(
+      () =>
+        new Promise<bridge.PdfExtractPagesTextResult>((resolve) => {
+          resolveLateExtract = resolve;
+        }),
+    );
+
+    const navSpy = vi.fn();
+    function SwitchHarness() {
+      const [view, setView] = useState<"reader" | "other" | "T06">("reader");
+      const handleNav = (toolId: string) => {
+        navSpy(toolId);
+        if (toolId === "T06") setView("T06");
+      };
+      return (
+        <I18nContext.Provider
+          value={{ locale: "zh-CN", t: MESSAGES["zh-CN"], setLocale: () => {} }}
+        >
+          <SessionStoreProvider onNavigateToTool={handleNav}>
+            <PdfSessionProvider
+              onNavigateToReader={() => setView("reader")}
+              onNavigateToTool={handleNav}
+            >
+              <button type="button" onClick={() => setView("other")} data-testid="leave-c08-btn">
+                Leave
+              </button>
+              <button type="button" onClick={() => setView("T06")} data-testid="open-t06-btn">
+                Open T06
+              </button>
+              {view === "reader" ? (
+                <PdfReaderView />
+              ) : view === "T06" ? (
+                <TextToSpeechWorkspace />
+              ) : (
+                <div data-testid="other-view">Other Page</div>
+              )}
+            </PdfSessionProvider>
+          </SessionStoreProvider>
+        </I18nContext.Provider>
+      );
+    }
+
+    render(<SwitchHarness />);
+    // 1. Open A and confirm read-aloud is enabled
+    await user.click(screen.getAllByRole("button", { name: /打开 PDF/ })[0]!);
+    await waitFor(() => {
+      expect(screen.getByTestId("c08-read-current-page-btn")).toBeEnabled();
+    });
+
+    // 2. Start opening B (inspect pending) -> read-aloud buttons MUST be disabled so A cannot be sent
+    await user.click(screen.getAllByRole("button", { name: /打开 PDF/ })[0]!);
+    await waitFor(() => {
+      expect(screen.getByTestId("c08-read-current-page-btn")).toBeDisabled();
+      expect(screen.getByTestId("c08-read-selected-pages-btn")).toBeDisabled();
+    });
+    expect(bridge.extractPdfPagesText).not.toHaveBeenCalled();
+
+    // Finish loading B -> read-aloud re-enabled and bound strictly to docB
+    resolveInspectB(docB);
+    await waitFor(() => {
+      expect(screen.getByTestId("c08-read-current-page-btn")).toBeEnabled();
+    });
+
+    // 3. Start extraction on B, leave C08 before extraction finishes -> late response MUST NOT hijack navigation
+    await user.click(screen.getByTestId("c08-read-current-page-btn"));
+    expect(bridge.extractPdfPagesText).toHaveBeenCalledWith(docB.path, [1]);
+    await user.click(screen.getByTestId("leave-c08-btn"));
+    expect(screen.getByTestId("other-view")).toBeInTheDocument();
+
+    resolveLateExtract({
+      path: docB.path,
+      fileName: docB.fileName,
+      totalPages: 1,
+      requestedPages: [1],
+      includedPages: [1],
+      scannedPages: [],
+      omittedPages: [],
+      pages: [{ pageNumber: 1, charCount: 12, byteCount: 12, hasText: true, status: "included" }],
+      combinedText: "Late docB text",
+      extractedPageCount: 1,
+      totalChars: 14,
+      totalBytes: 14,
+      truncated: false,
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(navSpy).not.toHaveBeenCalledWith("T06");
+    expect(screen.getByTestId("other-view")).toBeInTheDocument();
+
+    // Opening T06 manually confirms late extraction never wrote into T06
+    await user.click(screen.getByTestId("open-t06-btn"));
+    expect(screen.getByTestId("t06-text-input")).toHaveValue("");
+  });
+
+  it("stashes PDF handoff while T06 is synthesizing, confirms before replacing draft/audition, and preserves original on cancel or error", async () => {
+    const user = userEvent.setup();
+    const docB: bridge.PdfDocumentInspection = {
+      path: "C:\\Samples\\incoming_b.pdf",
+      fileName: "incoming_b.pdf",
+      byteLength: 32000,
+      pageCount: 5,
+      pages: [1, 2, 3, 4, 5].map((n) => ({
+        pageNumber: n,
+        widthPt: 595,
+        heightPt: 842,
+        rotation: 0,
+        isOversized: false,
+      })),
+      hasTextLayer: true,
+      sampledTextPages: 5,
+      isLikelyScanned: false,
+      hasOutlines: false,
+      outlines: [],
+      hasAcroform: false,
+      hasSignatures: false,
+      signatureCount: 0,
+      isEncrypted: false,
+      title: null,
+      author: null,
+      subject: null,
+      creator: null,
+      producer: null,
+      warnings: [],
+    };
+    vi.mocked(bridge.pickSingleFile).mockResolvedValue(docB.path);
+    vi.mocked(bridge.inspectPdfDocument).mockResolvedValue(docB);
+    vi.mocked(bridge.renderPdfPage).mockResolvedValue({
+      meta: {
+        pageNumber: 1,
+        widthPx: 640,
+        heightPx: 906,
+        pageWidthPt: 595,
+        pageHeightPt: 842,
+        rotation: 0,
+        capped: false,
+      },
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      fromCache: false,
+    });
+    vi.mocked(bridge.getPdfPageText).mockResolvedValue({
+      pageNumber: 1,
+      fullText: "Incoming B text",
+      charCount: 15,
+      spans: [],
+      links: [],
+    });
+
+    const truncatedExtractB: bridge.PdfExtractPagesTextResult = {
+      path: docB.path,
+      fileName: docB.fileName,
+      totalPages: 5,
+      requestedPages: [1, 2, 3, 4, 5],
+      includedPages: [1, 3, 4],
+      scannedPages: [2],
+      omittedPages: [5],
+      pages: [
+        { pageNumber: 1, charCount: 20, byteCount: 20, hasText: true, status: "included" },
+        { pageNumber: 2, charCount: 0, byteCount: 0, hasText: false, status: "scanned" },
+        { pageNumber: 3, charCount: 20, byteCount: 20, hasText: true, status: "included" },
+        { pageNumber: 4, charCount: 15, byteCount: 15, hasText: true, status: "truncated" },
+        { pageNumber: 5, charCount: 0, byteCount: 0, hasText: false, status: "omitted" },
+      ],
+      combinedText: "来自文档 B 的截断朗读正文。",
+      extractedPageCount: 3,
+      totalChars: 14,
+      totalBytes: 42,
+      truncated: true,
+    };
+
+    vi.mocked(bridge.extractPdfPagesText)
+      .mockResolvedValueOnce(truncatedExtractB)
+      .mockRejectedValueOnce({ code: "PDF_CORRUPT_OR_INVALID", message: "Corrupted PDF" })
+      .mockResolvedValueOnce(truncatedExtractB);
+
+    let resolveSynthA!: (res: bridge.SynthesizeTtsResult) => void;
+    vi.mocked(bridge.synthesizeTtsSpeech).mockImplementationOnce(
+      () =>
+        new Promise<bridge.SynthesizeTtsResult>((resolve) => {
+          resolveSynthA = resolve;
+        }),
+    );
+
+    function HandoffHarness() {
+      const [view, setView] = useState<"T06" | "reader" | "other">("T06");
+      return (
+        <I18nContext.Provider
+          value={{ locale: "zh-CN", t: MESSAGES["zh-CN"], setLocale: () => {} }}
+        >
+          <SessionStoreProvider onNavigateToTool={(id) => id === "T06" && setView("T06")}>
+            <PdfSessionProvider
+              onNavigateToReader={() => setView("reader")}
+              onNavigateToTool={(id) => id === "T06" && setView("T06")}
+            >
+              <button type="button" onClick={() => setView("other")} data-testid="goto-other-btn">
+                Other
+              </button>
+              <button type="button" onClick={() => setView("T06")} data-testid="goto-t06-btn">
+                T06
+              </button>
+              <button type="button" onClick={() => setView("reader")} data-testid="goto-c08-btn">
+                C08
+              </button>
+              {view === "reader" ? (
+                <PdfReaderView />
+              ) : view === "T06" ? (
+                <TextToSpeechWorkspace />
+              ) : (
+                <div data-testid="other-tool">Other Tool</div>
+              )}
+            </PdfSessionProvider>
+          </SessionStoreProvider>
+        </I18nContext.Provider>
+      );
+    }
+
+    render(<HandoffHarness />);
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-voice-select")).toHaveValue("winrt::huihui");
+    });
+
+    // 1. Start synthesizing draft A in T06
+    await user.type(screen.getByTestId("t06-text-input"), "原始草稿 A 正文。");
+    await user.click(screen.getByTestId("t06-start-btn"));
+    await waitFor(() => expect(screen.getByTestId("t06-cancel-btn")).toBeInTheDocument());
+
+    // 2. Open C08 while A is running, open docB, and send it to T06 -> MUST stash, NOT cancel A
+    await user.click(screen.getByTestId("t06-open-pdf-reader-btn"));
+    await user.click(screen.getAllByRole("button", { name: /打开 PDF/ })[0]!);
+    await waitFor(() => expect(screen.getByTestId("c08-read-current-page-btn")).toBeEnabled());
+    await user.click(screen.getByTestId("c08-read-current-page-btn"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-pending-handoff-banner")).toBeInTheDocument();
+    });
+    expect(bridge.cancelBackendTask).not.toHaveBeenCalled();
+    expect(screen.getByTestId("t06-text-input")).toHaveValue("原始草稿 A 正文。");
+    expect(screen.queryByTestId("t06-load-pending-btn")).not.toBeInTheDocument();
+
+    // 3. Switch away and return -> pending handoff banner persists
+    await user.click(screen.getByTestId("goto-other-btn"));
+    expect(screen.getByTestId("other-tool")).toBeInTheDocument();
+    await user.click(screen.getByTestId("goto-t06-btn"));
+    expect(screen.getByTestId("t06-pending-handoff-banner")).toBeInTheDocument();
+
+    // 4. Finish synthesis A -> audio player appears AND Load Pending PDF button becomes available
+    resolveSynthA({
+      resultId: "tts-draft-a",
+      voiceId: "winrt::huihui",
+      voiceName: "Microsoft Huihui",
+      voiceLanguage: "zh-CN",
+      engine: "winrt_one_core",
+      rate: 1,
+      segmentCount: 1,
+      paragraphCount: 1,
+      charCount: 9,
+      sampleRate: 16000,
+      channels: 1,
+      bitsPerSample: 16,
+      durationSec: 2.5,
+      wavByteLength: 80044,
+      previewUrl: "http://winkitmedia.localhost/preview/tts-draft-a",
+      elapsedMs: 50,
+      sourcePath: null,
+      supportedMp3BitratesKbps: [64, 96, 128, 160],
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument();
+      expect(screen.getByTestId("t06-load-pending-btn")).toBeInTheDocument();
+    });
+
+    // Clicking Load Pending opens ConfirmDialog; cancelling preserves A's draft & audio
+    await user.click(screen.getByTestId("t06-load-pending-btn"));
+    expect(screen.getByText("替换当前朗读稿与试听结果？")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保留原稿与试听" }));
+    expect(screen.getByTestId("t06-text-input")).toHaveValue("原始草稿 A 正文。");
+    expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument();
+
+    // Dismissing queued banner also preserves A's draft & audio
+    await user.click(screen.getByTestId("t06-dismiss-pending-btn"));
+    expect(screen.queryByTestId("t06-pending-handoff-banner")).not.toBeInTheDocument();
+    expect(screen.getByTestId("t06-text-input")).toHaveValue("原始草稿 A 正文。");
+    expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument();
+
+    // 5. Failed extraction request in C08 preserves T06 draft & audition
+    await user.click(screen.getByTestId("goto-c08-btn"));
+    await waitFor(() => expect(screen.getByTestId("c08-read-current-page-btn")).toBeEnabled());
+    await user.click(screen.getByTestId("c08-read-current-page-btn"));
+    await waitFor(() => expect(screen.getByTestId("c08-tts-error-banner")).toBeInTheDocument());
+    await user.click(screen.getByTestId("goto-t06-btn"));
+    expect(screen.getByTestId("t06-text-input")).toHaveValue("原始草稿 A 正文。");
+    expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument();
+
+    // 6. Idle T06 with draft & audio receiving PDF handoff -> immediate ConfirmDialog -> confirm loads B
+    await user.click(screen.getByTestId("goto-c08-btn"));
+    await user.click(screen.getByTestId("c08-read-current-page-btn"));
+    await waitFor(() => {
+      expect(screen.getByText("替换当前朗读稿与试听结果？")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("t06-text-input")).toHaveValue("原始草稿 A 正文。");
+    expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument();
+    expect(bridge.clearTtsSession).not.toHaveBeenCalled();
+
+    // Confirm -> replaces draft, clears audio, and renders exact included/scanned/omitted page badges
+    await user.click(screen.getByRole("button", { name: "确认载入" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-text-input")).toHaveValue("来自文档 B 的截断朗读正文。");
+    });
+    expect(bridge.clearTtsSession).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("t06-audio-player")).not.toBeInTheDocument();
+    expect(screen.getByTestId("t06-source-pages-badge")).toHaveTextContent("PDF 第 1, 3-4 页");
+    expect(screen.getByTestId("t06-pdf-scanned-pages-notice")).toHaveTextContent("第 2 页");
+    expect(screen.getByTestId("t06-pdf-truncated-notice")).toHaveTextContent("第 5 页");
   });
 });

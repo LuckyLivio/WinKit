@@ -125,6 +125,8 @@ export function TextToSpeechWorkspace() {
     updateTextToSpeechSession,
     refreshTtsVoices,
     loadTextToSpeechFile,
+    applyPendingPdfHandoff,
+    dismissPendingPdfHandoff,
     startTextToSpeech,
     cancelTextToSpeech,
     clearTextToSpeechSession,
@@ -137,6 +139,7 @@ export function TextToSpeechWorkspace() {
   const [localError, setLocalError] = useState<string | null>(null);
   const [mediaToolsStatus, setMediaToolsStatus] = useState<MediaToolsStatus | null>(null);
   const [pendingOverwrite, setPendingOverwrite] = useState<PendingOverwriteExport | null>(null);
+  const [confirmPendingQueue, setConfirmPendingQueue] = useState(false);
 
   const mountedRef = useRef(true);
   const exportSeqRef = useRef(0);
@@ -200,6 +203,12 @@ export function TextToSpeechWorkspace() {
     setPendingOverwrite(null);
     setExporting(false);
   }, [exportBindingKey]);
+
+  useEffect(() => {
+    if (state.status === "running" || !state.pendingPdfHandoff) {
+      setConfirmPendingQueue(false);
+    }
+  }, [state.status, state.pendingPdfHandoff, state.sourceGeneration]);
 
   const handleRefreshVoices = useCallback(async () => {
     setLocalError(null);
@@ -276,6 +285,7 @@ export function TextToSpeechWorkspace() {
         sourceFileName: null,
         sourcePageSummary: null,
         sourceSkippedScannedPages: [],
+        sourceOmittedPages: [],
         sourceTruncated: false,
         errorMessage: null,
       }));
@@ -477,7 +487,42 @@ export function TextToSpeechWorkspace() {
   ]);
 
   const isRunning = state.status === "running";
+  const hasDraftOrAudition = Boolean(state.text.trim().length > 0 || state.result !== null);
   const hasAnyContent = Boolean(state.text.length > 0 || state.sourceFilePath || state.result);
+  const pendingPdf = state.pendingPdfHandoff;
+  const pendingPdfPagesLabel = useMemo(() => {
+    if (!pendingPdf || pendingPdf.includedPages.length === 0) return null;
+    return formatCompactPages(pendingPdf.includedPages);
+  }, [pendingPdf]);
+  const showPendingPdfBanner = Boolean(pendingPdf && !state.pendingPdfHandoffNeedsConfirm);
+  const replacePdfConfirmOpen = Boolean(
+    !isRunning && pendingPdf && (state.pendingPdfHandoffNeedsConfirm || confirmPendingQueue),
+  );
+
+  const handleRequestLoadPendingPdf = () => {
+    if (!pendingPdf || isRunning) return;
+    if (hasDraftOrAudition) {
+      setConfirmPendingQueue(true);
+      return;
+    }
+    setLocalError(null);
+    setPendingOverwrite(null);
+    applyPendingPdfHandoff();
+  };
+
+  const handleConfirmReplacePdf = () => {
+    setConfirmPendingQueue(false);
+    setLocalError(null);
+    setPendingOverwrite(null);
+    applyPendingPdfHandoff();
+  };
+
+  const handleCancelReplacePdf = () => {
+    setConfirmPendingQueue(false);
+    if (state.pendingPdfHandoffNeedsConfirm) {
+      dismissPendingPdfHandoff();
+    }
+  };
   const canStart = Boolean(
     state.text.trim().length > 0 &&
     state.selectedVoiceId &&
@@ -548,6 +593,56 @@ export function TextToSpeechWorkspace() {
           )}
         </div>
       </div>
+
+      {showPendingPdfBanner && pendingPdf && (
+        <div className="tts-guidance-banner" role="status" data-testid="t06-pending-handoff-banner">
+          <div className="tts-guidance-head">
+            <BookOpen size={15} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontWeight: 500, color: "var(--text-primary)" }}>
+                {isRunning
+                  ? isZh
+                    ? "已暂存来自「PDF 快速预览 (C08)」的朗读文本，待当前合成完成或取消后可选择载入："
+                    : "PDF text queued from Quick PDF Preview (C08). You can load it once the current synthesis finishes or is cancelled:"
+                  : isZh
+                    ? "有待处理的 PDF 朗读交接（已保留当前文本与试听结果）："
+                    : "Pending PDF read-aloud handoff ready (current draft and audio preserved):"}
+              </span>
+              <span className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
+                {pendingPdf.fileName}
+                {pendingPdfPagesLabel
+                  ? isZh
+                    ? ` · 第 ${pendingPdfPagesLabel} 页`
+                    : ` · p. ${pendingPdfPagesLabel}`
+                  : ""}
+              </span>
+            </div>
+          </div>
+          <div className="tts-guidance-actions">
+            {!isRunning && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleRequestLoadPendingPdf}
+                data-testid="t06-load-pending-btn"
+              >
+                <span>{isZh ? "载入待处理 PDF" : "Load Pending PDF"}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setConfirmPendingQueue(false);
+                dismissPendingPdfHandoff();
+              }}
+              data-testid="t06-dismiss-pending-btn"
+            >
+              <span>{isZh ? "放弃" : "Dismiss"}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="tts-layout">
         {/* Left: Text Editor + File Drop + Missing Voice Guidance */}
@@ -638,26 +733,31 @@ export function TextToSpeechWorkspace() {
             </div>
           )}
 
-          {state.sourceKind === "pdf" && state.sourceTruncated && (
-            <div
-              className="tts-guidance-banner is-warn"
-              role="status"
-              data-testid="t06-pdf-truncated-notice"
-            >
-              <div className="tts-guidance-head">
-                <AlertTriangle
-                  size={15}
-                  aria-hidden="true"
-                  style={{ flexShrink: 0, marginTop: 2 }}
-                />
-                <span>
-                  {isZh
-                    ? "所选 PDF 页面文字超过单次离线合成上限（1 MiB / 200,000 字符），已按安全边界截断。建议分批按页范围提取朗读。"
-                    : "Extracted PDF text exceeded the single-run offline ceiling (1 MiB / 200,000 chars) and was safely truncated. Consider reading smaller page ranges in batches."}
-                </span>
+          {state.sourceKind === "pdf" &&
+            (state.sourceTruncated || state.sourceOmittedPages.length > 0) && (
+              <div
+                className="tts-guidance-banner is-warn"
+                role="status"
+                data-testid="t06-pdf-truncated-notice"
+              >
+                <div className="tts-guidance-head">
+                  <AlertTriangle
+                    size={15}
+                    aria-hidden="true"
+                    style={{ flexShrink: 0, marginTop: 2 }}
+                  />
+                  <span>
+                    {state.sourceOmittedPages.length > 0
+                      ? isZh
+                        ? `所选 PDF 页面文字超过单次离线合成上限（1 MiB / 200,000 字符），已按安全边界截断；第 ${formatCompactPages(state.sourceOmittedPages)} 页因超出上限已省略。建议分批按页范围提取朗读。`
+                        : `Extracted PDF text exceeded the single-run offline ceiling (1 MiB / 200,000 chars) and was safely truncated; page(s) ${formatCompactPages(state.sourceOmittedPages)} were omitted. Consider reading smaller page ranges in batches.`
+                      : isZh
+                        ? "所选 PDF 页面文字超过单次离线合成上限（1 MiB / 200,000 字符），当前页面已按安全边界截断。建议分批按页范围提取朗读。"
+                        : "Extracted PDF text exceeded the single-run offline ceiling (1 MiB / 200,000 chars) and was safely truncated. Consider reading smaller page ranges in batches."}
+                  </span>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
           {guidance && (
             <div
@@ -995,6 +1095,23 @@ export function TextToSpeechWorkspace() {
           </div>
         </aside>
       </div>
+
+      <ConfirmDialog
+        open={replacePdfConfirmOpen}
+        title={isZh ? "替换当前朗读稿与试听结果？" : "Replace Current Draft & Audio?"}
+        body={
+          pendingPdf
+            ? isZh
+              ? `当前工作区已有编辑文本或可试听音频。是否载入来自「PDF 快速预览 (C08)」的「${pendingPdf.fileName}${pendingPdfPagesLabel ? `（第 ${pendingPdfPagesLabel} 页）` : ""}」？确认后将替换当前文本并清空旧试听；取消则完整保留原稿与试听。`
+              : `This workspace already has draft text or synthesized audio. Load "${pendingPdf.fileName}${pendingPdfPagesLabel ? ` (p. ${pendingPdfPagesLabel})` : ""}" from Quick PDF Preview (C08)? Confirming replaces the current text and clears existing audio; cancelling preserves both.`
+            : ""
+        }
+        confirmLabel={isZh ? "确认载入" : "Load PDF Text"}
+        cancelLabel={isZh ? "保留原稿与试听" : "Keep Current"}
+        danger
+        onConfirm={handleConfirmReplacePdf}
+        onCancel={handleCancelReplacePdf}
+      />
 
       <ConfirmDialog
         open={pendingOverwrite != null}

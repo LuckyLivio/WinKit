@@ -124,7 +124,7 @@ export function PdfReaderView() {
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set([1]));
   const [visibleThumbs, setVisibleThumbs] = useState<Set<number>>(() => new Set([1, 2, 3, 4]));
   const [ttsPanelOpen, setTtsPanelOpen] = useState(false);
-  const [ttsRangeInput, setTtsRangeInput] = useState("1");
+  const [ttsRangeInput, setTtsRangeInput] = useState("");
   const [ttsBusy, setTtsBusy] = useState(false);
   const [ttsScannedNotice, setTtsScannedNotice] = useState<{
     path: string;
@@ -141,17 +141,39 @@ export function PdfReaderView() {
   const inFlightThumbsRef = useRef<Set<string>>(new Set());
   const inFlightTextRef = useRef<Set<string>>(new Set());
   const docGenerationRef = useRef(0);
+  const ttsExtractGenRef = useRef(0);
+  const mountedRef = useRef(true);
+  const activeDocPathRef = useRef<string | null>(state.activePath);
+  const docLoadingRef = useRef<boolean>(state.loading);
+  activeDocPathRef.current = state.activePath;
+  docLoadingRef.current = state.loading;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      ttsExtractGenRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    ttsExtractGenRef.current += 1;
+    setTtsBusy(false);
+  }, [state.activePath]);
 
   const openDocument = useCallback(
     async (path: string) => {
       const gen = ++docGenerationRef.current;
+      ttsExtractGenRef.current += 1;
+      activeDocPathRef.current = path;
+      docLoadingRef.current = true;
       setRenderedPages(new Map());
       setRenderedThumbs(new Map());
       setPageTexts(new Map());
       setVisiblePages(new Set([1]));
       setVisibleThumbs(new Set([1, 2, 3, 4]));
       setTtsPanelOpen(false);
-      setTtsRangeInput("1");
+      setTtsRangeInput("");
       setTtsBusy(false);
       setTtsScannedNotice(null);
       setTtsError(null);
@@ -174,6 +196,8 @@ export function PdfReaderView() {
       try {
         const info = await inspectPdfDocument(path);
         if (docGenerationRef.current !== gen) return;
+        activeDocPathRef.current = info.path;
+        docLoadingRef.current = false;
         updateReaderSession((prev) => ({
           ...prev,
           activePath: info.path,
@@ -185,6 +209,7 @@ export function PdfReaderView() {
         }));
       } catch (err) {
         if (docGenerationRef.current !== gen) return;
+        docLoadingRef.current = false;
         const parsed = parseBackendError(err);
         updateReaderSession((prev) => ({
           ...prev,
@@ -588,6 +613,7 @@ export function PdfReaderView() {
   };
 
   const info = state.inspection;
+  const isDocReady = Boolean(info && !state.loading && state.activePath === info.path);
 
   const parsedTtsSelection = useMemo(() => {
     if (!info) {
@@ -617,7 +643,7 @@ export function PdfReaderView() {
   );
 
   const handleOpenSelectedPagesTts = useCallback(() => {
-    if (!info) return;
+    if (!info || !isDocReady) return;
     setTtsScannedNotice(null);
     setTtsError(null);
     setTtsPanelOpen((prev) => {
@@ -631,45 +657,68 @@ export function PdfReaderView() {
       }
       return nextOpen;
     });
-  }, [info, state.sidebarOpen, updateReaderSession]);
+  }, [info, isDocReady, state.sidebarOpen, updateReaderSession]);
 
   const handleReadPagesAloud = useCallback(
     async (pages: number[]) => {
-      if (!info || !sessionStore || ttsBusy || pages.length === 0) return;
-      const gen = docGenerationRef.current;
+      if (!info || !isDocReady || !sessionStore || ttsBusy || pages.length === 0) return;
+      const boundPath = info.path;
+      const boundDocGen = docGenerationRef.current;
+      const boundExtractGen = ++ttsExtractGenRef.current;
+      const isExtractionStillValid = () =>
+        mountedRef.current &&
+        docGenerationRef.current === boundDocGen &&
+        ttsExtractGenRef.current === boundExtractGen &&
+        !docLoadingRef.current &&
+        activeDocPathRef.current === boundPath;
+
       setTtsBusy(true);
       setTtsError(null);
       setTtsScannedNotice(null);
       try {
-        const extracted = await extractPdfPagesText(info.path, pages);
-        if (docGenerationRef.current !== gen) return;
-        if (extracted.extractedPageCount === 0 || !extracted.combinedText.trim()) {
+        const extracted = await extractPdfPagesText(boundPath, pages);
+        if (!isExtractionStillValid()) return;
+        const includedPages =
+          extracted.includedPages && extracted.includedPages.length > 0
+            ? extracted.includedPages
+            : extracted.pages
+                .filter((p) => p.status === "included" || p.status === "truncated")
+                .map((p) => p.pageNumber);
+        if (
+          extracted.extractedPageCount === 0 ||
+          includedPages.length === 0 ||
+          !extracted.combinedText.trim()
+        ) {
           setTtsScannedNotice({
-            path: info.path,
+            path: boundPath,
             pages: extracted.scannedPages.length > 0 ? extracted.scannedPages : pages,
           });
           return;
         }
-        const pagesWithText = extracted.pages.filter((p) => p.hasText).map((p) => p.pageNumber);
         setTtsPanelOpen(false);
         sessionStore.handoffPdfTextToTts({
           path: extracted.path,
           fileName: extracted.fileName,
           text: extracted.combinedText,
-          pages: pagesWithText.length > 0 ? pagesWithText : extracted.requestedPages,
+          includedPages,
           skippedScannedPages: extracted.scannedPages,
+          omittedPages: extracted.omittedPages ?? [],
           truncated: extracted.truncated,
         });
       } catch (err) {
-        if (docGenerationRef.current !== gen) return;
+        if (!isExtractionStillValid()) return;
         setTtsError(formatLocalizedError(err, t));
       } finally {
-        if (docGenerationRef.current === gen) {
+        if (
+          mountedRef.current &&
+          docGenerationRef.current === boundDocGen &&
+          ttsExtractGenRef.current === boundExtractGen
+        ) {
           setTtsBusy(false);
         }
       }
     },
-    [info, sessionStore, ttsBusy, t],
+    [info, isDocReady, sessionStore, ttsBusy, t],
   );
 
   return (
@@ -842,7 +891,7 @@ export function PdfReaderView() {
                 <button
                   type="button"
                   className="btn"
-                  disabled={ttsBusy}
+                  disabled={ttsBusy || !isDocReady}
                   onClick={() => void handleReadPagesAloud([state.currentPage])}
                   title={
                     isZh
@@ -857,7 +906,7 @@ export function PdfReaderView() {
                 <button
                   type="button"
                   className={`btn ${ttsPanelOpen ? "is-active" : ""}`}
-                  disabled={ttsBusy}
+                  disabled={ttsBusy || !isDocReady}
                   aria-expanded={ttsPanelOpen}
                   onClick={handleOpenSelectedPagesTts}
                   title={
@@ -1056,7 +1105,7 @@ export function PdfReaderView() {
             className="pdf-tts-form"
             onSubmit={(e) => {
               e.preventDefault();
-              if (parsedTtsSelection.valid && !ttsBusy) {
+              if (parsedTtsSelection.valid && !ttsBusy && isDocReady) {
                 void handleReadPagesAloud(parsedTtsSelection.uniqueSorted);
               }
             }}
@@ -1117,7 +1166,7 @@ export function PdfReaderView() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={!parsedTtsSelection.valid || ttsBusy}
+              disabled={!parsedTtsSelection.valid || ttsBusy || !isDocReady}
               data-testid="c08-tts-send-selected-btn"
             >
               {ttsBusy
