@@ -8,15 +8,16 @@
 
 ## 候选安装包校验信息（Windows 11 x64 NSIS）
 
-| 项目                  | 候选实测值                                                                                                                                                                                                                                 |
-| :-------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 候选版本              | `0.19.0`（与 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 一致）                                                                                                                                                    |
-| 候选构建源提交 SHA    | _待本分支构建提交落盘后回填_                                                                                                                                                                                                               |
-| 候选安装程序文件名    | `WinKit_0.19.0_x64-setup.exe`                                                                                                                                                                                                              |
-| 实际文件大小          | _待候选构建实测后回填_                                                                                                                                                                                                                     |
-| SHA-256 摘要          | _待候选构建实测后回填_                                                                                                                                                                                                                     |
-| Authenticode 签名状态 | `NotSigned`（当前未配置代码签名证书，Windows SmartScreen 可能提示“未知发布者”）                                                                                                                                                            |
-| 随包离线资源核验      | `models/face_detection_yunet_2023mar.onnx`、`pdfium/pdfium.dll`、`qpdf/qpdf30.dll` (+3 MSVC DLL)、`ocr/onnxruntime.dll` (`1.23.2`)、`ocr/ch_PP-OCRv4_{det,rec}_mobile.onnx`、`ocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx` 及对应许可声明文件 |
+| 项目                  | 候选实测值                                                                                                                                                                                                                                                    |
+| :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 候选版本              | `0.19.0`（与 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 及已安装 PE `ProductVersion` 一致）                                                                                                                                          |
+| 候选构建源提交 SHA    | `50a539eec287233e68e3bf3cd9dc19b5e6dd27b7`（分支 `chore/release-v0.19.0-prep`，后续文档回填提交与该构建源在应用代码/打包资源/锁文件/构建脚本上零差异）                                                                                                        |
+| 候选安装程序文件名    | `WinKit_0.19.0_x64-setup.exe`                                                                                                                                                                                                                                 |
+| 实际文件大小          | `37,902,535` B（`36.15 MiB`）                                                                                                                                                                                                                                 |
+| SHA-256 摘要          | `eaa86aaa8f2b88111e84c67e8e90fa35d1d6d759a600ae79567abf4cef9ee895`                                                                                                                                                                                            |
+| Authenticode 签名状态 | `NotSigned`（当前未配置代码签名证书，Windows SmartScreen 可能提示“未知发布者”）                                                                                                                                                                               |
+| 随包离线资源核验      | `models/face_detection_yunet_2023mar.onnx`、`pdfium/pdfium.dll`、`qpdf/qpdf30.dll` (+3 MSVC DLL)、`ocr/onnxruntime.dll` (`1.23.2`)、`ocr/ch_PP-OCRv4_{det,rec}_mobile.onnx`、`ocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx` 及 7 份许可声明已逐一核验             |
+| 安装与升级实测        | 全新离线安装与公开 `v0.18.0` (`e370cf4352d7d2f6e6eea0c2aba46770e1b804a73010ae780cc56c2a93b4f0f9`) 原地覆盖升级均通过：版本号升至 `0.19.0`、72 项工具就绪，暗色主题、`en-US` 语言、收藏 `D01` 与自定义 FFmpeg 路径完整保留；3 条代表流程与缺模型提示均离线通过 |
 
 > 安装前可在 PowerShell 运行 `Get-FileHash .\WinKit_0.19.0_x64-setup.exe -Algorithm SHA256` 核对摘要；从公开 `v0.18.0` 覆盖升级时请关闭正在运行的 WinKit 并在同一 Windows 用户账户下安装，主题、语言、收藏夹、最近记录与既有本地媒体组件配置均会自动保留。
 
