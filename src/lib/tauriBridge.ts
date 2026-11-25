@@ -4556,3 +4556,145 @@ export async function copyMattingResultToClipboard(
   assertFrontendNotShuttingDown();
   return invoke<MattingCopyClipboardResult>("copy_matting_result_to_clipboard", { request });
 }
+
+// ---------- Phase 6: T06 Offline Text-to-Speech (Windows WinRT + SAPI) ----------
+
+export type TtsVoiceEngine = "winrt_one_core" | "sapi_desktop";
+export type TtsVoiceGender = "female" | "male" | "unknown";
+export type TtsExportFormat = "wav" | "mp3";
+
+export interface TtsVoiceInfo {
+  id: string;
+  name: string;
+  language: string;
+  gender: TtsVoiceGender;
+  engine: TtsVoiceEngine;
+  isDefault: boolean;
+}
+
+export interface TtsVoicesResponse {
+  voices: TtsVoiceInfo[];
+  defaultVoiceId: string | null;
+  hasChineseVoice: boolean;
+  hasEnglishVoice: boolean;
+  winrtCount: number;
+  sapiCount: number;
+}
+
+export interface TtsProgressPayload {
+  taskId: string;
+  phase: string;
+  currentSegment: number;
+  totalSegments: number;
+  percent: number;
+  detail: string;
+}
+
+export interface SynthesizeTtsRequest {
+  text: string;
+  voiceId: string;
+  rate: number;
+  sourcePath?: string | null;
+}
+
+export interface SynthesizeTtsResult {
+  resultId: string;
+  voiceId: string;
+  voiceName: string;
+  voiceLanguage: string;
+  engine: TtsVoiceEngine;
+  rate: number;
+  segmentCount: number;
+  paragraphCount: number;
+  charCount: number;
+  sampleRate: number;
+  channels: number;
+  bitsPerSample: number;
+  durationSec: number;
+  wavByteLength: number;
+  previewUrl: string;
+  elapsedMs: number;
+  sourcePath: string | null;
+  supportedMp3BitratesKbps: number[];
+}
+
+export interface ExportTtsAudioRequest {
+  resultId: string;
+  outputPath: string;
+  sourcePath?: string | null;
+  format: TtsExportFormat;
+  mp3BitrateKbps?: number | null;
+  overwrite: boolean;
+}
+
+export interface ExportTtsAudioResult {
+  outputPath: string;
+  format: TtsExportFormat;
+  durationSec: number;
+  sampleRate: number;
+  channels: number;
+  bitrateKbps: number | null;
+  byteLength: number;
+}
+
+export function getSupportedTtsMp3Bitrates(sampleRate: number | null | undefined): number[] {
+  const sr = typeof sampleRate === "number" && Number.isFinite(sampleRate) ? sampleRate : 16_000;
+  if (sr < 16_000) {
+    return [32, 48, 64];
+  }
+  if (sr < 32_000) {
+    return [64, 96, 128, 160];
+  }
+  return [128, 192, 256];
+}
+
+export function getDefaultTtsMp3Bitrate(sampleRate: number | null | undefined): number {
+  const sr = typeof sampleRate === "number" && Number.isFinite(sampleRate) ? sampleRate : 16_000;
+  if (sr < 16_000) {
+    return 64;
+  }
+  if (sr < 32_000) {
+    return 128;
+  }
+  return 192;
+}
+
+export async function listTtsVoices(): Promise<TtsVoicesResponse> {
+  return invoke<TtsVoicesResponse>("list_tts_voices");
+}
+
+export async function synthesizeTtsSpeech(
+  taskId: string,
+  request: SynthesizeTtsRequest,
+): Promise<SynthesizeTtsResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<SynthesizeTtsResult>("synthesize_tts_speech", { taskId, request });
+}
+
+export async function subscribeTtsProgress(
+  handler: (payload: TtsProgressPayload) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriDesktop()) {
+    return () => {};
+  }
+  return listen<TtsProgressPayload>("winkit://tts-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function exportTtsAudio(
+  request: ExportTtsAudioRequest,
+): Promise<ExportTtsAudioResult> {
+  assertFrontendNotShuttingDown();
+  return invoke<ExportTtsAudioResult>("export_tts_audio", { request });
+}
+
+export async function clearTtsSession(): Promise<void> {
+  if (!isTauriDesktop()) return;
+  await invoke<void>("clear_tts_session");
+}
+
+export async function openWindowsSpeechSettings(): Promise<void> {
+  assertFrontendNotShuttingDown();
+  await invoke<void>("open_windows_speech_settings");
+}

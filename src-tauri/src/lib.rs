@@ -61,6 +61,8 @@ mod qr;
 pub mod screen_capture;
 pub mod screen_recorder;
 pub mod tasks;
+pub mod tts_core;
+pub mod tts_worker;
 pub mod unicode_inspector;
 pub mod uuid_tool;
 pub mod video_download;
@@ -285,6 +287,11 @@ use crate::tasks::{
     CloseRequestDecision, ShutdownDrainResult, TaskProgressPayload, TaskRegistry,
     TaskRegistrySnapshot, TaskTokenGuard, TASK_PROGRESS_EVENT,
 };
+use crate::tts_core::{
+    open_windows_speech_settings_impl, ExportTtsAudioRequest, ExportTtsAudioResult,
+    SynthesizeTtsRequest, SynthesizeTtsResult, TtsVoicesResponse, TTS_PROGRESS_EVENT,
+};
+use crate::tts_worker::{export_tts_audio_impl, synthesize_tts_impl, TtsSessionManager};
 use crate::unicode_inspector::{
     inspect_and_sanitize_unicode, UnicodeInspectionResponse, UnicodeSanitizeOptions,
 };
@@ -6087,6 +6094,122 @@ async fn copy_matting_result_to_clipboard(
 }
 
 #[tauri::command]
+async fn list_tts_voices(
+    registry: State<'_, TaskRegistry>,
+    tts: State<'_, TtsSessionManager>,
+) -> Result<TtsVoicesResponse, AppError> {
+    registry.ensure_not_shutting_down()?;
+    let mgr = tts.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || mgr.list_voices())
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "INTERNAL_JOIN_ERROR",
+                "TTS voice enumeration worker failed.",
+            )
+        })?
+}
+
+#[tauri::command]
+async fn synthesize_tts_speech<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    tts: State<'_, TtsSessionManager>,
+    preview_registry: State<'_, MediaPreviewRegistry>,
+    task_id: String,
+    request: SynthesizeTtsRequest,
+) -> Result<SynthesizeTtsResult, AppError> {
+    let trimmed_id = task_id.trim();
+    if trimmed_id.is_empty()
+        || trimmed_id.len() > 64
+        || !trimmed_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(AppError::invalid_param("Invalid TTS task ID."));
+    }
+    let owned_id = trimmed_id.to_string();
+    let guard = registry.register_checked(&owned_id, "T06", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mgr = tts.inner().clone();
+    let preview = preview_registry.inner().clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let tid = guard.task_id().to_string();
+        let _ = app.emit(
+            TASK_PROGRESS_EVENT,
+            TaskProgressPayload::running(&tid, "T06", Some(100)),
+        );
+        let res = synthesize_tts_impl(&tid, &mgr, &preview, &request, &cancel_flag, |ev| {
+            let _ = app.emit(TTS_PROGRESS_EVENT, &ev);
+            let _ = app.emit(
+                TASK_PROGRESS_EVENT,
+                TaskProgressPayload {
+                    task_id: tid.clone(),
+                    tool_id: "T06".to_string(),
+                    state: crate::tasks::TaskLifecycleState::Running,
+                    processed_bytes: ev.percent.round() as u64,
+                    total_bytes: Some(100),
+                    percent: Some(ev.percent),
+                    error_code: None,
+                    error_message: None,
+                },
+            );
+        });
+        match &res {
+            Ok(_) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::completed(&tid, "T06", 100, Some(100)),
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    TASK_PROGRESS_EVENT,
+                    TaskProgressPayload::failed_or_cancelled(&tid, "T06", 0, None, err),
+                );
+            }
+        }
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "Offline speech worker failed."))?
+}
+
+#[tauri::command]
+async fn export_tts_audio<R: Runtime>(
+    app: AppHandle<R>,
+    registry: State<'_, TaskRegistry>,
+    tts: State<'_, TtsSessionManager>,
+    request: ExportTtsAudioRequest,
+) -> Result<ExportTtsAudioResult, AppError> {
+    let tid = next_internal_task_id("t06-export");
+    let guard = registry.register_checked(&tid, "T06", true)?;
+    let cancel_flag = guard.cancel_flag();
+    let mgr = tts.inner().clone();
+    let app_data_dir = resolve_media_data_root(app.path().app_local_data_dir().ok().as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = export_tts_audio_impl(&mgr, &app_data_dir, &request, &cancel_flag);
+        drop(guard);
+        res
+    })
+    .await
+    .map_err(|_| AppError::new("INTERNAL_JOIN_ERROR", "TTS audio export worker failed."))?
+}
+
+#[tauri::command]
+fn clear_tts_session(tts: State<'_, TtsSessionManager>) {
+    tts.clear_results();
+}
+
+#[tauri::command]
+fn open_windows_speech_settings(registry: State<'_, TaskRegistry>) -> Result<(), AppError> {
+    registry.ensure_not_shutting_down()?;
+    open_windows_speech_settings_impl()
+}
+
+#[tauri::command]
 fn cancel_task(registry: State<'_, TaskRegistry>, task_id: String) -> bool {
     registry.cancel(&task_id)
 }
@@ -6102,6 +6225,7 @@ fn get_task_snapshot(registry: State<'_, TaskRegistry>) -> TaskRegistrySnapshot 
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn request_window_close(
     registry: State<'_, TaskRegistry>,
     recorder: State<'_, AudioRecorderManager>,
@@ -6110,6 +6234,7 @@ fn request_window_close(
     ocr: State<'_, OcrSessionManager>,
     asr: State<'_, AsrSessionManager>,
     matting: State<'_, MattingSessionManager>,
+    tts: State<'_, TtsSessionManager>,
 ) -> CloseRequestDecision {
     let decision = registry.evaluate_close_request();
     if decision.immediate_close_allowed {
@@ -6119,6 +6244,7 @@ fn request_window_close(
         ocr.cleanup_on_exit();
         asr.cleanup_on_exit();
         matting.cleanup_on_exit();
+        tts.cleanup_on_exit();
     }
     decision
 }
@@ -6133,6 +6259,7 @@ async fn begin_graceful_shutdown(
     ocr: State<'_, OcrSessionManager>,
     asr: State<'_, AsrSessionManager>,
     matting: State<'_, MattingSessionManager>,
+    tts: State<'_, TtsSessionManager>,
     timeout_ms: Option<u64>,
 ) -> Result<ShutdownDrainResult, AppError> {
     let reg = registry.inner().clone();
@@ -6142,6 +6269,7 @@ async fn begin_graceful_shutdown(
     let ocr_mgr = ocr.inner().clone();
     let asr_mgr = asr.inner().clone();
     let matting_mgr = matting.inner().clone();
+    let tts_mgr = tts.inner().clone();
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(8_000).clamp(100, 30_000));
     tauri::async_runtime::spawn_blocking(move || {
         let res = reg.begin_shutdown_and_drain(timeout);
@@ -6152,6 +6280,7 @@ async fn begin_graceful_shutdown(
             ocr_mgr.cleanup_on_exit();
             asr_mgr.cleanup_on_exit();
             matting_mgr.cleanup_on_exit();
+            tts_mgr.cleanup_on_exit();
         }
         res
     })
@@ -6180,6 +6309,7 @@ pub fn run() {
         .manage(OcrSessionManager::default())
         .manage(AsrSessionManager::default())
         .manage(MattingSessionManager::default())
+        .manage(TtsSessionManager::default())
         .register_uri_scheme_protocol("winkitmedia", move |_ctx, request| {
             handle_winkit_media_protocol(&preview_registry_for_proto, request)
         })
@@ -6361,6 +6491,11 @@ pub fn run() {
             remove_image_background,
             export_matting_result,
             copy_matting_result_to_clipboard,
+            list_tts_voices,
+            synthesize_tts_speech,
+            export_tts_audio,
+            clear_tts_session,
+            open_windows_speech_settings,
             cancel_task,
             get_running_task_count,
             get_task_snapshot,

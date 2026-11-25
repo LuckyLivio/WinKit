@@ -101,6 +101,8 @@ export function ToolIcon({ name, size = 18 }: { name: ToolIconName; size?: numbe
       return <ScanLine size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "transcribe-media":
       return <MessageSquareText size={size} strokeWidth={1.75} aria-hidden="true" />;
+    case "read-aloud":
+      return <Volume2 size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "text-quote":
       return <TextQuote size={size} strokeWidth={1.75} aria-hidden="true" />;
     case "lock-keyhole":

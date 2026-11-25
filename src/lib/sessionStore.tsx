@@ -99,13 +99,18 @@ import {
   bindDisposableListener,
   blurFacesBatch,
   cancelBackendTask,
+  clearTtsSession,
   compressImagesBatch,
   convertImagesBatch,
   createArchive,
   extractArchivesBatch,
+  getDefaultTtsMp3Bitrate,
+  getSupportedTtsMp3Bitrates,
   inspectBeautifierSourceImage,
+  listTtsVoices,
   parseBackendError,
   readClipboardImageAsAsset,
+  readLocalTextFile,
   removeImageBackground,
   resizeImagesBatch,
   rotateImagesBatch,
@@ -115,6 +120,8 @@ import {
   subscribeDuplicateScanProgress,
   subscribeImageBatchProgress,
   subscribeMattingProgress,
+  subscribeTtsProgress,
+  synthesizeTtsSpeech,
   watermarkImagesBatch,
   type BatchRenameSkippedItem,
   type BeautifyBackgroundKind,
@@ -134,6 +141,11 @@ import {
   type RemoveBackgroundResult,
   type SaveAssetFormat,
   type ScreenColorSample,
+  type SynthesizeTtsRequest,
+  type SynthesizeTtsResult,
+  type TtsExportFormat,
+  type TtsProgressPayload,
+  type TtsVoiceInfo,
   type WatermarkImagesBatchRequest,
   type WatermarkPlacement,
 } from "./tauriBridge";
@@ -330,6 +342,30 @@ export type CaseStyleId =
 export interface CaseConverterSessionState {
   textInput: string;
   selectedStyle: CaseStyleId;
+}
+
+export interface TextToSpeechSessionState {
+  sourceGeneration: number;
+  loadingFile: boolean;
+  text: string;
+  sourceFilePath: string | null;
+  sourceFileName: string | null;
+  voices: TtsVoiceInfo[];
+  voicesLoaded: boolean;
+  voicesLoading: boolean;
+  hasChineseVoice: boolean;
+  hasEnglishVoice: boolean;
+  selectedVoiceId: string;
+  rate: number;
+  status: "idle" | "running" | "done" | "error";
+  activeTaskId: string | null;
+  liveProgress: TtsProgressPayload | null;
+  result: SynthesizeTtsResult | null;
+  errorMessage: string | null;
+  exportFormat: TtsExportFormat;
+  mp3BitrateKbps: number;
+  lastSavedMessage: string | null;
+  lastSavedPath: string | null;
 }
 
 export type BeautifierAspect = "original" | "1:1" | "16:9" | "4:5" | "9:16";
@@ -730,6 +766,7 @@ export interface SessionWorkspaces {
   csvJson: CsvJsonSessionState;
   wordCounter: WordCounterSessionState;
   caseConverter: CaseConverterSessionState;
+  textToSpeech: TextToSpeechSessionState;
   screenCapture: ScreenCaptureSessionState;
   blurFaces: BlurFacesSessionState;
   colorPicker: ColorPickerSessionState;
@@ -1097,6 +1134,29 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     cropPaddingPx: 0,
     lastSavedMessage: null,
   },
+  textToSpeech: {
+    sourceGeneration: 0,
+    loadingFile: false,
+    text: "",
+    sourceFilePath: null,
+    sourceFileName: null,
+    voices: [],
+    voicesLoaded: false,
+    voicesLoading: false,
+    hasChineseVoice: false,
+    hasEnglishVoice: false,
+    selectedVoiceId: "",
+    rate: 1.0,
+    status: "idle",
+    activeTaskId: null,
+    liveProgress: null,
+    result: null,
+    errorMessage: null,
+    exportFormat: "wav",
+    mp3BitrateKbps: 128,
+    lastSavedMessage: null,
+    lastSavedPath: null,
+  },
   imageRedact: {
     assetId: null,
     sourcePath: null,
@@ -1383,6 +1443,22 @@ interface SessionStoreContextValue {
     formatError: (err: unknown) => string,
   ) => Promise<RemoveBackgroundResult | null>;
   cancelRemoveBackground: () => Promise<void>;
+  updateTextToSpeechSession: (
+    patchOrUpdater:
+      | Partial<TextToSpeechSessionState>
+      | ((prev: TextToSpeechSessionState) => TextToSpeechSessionState),
+  ) => void;
+  refreshTtsVoices: (formatError: (err: unknown) => string) => Promise<void>;
+  loadTextToSpeechFile: (
+    rawPath: string,
+    formatError: (err: unknown) => string,
+  ) => Promise<boolean>;
+  startTextToSpeech: (
+    req: SynthesizeTtsRequest,
+    formatError: (err: unknown) => string,
+  ) => Promise<SynthesizeTtsResult | null>;
+  cancelTextToSpeech: () => Promise<void>;
+  clearTextToSpeechSession: () => void;
 }
 
 const SessionStoreContext = createContext<SessionStoreContextValue | null>(null);
@@ -1598,6 +1674,11 @@ export function SessionStoreProvider({
   const mattingRunSeqRef = useRef(1);
   const mattingSourceGenRef = useRef(0);
   const activeMattingTaskRef = useRef<string | null>(null);
+  const ttsRunSeqRef = useRef(1);
+  const ttsSourceGenRef = useRef(0);
+  const ttsFileLoadSeqRef = useRef(0);
+  const ttsVoiceRefreshSeqRef = useRef(0);
+  const activeTtsTaskRef = useRef<string | null>(null);
 
   const handoffImageToTool = useCallback(
     (targetToolId: ImageHandoffTarget, asset: ImageAssetPayload) => {
@@ -3046,6 +3127,273 @@ export function SessionStoreProvider({
     }
   }, []);
 
+  const updateTextToSpeechSession = useCallback(
+    (
+      patchOrUpdater:
+        | Partial<TextToSpeechSessionState>
+        | ((prev: TextToSpeechSessionState) => TextToSpeechSessionState),
+    ) => {
+      setSession((prev) => ({
+        ...prev,
+        textToSpeech:
+          typeof patchOrUpdater === "function"
+            ? patchOrUpdater(prev.textToSpeech)
+            : { ...prev.textToSpeech, ...patchOrUpdater },
+      }));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return bindDisposableListener(
+      () =>
+        subscribeTtsProgress((payload) => {
+          setSession((prev) => {
+            if (prev.textToSpeech.activeTaskId !== payload.taskId) {
+              return prev;
+            }
+            return {
+              ...prev,
+              textToSpeech: {
+                ...prev.textToSpeech,
+                liveProgress: payload,
+              },
+            };
+          });
+        }),
+      "t06-tts-progress",
+    );
+  }, []);
+
+  const refreshTtsVoices = useCallback(async (formatError: (err: unknown) => string) => {
+    const seq = ++ttsVoiceRefreshSeqRef.current;
+    setSession((prev) => ({
+      ...prev,
+      textToSpeech: {
+        ...prev.textToSpeech,
+        voicesLoading: true,
+      },
+    }));
+    try {
+      const resp = await listTtsVoices();
+      if (ttsVoiceRefreshSeqRef.current !== seq) return;
+      setSession((prev) => {
+        const currentSelected = prev.textToSpeech.selectedVoiceId;
+        const stillExists = resp.voices.some((v) => v.id === currentSelected);
+        const nextSelected = stillExists
+          ? currentSelected
+          : (resp.defaultVoiceId ?? resp.voices[0]?.id ?? "");
+        return {
+          ...prev,
+          textToSpeech: {
+            ...prev.textToSpeech,
+            voices: resp.voices,
+            voicesLoaded: true,
+            voicesLoading: false,
+            hasChineseVoice: resp.hasChineseVoice,
+            hasEnglishVoice: resp.hasEnglishVoice,
+            selectedVoiceId: nextSelected,
+          },
+        };
+      });
+    } catch (err) {
+      if (ttsVoiceRefreshSeqRef.current !== seq) return;
+      setSession((prev) => ({
+        ...prev,
+        textToSpeech: {
+          ...prev.textToSpeech,
+          voicesLoaded: true,
+          voicesLoading: false,
+          errorMessage: formatError(err),
+        },
+      }));
+    }
+  }, []);
+
+  const loadTextToSpeechFile = useCallback(
+    async (rawPath: string, formatError: (err: unknown) => string): Promise<boolean> => {
+      const loadSeq = ++ttsFileLoadSeqRef.current;
+      setSession((prev) => ({
+        ...prev,
+        textToSpeech: {
+          ...prev.textToSpeech,
+          loadingFile: true,
+        },
+      }));
+      try {
+        // Validate & read candidate file BEFORE bumping sourceGeneration or touching the active task.
+        // If reading fails, existing text, audition result, and any running synthesis remain intact.
+        const payload = await readLocalTextFile(rawPath);
+        if (ttsFileLoadSeqRef.current !== loadSeq) {
+          return false;
+        }
+        const nextGen = ++ttsSourceGenRef.current;
+        const runningId = activeTtsTaskRef.current;
+        if (runningId) {
+          activeTtsTaskRef.current = null;
+          void cancelBackendTask(runningId);
+        }
+        void clearTtsSession();
+        setSession((prev) => ({
+          ...prev,
+          textToSpeech: {
+            ...prev.textToSpeech,
+            sourceGeneration: nextGen,
+            loadingFile: false,
+            text: payload.content,
+            sourceFilePath: payload.path,
+            sourceFileName: payload.fileName,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            result: null,
+            errorMessage: null,
+            lastSavedMessage: null,
+            lastSavedPath: null,
+          },
+        }));
+        return true;
+      } catch (err) {
+        if (ttsFileLoadSeqRef.current !== loadSeq) {
+          return false;
+        }
+        setSession((prev) => ({
+          ...prev,
+          textToSpeech: {
+            ...prev.textToSpeech,
+            loadingFile: false,
+            errorMessage: formatError(err),
+          },
+        }));
+        return false;
+      }
+    },
+    [],
+  );
+
+  const startTextToSpeech = useCallback(
+    async (
+      req: SynthesizeTtsRequest,
+      formatError: (err: unknown) => string,
+    ): Promise<SynthesizeTtsResult | null> => {
+      if (activeTtsTaskRef.current) {
+        return null;
+      }
+      const runGen = ttsSourceGenRef.current;
+      const taskId = `t06-tts-${Date.now()}-${ttsRunSeqRef.current++}`;
+      activeTtsTaskRef.current = taskId;
+      setSession((prev) => ({
+        ...prev,
+        textToSpeech: {
+          ...prev.textToSpeech,
+          status: "running",
+          activeTaskId: taskId,
+          liveProgress: {
+            taskId,
+            phase: "synthesizing",
+            currentSegment: 0,
+            totalSegments: 0,
+            percent: 2,
+            detail: "",
+          },
+          errorMessage: null,
+          lastSavedMessage: null,
+        },
+      }));
+      try {
+        const res = await synthesizeTtsSpeech(taskId, req);
+        if (activeTtsTaskRef.current !== taskId || ttsSourceGenRef.current !== runGen) {
+          return null;
+        }
+        activeTtsTaskRef.current = null;
+        setSession((prev) => {
+          if (prev.textToSpeech.sourceGeneration !== runGen) return prev;
+          const allowedBitrates =
+            res.supportedMp3BitratesKbps?.length > 0
+              ? res.supportedMp3BitratesKbps
+              : getSupportedTtsMp3Bitrates(res.sampleRate);
+          const nextBitrate = allowedBitrates.includes(prev.textToSpeech.mp3BitrateKbps)
+            ? prev.textToSpeech.mp3BitrateKbps
+            : getDefaultTtsMp3Bitrate(res.sampleRate);
+          return {
+            ...prev,
+            textToSpeech: {
+              ...prev.textToSpeech,
+              status: "done",
+              activeTaskId: null,
+              liveProgress: null,
+              result: res,
+              mp3BitrateKbps: nextBitrate,
+            },
+          };
+        });
+        return res;
+      } catch (err) {
+        if (activeTtsTaskRef.current !== taskId || ttsSourceGenRef.current !== runGen) {
+          return null;
+        }
+        activeTtsTaskRef.current = null;
+        const parsed = parseBackendError(err);
+        setSession((prev) => {
+          if (prev.textToSpeech.sourceGeneration !== runGen) return prev;
+          return {
+            ...prev,
+            textToSpeech: {
+              ...prev.textToSpeech,
+              status:
+                parsed.code === "TASK_CANCELLED"
+                  ? prev.textToSpeech.result
+                    ? "done"
+                    : "idle"
+                  : "error",
+              activeTaskId: null,
+              liveProgress: null,
+              errorMessage: formatError(err),
+            },
+          };
+        });
+        return null;
+      }
+    },
+    [],
+  );
+
+  const cancelTextToSpeech = useCallback(async () => {
+    const tid = activeTtsTaskRef.current;
+    if (tid) {
+      await cancelBackendTask(tid);
+    }
+  }, []);
+
+  const clearTextToSpeechSession = useCallback(() => {
+    ttsFileLoadSeqRef.current += 1;
+    const gen = ++ttsSourceGenRef.current;
+    const runningId = activeTtsTaskRef.current;
+    if (runningId) {
+      activeTtsTaskRef.current = null;
+      void cancelBackendTask(runningId);
+    }
+    void clearTtsSession();
+    setSession((prev) => ({
+      ...prev,
+      textToSpeech: {
+        ...prev.textToSpeech,
+        sourceGeneration: gen,
+        loadingFile: false,
+        text: "",
+        sourceFilePath: null,
+        sourceFileName: null,
+        status: "idle",
+        activeTaskId: null,
+        liveProgress: null,
+        result: null,
+        errorMessage: null,
+        lastSavedMessage: null,
+        lastSavedPath: null,
+      },
+    }));
+  }, []);
+
   return (
     <SessionStoreContext.Provider
       value={{
@@ -3110,6 +3458,12 @@ export function SessionStoreProvider({
         clearRemoveBackgroundSession,
         startRemoveBackground,
         cancelRemoveBackground,
+        updateTextToSpeechSession,
+        refreshTtsVoices,
+        loadTextToSpeechFile,
+        startTextToSpeech,
+        cancelTextToSpeech,
+        clearTextToSpeechSession,
       }}
     >
       {children}
