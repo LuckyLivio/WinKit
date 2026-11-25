@@ -15,15 +15,17 @@
 use crate::error::AppError;
 use crate::fs_guard::{paths_refer_to_same_location, validate_user_path};
 use crate::media_core::{
-    require_media_tools, run_ffmpeg_cancellable, AtomicMediaOutput, MediaPreviewRegistry,
+    require_media_tools, run_ffmpeg_cancellable, run_ffprobe_args, AtomicMediaOutput,
+    MediaPreviewRegistry,
 };
 use crate::pdf_worker::should_use_subprocess_worker;
 use crate::tts_core::{
-    finalize_pcm16_wav_header, list_all_installed_voices, silence_pcm16_bytes, split_tts_segments,
-    synthesize_chunk, validate_tts_rate, write_pcm16_wav_header, ExportTtsAudioRequest,
-    ExportTtsAudioResult, SynthesizeTtsRequest, SynthesizeTtsResult, TtsExportFormat,
-    TtsProgressPayload, TtsVoiceEngine, TtsVoicesResponse, DEFAULT_TTS_CHUNK_MAX_CHARS,
-    MAX_TTS_CHUNK_WAV_BYTES, PARAGRAPH_PAUSE_MS, SUBCHUNK_PAUSE_MS,
+    finalize_pcm16_wav_header, list_all_installed_voices, resolve_mp3_bitrate_kbps,
+    silence_pcm16_bytes, split_tts_segments, supported_mp3_bitrates_kbps, synthesize_chunk,
+    validate_tts_rate, write_pcm16_wav_header, ExportTtsAudioRequest, ExportTtsAudioResult,
+    SynthesizeTtsRequest, SynthesizeTtsResult, TtsExportFormat, TtsProgressPayload, TtsVoiceEngine,
+    TtsVoicesResponse, DEFAULT_TTS_CHUNK_MAX_CHARS, MAX_TTS_CHUNK_WAV_BYTES, PARAGRAPH_PAUSE_MS,
+    SUBCHUNK_PAUSE_MS,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -481,6 +483,7 @@ impl TtsWorkerClient {
 pub struct StoredTtsAudio {
     pub id: String,
     pub wav_path: PathBuf,
+    pub source_path: Option<PathBuf>,
     pub preview_url: String,
     pub voice_id: String,
     pub voice_name: String,
@@ -637,6 +640,15 @@ where
     }
 
     let rate = validate_tts_rate(req.rate)?;
+    let recorded_source_path = match req
+        .source_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw) => Some(validate_user_path(raw, "Source")?),
+        None => None,
+    };
     let (segments, paragraph_count) = split_tts_segments(&req.text, DEFAULT_TTS_CHUNK_MAX_CHARS)?;
     let total_segments = segments.len();
     let total_chars: usize = segments.iter().map(|s| s.char_count).sum();
@@ -832,6 +844,7 @@ where
     let stored = StoredTtsAudio {
         id: result_id.clone(),
         wav_path: wav_path.clone(),
+        source_path: recorded_source_path.clone(),
         preview_url: preview_reg.url.clone(),
         voice_id: selected_voice.id.clone(),
         voice_name: selected_voice.name.clone(),
@@ -874,6 +887,8 @@ where
         wav_byte_length,
         preview_url: preview_reg.url,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        source_path: recorded_source_path.map(|p| p.to_string_lossy().into_owned()),
+        supported_mp3_bitrates_kbps: supported_mp3_bitrates_kbps(sample_rate).to_vec(),
     })
 }
 
@@ -909,8 +924,95 @@ fn copy_file_cancellable(
     Ok(total)
 }
 
+fn parse_json_u64(val: Option<&serde_json::Value>) -> Option<u64> {
+    let v = val?;
+    if let Some(n) = v.as_u64() {
+        return Some(n);
+    }
+    if let Some(s) = v.as_str() {
+        return s.trim().parse::<u64>().ok();
+    }
+    None
+}
+
+fn parse_json_f64(val: Option<&serde_json::Value>) -> Option<f64> {
+    let v = val?;
+    if let Some(n) = v.as_f64() {
+        return n.is_finite().then_some(n);
+    }
+    if let Some(s) = v.as_str() {
+        return s.trim().parse::<f64>().ok().filter(|n| n.is_finite());
+    }
+    None
+}
+
+fn probe_exported_mp3(
+    ffprobe: &Path,
+    mp3_path: &Path,
+    fallback_duration_sec: f64,
+) -> Result<(u32, u16, f64, Option<u32>), AppError> {
+    let args = vec![
+        "-v".to_string(),
+        "error".to_string(),
+        "-select_streams".to_string(),
+        "a:0".to_string(),
+        "-show_entries".to_string(),
+        "stream=sample_rate,channels,bit_rate,duration:format=duration,bit_rate".to_string(),
+        "-of".to_string(),
+        "json".to_string(),
+        mp3_path.to_string_lossy().into_owned(),
+    ];
+    let raw = run_ffprobe_args(ffprobe, &args)?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        AppError::new(
+            "FFPROBE_PARSE_ERROR",
+            format!("Failed to parse ffprobe output for exported MP3: {e}"),
+        )
+    })?;
+    let stream = parsed
+        .get("streams")
+        .and_then(|s| s.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| {
+            AppError::new(
+                "EXPORT_VERIFY_FAILED",
+                "Exported MP3 file contains no readable audio stream.",
+            )
+        })?;
+    let format = parsed.get("format");
+
+    let sample_rate = parse_json_u64(stream.get("sample_rate"))
+        .and_then(|v| u32::try_from(v).ok())
+        .filter(|&v| v > 0)
+        .ok_or_else(|| {
+            AppError::new(
+                "EXPORT_VERIFY_FAILED",
+                "Unable to verify sample rate of exported MP3 file.",
+            )
+        })?;
+    let channels = parse_json_u64(stream.get("channels"))
+        .and_then(|v| u16::try_from(v).ok())
+        .filter(|&v| v > 0)
+        .ok_or_else(|| {
+            AppError::new(
+                "EXPORT_VERIFY_FAILED",
+                "Unable to verify channel count of exported MP3 file.",
+            )
+        })?;
+    let duration_sec = parse_json_f64(stream.get("duration"))
+        .or_else(|| format.and_then(|f| parse_json_f64(f.get("duration"))))
+        .filter(|&d| d > 0.0)
+        .unwrap_or(fallback_duration_sec);
+    let bitrate_bps = parse_json_u64(stream.get("bit_rate"))
+        .or_else(|| format.and_then(|f| parse_json_u64(f.get("bit_rate"))))
+        .filter(|&b| b > 0);
+    let bitrate_kbps = bitrate_bps.map(|bps| ((bps + 500) / 1000) as u32);
+    Ok((sample_rate, channels, duration_sec, bitrate_kbps))
+}
+
 /// Safely exports a synthesized TTS audio session as offline WAV (zero FFmpeg) or MP3
-/// (reusing local `media_core` FFmpeg), enforcing source-file protection and atomic commit.
+/// (reusing local `media_core` FFmpeg), enforcing source-file protection bound to the
+/// synthesis result record, preserving original sample rate, and probing exported MP3 metadata.
 pub fn export_tts_audio_impl(
     tts: &TtsSessionManager,
     app_data_dir: &Path,
@@ -924,6 +1026,14 @@ pub fn export_tts_audio_impl(
     let stored = tts.get_result(req.result_id.trim())?;
     let target_path = validate_user_path(&req.output_path, "Output")?;
 
+    // Always protect the original source file recorded when this synthesis result was produced,
+    // even if the editor text was later replaced or `overwrite = true` was confirmed.
+    if let Some(bound_src) = stored.source_path.as_deref() {
+        if paths_refer_to_same_location(bound_src, &target_path) {
+            return Err(AppError::same_input_output());
+        }
+    }
+    // Also protect any current source path passed by the active workspace.
     if let Some(src) = req
         .source_path
         .as_deref()
@@ -938,19 +1048,29 @@ pub fn export_tts_audio_impl(
         return Err(AppError::same_input_output());
     }
 
-    let atomic = AtomicMediaOutput::prepare(target_path, &stored.wav_path, req.overwrite)?;
-
     match req.format {
         TtsExportFormat::Wav => {
+            let atomic = AtomicMediaOutput::prepare(target_path, &stored.wav_path, req.overwrite)?;
             copy_file_cancellable(&stored.wav_path, atomic.temp_path(), cancel_flag)?;
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err(AppError::cancelled());
+            }
+            let (final_path, byte_length) = atomic.commit(req.overwrite)?;
+            Ok(ExportTtsAudioResult {
+                output_path: final_path.to_string_lossy().into_owned(),
+                format: TtsExportFormat::Wav,
+                duration_sec: stored.duration_sec,
+                sample_rate: stored.sample_rate,
+                channels: stored.channels,
+                bitrate_kbps: None,
+                byte_length,
+            })
         }
         TtsExportFormat::Mp3 => {
+            let target_kbps = resolve_mp3_bitrate_kbps(stored.sample_rate, req.mp3_bitrate_kbps)?;
             let tools = require_media_tools(app_data_dir)?;
-            let bitrate = match req.mp3_bitrate_kbps.unwrap_or(192) {
-                128 => "128k",
-                256 => "256k",
-                _ => "192k",
-            };
+            let atomic = AtomicMediaOutput::prepare(target_path, &stored.wav_path, req.overwrite)?;
+            let bitrate_arg = format!("{target_kbps}k");
             let args = vec![
                 "-y".to_string(),
                 "-hide_banner".to_string(),
@@ -962,7 +1082,7 @@ pub fn export_tts_audio_impl(
                 "-c:a".to_string(),
                 "libmp3lame".to_string(),
                 "-b:a".to_string(),
-                bitrate.to_string(),
+                bitrate_arg,
                 "-f".to_string(),
                 "mp3".to_string(),
                 atomic.temp_path().to_string_lossy().into_owned(),
@@ -974,23 +1094,23 @@ pub fn export_tts_audio_impl(
                 cancel_flag,
                 |_, _| {},
             )?;
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err(AppError::cancelled());
+            }
+            let (sample_rate, channels, duration_sec, bitrate_kbps) =
+                probe_exported_mp3(&tools.ffprobe, atomic.temp_path(), stored.duration_sec)?;
+            let (final_path, byte_length) = atomic.commit(req.overwrite)?;
+            Ok(ExportTtsAudioResult {
+                output_path: final_path.to_string_lossy().into_owned(),
+                format: TtsExportFormat::Mp3,
+                duration_sec,
+                sample_rate,
+                channels,
+                bitrate_kbps,
+                byte_length,
+            })
         }
     }
-
-    if cancel_flag.load(Ordering::Relaxed) {
-        return Err(AppError::cancelled());
-    }
-
-    let (final_path, byte_length) = atomic.commit(req.overwrite)?;
-
-    Ok(ExportTtsAudioResult {
-        output_path: final_path.to_string_lossy().into_owned(),
-        format: req.format,
-        duration_sec: stored.duration_sec,
-        sample_rate: stored.sample_rate,
-        channels: stored.channels,
-        byte_length,
-    })
 }
 
 #[cfg(test)]
@@ -1044,8 +1164,16 @@ mod tests {
         assert!(res.duration_sec > 1.5);
         assert!(res.wav_byte_length > 44);
         assert!(res.preview_url.starts_with("http://winkitmedia.localhost/"));
+        assert_eq!(
+            res.source_path.as_deref(),
+            Some(source_txt.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            res.supported_mp3_bitrates_kbps,
+            supported_mp3_bitrates_kbps(res.sample_rate)
+        );
 
-        // 1. Source .txt path protection -> SAME_INPUT_AND_OUTPUT
+        // 1a. Source .txt path protection -> SAME_INPUT_AND_OUTPUT (even when overwrite=true)
         let err_same = export_tts_audio_impl(
             &tts,
             dir.path(),
@@ -1061,6 +1189,25 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err_same.code, "SAME_INPUT_AND_OUTPUT");
+        assert_eq!(fs::read_to_string(&source_txt).unwrap(), text);
+
+        // 1b. Bound source-file protection survives even after editor text is replaced via Paste
+        // (caller passes source_path = None AND overwrite = true) -> still rejected!
+        let err_bound = export_tts_audio_impl(
+            &tts,
+            dir.path(),
+            &ExportTtsAudioRequest {
+                result_id: res.result_id.clone(),
+                output_path: source_txt.to_string_lossy().into_owned(),
+                source_path: None,
+                format: TtsExportFormat::Wav,
+                mp3_bitrate_kbps: None,
+                overwrite: true,
+            },
+            &active,
+        )
+        .unwrap_err();
+        assert_eq!(err_bound.code, "SAME_INPUT_AND_OUTPUT");
         assert_eq!(fs::read_to_string(&source_txt).unwrap(), text);
 
         // 2. Offline WAV export (zero FFmpeg needed) + header/RMS verification
@@ -1247,5 +1394,87 @@ mod tests {
         assert_eq!(chunk.bits_per_sample, 16);
         assert!(!chunk.pcm_data.is_empty());
         assert!(compute_pcm16_rms(&chunk.pcm_data) > 0.005);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn mp3_export_rejects_unsupported_bitrate_preserves_sample_rate_and_probes_real_bitrate() {
+        let dir = tempdir().expect("tempdir");
+        let tts = TtsSessionManager::new_in_dir(dir.path().join("tts_mp3_temp"));
+        let preview = MediaPreviewRegistry::default();
+        if require_media_tools(dir.path()).is_err() {
+            return;
+        }
+
+        let voices = tts.list_voices().expect("list voices");
+        let voice_id = voices
+            .default_voice_id
+            .clone()
+            .unwrap_or_else(|| voices.voices[0].id.clone());
+        let active = Arc::new(AtomicBool::new(false));
+        let synth = synthesize_tts_impl(
+            "t06-mp3-probe",
+            &tts,
+            &preview,
+            &SynthesizeTtsRequest {
+                text: "Testing real MP3 bitrate tiers and ffprobe readback on Windows 11."
+                    .to_string(),
+                voice_id,
+                rate: 1.0,
+                source_path: None,
+            },
+            &active,
+            |_| {},
+        )
+        .expect("synth ok");
+
+        if synth.sample_rate < 32_000 {
+            let bad_out = dir.path().join("should_not_exist_192.mp3");
+            let err_192 = export_tts_audio_impl(
+                &tts,
+                dir.path(),
+                &ExportTtsAudioRequest {
+                    result_id: synth.result_id.clone(),
+                    output_path: bad_out.to_string_lossy().into_owned(),
+                    source_path: None,
+                    format: TtsExportFormat::Mp3,
+                    mp3_bitrate_kbps: Some(192),
+                    overwrite: false,
+                },
+                &active,
+            )
+            .unwrap_err();
+            assert_eq!(err_192.code, "INVALID_PARAMETER");
+            assert!(!bad_out.exists());
+        }
+
+        let allowed = supported_mp3_bitrates_kbps(synth.sample_rate);
+        let low_tier = allowed[0];
+        let high_tier = *allowed.last().unwrap();
+
+        for tier in [low_tier, high_tier] {
+            let out_mp3 = dir.path().join(format!("speech_{tier}k.mp3"));
+            let exported = export_tts_audio_impl(
+                &tts,
+                dir.path(),
+                &ExportTtsAudioRequest {
+                    result_id: synth.result_id.clone(),
+                    output_path: out_mp3.to_string_lossy().into_owned(),
+                    source_path: None,
+                    format: TtsExportFormat::Mp3,
+                    mp3_bitrate_kbps: Some(tier),
+                    overwrite: false,
+                },
+                &active,
+            )
+            .expect("mp3 export ok");
+            assert_eq!(exported.format, TtsExportFormat::Mp3);
+            assert_eq!(exported.sample_rate, synth.sample_rate);
+            assert_eq!(exported.channels, synth.channels);
+            assert_eq!(exported.bitrate_kbps, Some(tier));
+            assert!(exported.byte_length > 512);
+        }
+
+        tts.cleanup_on_exit();
     }
 }

@@ -4614,6 +4614,8 @@ export interface SynthesizeTtsResult {
   wavByteLength: number;
   previewUrl: string;
   elapsedMs: number;
+  sourcePath: string | null;
+  supportedMp3BitratesKbps: number[];
 }
 
 export interface ExportTtsAudioRequest {
@@ -4631,7 +4633,30 @@ export interface ExportTtsAudioResult {
   durationSec: number;
   sampleRate: number;
   channels: number;
+  bitrateKbps: number | null;
   byteLength: number;
+}
+
+export function getSupportedTtsMp3Bitrates(sampleRate: number | null | undefined): number[] {
+  const sr = typeof sampleRate === "number" && Number.isFinite(sampleRate) ? sampleRate : 16_000;
+  if (sr < 16_000) {
+    return [32, 48, 64];
+  }
+  if (sr < 32_000) {
+    return [64, 96, 128, 160];
+  }
+  return [128, 192, 256];
+}
+
+export function getDefaultTtsMp3Bitrate(sampleRate: number | null | undefined): number {
+  const sr = typeof sampleRate === "number" && Number.isFinite(sampleRate) ? sampleRate : 16_000;
+  if (sr < 16_000) {
+    return 64;
+  }
+  if (sr < 32_000) {
+    return 128;
+  }
+  return 192;
 }
 
 export async function listTtsVoices(): Promise<TtsVoicesResponse> {

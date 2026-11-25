@@ -115,6 +115,8 @@ pub struct SynthesizeTtsResult {
     pub wav_byte_length: u64,
     pub preview_url: String,
     pub elapsed_ms: u64,
+    pub source_path: Option<String>,
+    pub supported_mp3_bitrates_kbps: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +145,49 @@ pub struct ExportTtsAudioResult {
     pub duration_sec: f64,
     pub sample_rate: u32,
     pub channels: u16,
+    pub bitrate_kbps: Option<u32>,
     pub byte_length: u64,
+}
+
+/// Returns the MPEG Layer III (`libmp3lame`) bitrate tiers (in kbps) that actually encode
+/// at the requested rate without silent clamping while preserving `sample_rate`:
+/// - MPEG-2.5 (`< 16,000 Hz`): `32`, `48`, `64`
+/// - MPEG-2 (`16,000..32,000 Hz`, e.g., WinRT 16 kHz / SAPI 22.05 kHz): `64`, `96`, `128`, `160`
+/// - MPEG-1 (`>= 32,000 Hz`, e.g., 32 / 44.1 / 48 kHz): `128`, `192`, `256`
+pub fn supported_mp3_bitrates_kbps(sample_rate: u32) -> &'static [u32] {
+    if sample_rate < 16_000 {
+        &[32, 48, 64]
+    } else if sample_rate < 32_000 {
+        &[64, 96, 128, 160]
+    } else {
+        &[128, 192, 256]
+    }
+}
+
+pub fn default_mp3_bitrate_kbps(sample_rate: u32) -> u32 {
+    if sample_rate < 16_000 {
+        64
+    } else if sample_rate < 32_000 {
+        128
+    } else {
+        192
+    }
+}
+
+pub fn resolve_mp3_bitrate_kbps(sample_rate: u32, requested: Option<u32>) -> Result<u32, AppError> {
+    let allowed = supported_mp3_bitrates_kbps(sample_rate);
+    match requested {
+        None => Ok(default_mp3_bitrate_kbps(sample_rate)),
+        Some(kbps) if allowed.contains(&kbps) => Ok(kbps),
+        Some(kbps) => Err(AppError::invalid_param(format!(
+            "MP3 bitrate {kbps} kbps is not supported at {sample_rate} Hz (available: {} kbps).",
+            allowed
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1279,6 +1323,33 @@ mod tests {
         assert_eq!(parsed.bits_per_sample, 16);
         assert_eq!(parsed.pcm_data.len(), pcm.len());
         assert!(compute_pcm16_rms(&parsed.pcm_data) > 0.1);
+    }
+
+    #[test]
+    fn mp3_bitrate_tiers_match_mpeg_sample_rate_limits() {
+        assert_eq!(supported_mp3_bitrates_kbps(8_000), &[32, 48, 64]);
+        assert_eq!(default_mp3_bitrate_kbps(11_025), 64);
+        assert_eq!(supported_mp3_bitrates_kbps(16_000), &[64, 96, 128, 160]);
+        assert_eq!(supported_mp3_bitrates_kbps(22_050), &[64, 96, 128, 160]);
+        assert_eq!(default_mp3_bitrate_kbps(16_000), 128);
+        assert_eq!(supported_mp3_bitrates_kbps(44_100), &[128, 192, 256]);
+        assert_eq!(default_mp3_bitrate_kbps(44_100), 192);
+
+        assert_eq!(resolve_mp3_bitrate_kbps(16_000, None).unwrap(), 128);
+        assert_eq!(resolve_mp3_bitrate_kbps(16_000, Some(160)).unwrap(), 160);
+        assert_eq!(
+            resolve_mp3_bitrate_kbps(16_000, Some(192))
+                .unwrap_err()
+                .code,
+            "INVALID_PARAMETER"
+        );
+        assert_eq!(
+            resolve_mp3_bitrate_kbps(22_050, Some(256))
+                .unwrap_err()
+                .code,
+            "INVALID_PARAMETER"
+        );
+        assert_eq!(resolve_mp3_bitrate_kbps(44_100, Some(256)).unwrap(), 256);
     }
 
     #[cfg(windows)]

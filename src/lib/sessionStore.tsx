@@ -104,6 +104,8 @@ import {
   convertImagesBatch,
   createArchive,
   extractArchivesBatch,
+  getDefaultTtsMp3Bitrate,
+  getSupportedTtsMp3Bitrates,
   inspectBeautifierSourceImage,
   listTtsVoices,
   parseBackendError,
@@ -1151,7 +1153,7 @@ const INITIAL_SESSION_STATE: SessionWorkspaces = {
     result: null,
     errorMessage: null,
     exportFormat: "wav",
-    mp3BitrateKbps: 192,
+    mp3BitrateKbps: 128,
     lastSavedMessage: null,
     lastSavedPath: null,
   },
@@ -1674,6 +1676,7 @@ export function SessionStoreProvider({
   const activeMattingTaskRef = useRef<string | null>(null);
   const ttsRunSeqRef = useRef(1);
   const ttsSourceGenRef = useRef(0);
+  const ttsFileLoadSeqRef = useRef(0);
   const ttsVoiceRefreshSeqRef = useRef(0);
   const activeTtsTaskRef = useRef<string | null>(null);
 
@@ -3209,63 +3212,59 @@ export function SessionStoreProvider({
 
   const loadTextToSpeechFile = useCallback(
     async (rawPath: string, formatError: (err: unknown) => string): Promise<boolean> => {
-      const gen = ++ttsSourceGenRef.current;
+      const loadSeq = ++ttsFileLoadSeqRef.current;
       setSession((prev) => ({
         ...prev,
         textToSpeech: {
           ...prev.textToSpeech,
-          sourceGeneration: gen,
           loadingFile: true,
-          errorMessage: null,
         },
       }));
       try {
+        // Validate & read candidate file BEFORE bumping sourceGeneration or touching the active task.
+        // If reading fails, existing text, audition result, and any running synthesis remain intact.
         const payload = await readLocalTextFile(rawPath);
-        if (ttsSourceGenRef.current !== gen) {
+        if (ttsFileLoadSeqRef.current !== loadSeq) {
           return false;
         }
+        const nextGen = ++ttsSourceGenRef.current;
         const runningId = activeTtsTaskRef.current;
         if (runningId) {
           activeTtsTaskRef.current = null;
           void cancelBackendTask(runningId);
         }
         void clearTtsSession();
-        setSession((prev) => {
-          if (prev.textToSpeech.sourceGeneration !== gen) return prev;
-          return {
-            ...prev,
-            textToSpeech: {
-              ...prev.textToSpeech,
-              loadingFile: false,
-              text: payload.content,
-              sourceFilePath: payload.path,
-              sourceFileName: payload.fileName,
-              status: "idle",
-              activeTaskId: null,
-              liveProgress: null,
-              result: null,
-              errorMessage: null,
-              lastSavedMessage: null,
-              lastSavedPath: null,
-            },
-          };
-        });
+        setSession((prev) => ({
+          ...prev,
+          textToSpeech: {
+            ...prev.textToSpeech,
+            sourceGeneration: nextGen,
+            loadingFile: false,
+            text: payload.content,
+            sourceFilePath: payload.path,
+            sourceFileName: payload.fileName,
+            status: "idle",
+            activeTaskId: null,
+            liveProgress: null,
+            result: null,
+            errorMessage: null,
+            lastSavedMessage: null,
+            lastSavedPath: null,
+          },
+        }));
         return true;
       } catch (err) {
-        if (ttsSourceGenRef.current !== gen) {
+        if (ttsFileLoadSeqRef.current !== loadSeq) {
           return false;
         }
-        setSession((prev) => {
-          if (prev.textToSpeech.sourceGeneration !== gen) return prev;
-          return {
-            ...prev,
-            textToSpeech: {
-              ...prev.textToSpeech,
-              loadingFile: false,
-              errorMessage: formatError(err),
-            },
-          };
-        });
+        setSession((prev) => ({
+          ...prev,
+          textToSpeech: {
+            ...prev.textToSpeech,
+            loadingFile: false,
+            errorMessage: formatError(err),
+          },
+        }));
         return false;
       }
     },
@@ -3280,15 +3279,13 @@ export function SessionStoreProvider({
       if (activeTtsTaskRef.current) {
         return null;
       }
-      const gen = ++ttsSourceGenRef.current;
+      const runGen = ttsSourceGenRef.current;
       const taskId = `t06-tts-${Date.now()}-${ttsRunSeqRef.current++}`;
       activeTtsTaskRef.current = taskId;
       setSession((prev) => ({
         ...prev,
         textToSpeech: {
           ...prev.textToSpeech,
-          sourceGeneration: gen,
-          loadingFile: false,
           status: "running",
           activeTaskId: taskId,
           liveProgress: {
@@ -3305,12 +3302,19 @@ export function SessionStoreProvider({
       }));
       try {
         const res = await synthesizeTtsSpeech(taskId, req);
-        if (activeTtsTaskRef.current !== taskId || ttsSourceGenRef.current !== gen) {
+        if (activeTtsTaskRef.current !== taskId || ttsSourceGenRef.current !== runGen) {
           return null;
         }
         activeTtsTaskRef.current = null;
         setSession((prev) => {
-          if (prev.textToSpeech.sourceGeneration !== gen) return prev;
+          if (prev.textToSpeech.sourceGeneration !== runGen) return prev;
+          const allowedBitrates =
+            res.supportedMp3BitratesKbps?.length > 0
+              ? res.supportedMp3BitratesKbps
+              : getSupportedTtsMp3Bitrates(res.sampleRate);
+          const nextBitrate = allowedBitrates.includes(prev.textToSpeech.mp3BitrateKbps)
+            ? prev.textToSpeech.mp3BitrateKbps
+            : getDefaultTtsMp3Bitrate(res.sampleRate);
           return {
             ...prev,
             textToSpeech: {
@@ -3319,19 +3323,19 @@ export function SessionStoreProvider({
               activeTaskId: null,
               liveProgress: null,
               result: res,
-              errorMessage: null,
+              mp3BitrateKbps: nextBitrate,
             },
           };
         });
         return res;
       } catch (err) {
-        if (activeTtsTaskRef.current !== taskId || ttsSourceGenRef.current !== gen) {
+        if (activeTtsTaskRef.current !== taskId || ttsSourceGenRef.current !== runGen) {
           return null;
         }
         activeTtsTaskRef.current = null;
         const parsed = parseBackendError(err);
         setSession((prev) => {
-          if (prev.textToSpeech.sourceGeneration !== gen) return prev;
+          if (prev.textToSpeech.sourceGeneration !== runGen) return prev;
           return {
             ...prev,
             textToSpeech: {
@@ -3362,6 +3366,7 @@ export function SessionStoreProvider({
   }, []);
 
   const clearTextToSpeechSession = useCallback(() => {
+    ttsFileLoadSeqRef.current += 1;
     const gen = ++ttsSourceGenRef.current;
     const runningId = activeTtsTaskRef.current;
     if (runningId) {

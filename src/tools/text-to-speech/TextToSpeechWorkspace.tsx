@@ -21,6 +21,8 @@ import {
   bindDisposableListener,
   exportTtsAudio,
   formatLocalizedError,
+  getDefaultTtsMp3Bitrate,
+  getSupportedTtsMp3Bitrates,
   openLocalDirectory,
   openWindowsSpeechSettings,
   parseBackendError,
@@ -39,7 +41,6 @@ import "../media-shared/mediaWorkspace.css";
 import "./textToSpeech.css";
 
 const RATE_PRESETS = [0.75, 1.0, 1.25, 1.5];
-const MP3_BITRATE_PRESETS = [128, 192, 256];
 const EST_CHUNK_MAX_CHARS = 500;
 
 interface PendingOverwriteExport {
@@ -136,6 +137,24 @@ export function TextToSpeechWorkspace() {
   const mountedRef = useRef(true);
   const exportSeqRef = useRef(0);
 
+  const availableMp3Bitrates = useMemo(() => {
+    const reported = state.result?.supportedMp3BitratesKbps;
+    if (reported && reported.length > 0) {
+      return reported;
+    }
+    return getSupportedTtsMp3Bitrates(state.result?.sampleRate);
+  }, [state.result]);
+
+  const effectiveMp3BitrateKbps = useMemo(() => {
+    if (availableMp3Bitrates.includes(state.mp3BitrateKbps)) {
+      return state.mp3BitrateKbps;
+    }
+    const fallback = getDefaultTtsMp3Bitrate(state.result?.sampleRate);
+    return availableMp3Bitrates.includes(fallback)
+      ? fallback
+      : (availableMp3Bitrates[availableMp3Bitrates.length - 1] ?? 128);
+  }, [availableMp3Bitrates, state.mp3BitrateKbps, state.result?.sampleRate]);
+
   const exportBindingKey = useMemo(() => {
     if (!state.result) return null;
     return JSON.stringify({
@@ -143,14 +162,14 @@ export function TextToSpeechWorkspace() {
       resultId: state.result.resultId,
       sourceFilePath: state.sourceFilePath,
       exportFormat: state.exportFormat,
-      mp3BitrateKbps: state.exportFormat === "mp3" ? state.mp3BitrateKbps : null,
+      mp3BitrateKbps: state.exportFormat === "mp3" ? effectiveMp3BitrateKbps : null,
     });
   }, [
     state.sourceGeneration,
     state.result,
     state.sourceFilePath,
     state.exportFormat,
-    state.mp3BitrateKbps,
+    effectiveMp3BitrateKbps,
   ]);
 
   const liveExportBindingRef = useRef<string | null>(exportBindingKey);
@@ -192,8 +211,10 @@ export function TextToSpeechWorkspace() {
   const loadTxtFile = useCallback(
     async (rawPath: string) => {
       setLocalError(null);
-      setPendingOverwrite(null);
-      await loadTextToSpeechFile(rawPath, (err) => formatLocalizedError(err, t));
+      const switched = await loadTextToSpeechFile(rawPath, (err) => formatLocalizedError(err, t));
+      if (switched && mountedRef.current) {
+        setPendingOverwrite(null);
+      }
     },
     [loadTextToSpeechFile, t],
   );
@@ -296,11 +317,16 @@ export function TextToSpeechWorkspace() {
       const saved = await exportTtsAudio(req);
       if (!isExportStillCurrent(bindingKey, seq)) return;
       setPendingOverwrite(null);
+      const savedRate = formatSampleRate(saved.sampleRate);
+      const bitrateSegment =
+        saved.format === "mp3" && saved.bitrateKbps ? `，${saved.bitrateKbps} kbps` : "";
+      const bitrateSegmentEn =
+        saved.format === "mp3" && saved.bitrateKbps ? `, ${saved.bitrateKbps} kbps` : "";
       updateTextToSpeechSession({
         lastSavedPath: saved.outputPath,
         lastSavedMessage: isZh
-          ? `已保存 ${saved.format.toUpperCase()}（${formatDuration(saved.durationSec)}，${formatMediaBytes(saved.byteLength, locale)}）：${saved.outputPath}`
-          : `Saved ${saved.format.toUpperCase()} (${formatDuration(saved.durationSec)}, ${formatMediaBytes(saved.byteLength, locale)}): ${saved.outputPath}`,
+          ? `已保存 ${saved.format.toUpperCase()}（${formatDuration(saved.durationSec)}，${savedRate}${bitrateSegment}，${formatMediaBytes(saved.byteLength, locale)}）：${saved.outputPath}`
+          : `Saved ${saved.format.toUpperCase()} (${formatDuration(saved.durationSec)}, ${savedRate}${bitrateSegmentEn}, ${formatMediaBytes(saved.byteLength, locale)}): ${saved.outputPath}`,
       });
     } catch (err) {
       if (!isExportStillCurrent(bindingKey, seq)) return;
@@ -331,7 +357,7 @@ export function TextToSpeechWorkspace() {
     const sourcePathSnapshot = state.sourceFilePath;
     const sourceFileNameSnapshot = state.sourceFileName;
     const formatSnapshot = state.exportFormat;
-    const bitrateSnapshot = state.mp3BitrateKbps;
+    const bitrateSnapshot = effectiveMp3BitrateKbps;
 
     setLocalError(null);
     const ext = formatSnapshot === "mp3" ? "mp3" : "wav";
@@ -825,11 +851,11 @@ export function TextToSpeechWorkspace() {
                   <span className="field-hint" style={{ margin: 0 }}>
                     {isZh ? "MP3 码率" : "MP3 Bitrate"}
                   </span>
-                  {MP3_BITRATE_PRESETS.map((kbps) => (
+                  {availableMp3Bitrates.map((kbps) => (
                     <button
                       key={kbps}
                       type="button"
-                      className={`tts-chip-btn mono ${state.mp3BitrateKbps === kbps ? "is-active" : ""}`}
+                      className={`tts-chip-btn mono ${effectiveMp3BitrateKbps === kbps ? "is-active" : ""}`}
                       onClick={() => updateTextToSpeechSession({ mp3BitrateKbps: kbps })}
                       data-testid={`t06-bitrate-${kbps}`}
                     >

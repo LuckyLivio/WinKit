@@ -96,6 +96,8 @@ const SAMPLE_TTS_RESULT: SynthesizeTtsResult = {
   wavByteLength: 153644,
   previewUrl: "http://winkitmedia.localhost/preview/tts-1",
   elapsedMs: 120,
+  sourcePath: null,
+  supportedMp3BitratesKbps: [64, 96, 128, 160],
 };
 
 const MISSING_FFMPEG: MediaToolsStatus = {
@@ -183,6 +185,7 @@ describe("TextToSpeechWorkspace (T06)", () => {
       durationSec: 4.8,
       sampleRate: 16000,
       channels: 1,
+      bitrateKbps: null,
       byteLength: 153644,
     });
 
@@ -250,6 +253,7 @@ describe("TextToSpeechWorkspace (T06)", () => {
         durationSec: 4.8,
         sampleRate: 16000,
         channels: 1,
+        bitrateKbps: null,
         byteLength: 153644,
       });
 
@@ -267,8 +271,10 @@ describe("TextToSpeechWorkspace (T06)", () => {
     await user.click(screen.getByTestId("t06-fmt-mp3"));
     rejectFirstExport({ code: "TARGET_ALREADY_EXISTS", message: "Exists" });
     await waitFor(() => {
-      expect(screen.getByTestId("t06-bitrate-192")).toBeInTheDocument();
+      expect(screen.getByTestId("t06-bitrate-160")).toBeInTheDocument();
     });
+    expect(screen.queryByTestId("t06-bitrate-192")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("t06-bitrate-256")).not.toBeInTheDocument();
     expect(screen.queryByText("覆盖已存在的音频文件？")).not.toBeInTheDocument();
 
     // Switch back to WAV, hit TARGET_ALREADY_EXISTS cleanly, and confirm overwrite
@@ -342,5 +348,182 @@ describe("TextToSpeechWorkspace (T06)", () => {
     expect(bridge.clearTtsSession).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("t06-text-input")).toHaveValue("");
     expect(screen.queryByTestId("t06-audio-player")).not.toBeInTheDocument();
+  });
+
+  it("keeps running synthesis intact when dropping an unreadable TXT and allows subsequent synthesis and export", async () => {
+    const user = userEvent.setup();
+    vi.mocked(bridge.listTtsVoices).mockResolvedValue(BILINGUAL_VOICES);
+
+    let onDropPaths!: (paths: string[]) => void;
+    vi.mocked(bridge.subscribeFileDrop).mockImplementation(async ({ onDropPaths: cb }) => {
+      onDropPaths = cb;
+      return () => {};
+    });
+
+    let resolveFirstSynth!: (value: SynthesizeTtsResult) => void;
+    vi.mocked(bridge.synthesizeTtsSpeech)
+      .mockImplementationOnce(
+        () =>
+          new Promise<SynthesizeTtsResult>((resolve) => {
+            resolveFirstSynth = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        ...SAMPLE_TTS_RESULT,
+        resultId: "tts-2",
+      });
+
+    vi.mocked(bridge.readLocalTextFile).mockRejectedValueOnce({
+      code: "PERMISSION_DENIED",
+      message: "Unreadable TXT",
+    });
+    vi.mocked(bridge.pickSaveFilePath).mockResolvedValue("C:\\Out\\after_failed_drop.wav");
+    vi.mocked(bridge.exportTtsAudio).mockResolvedValue({
+      outputPath: "C:\\Out\\after_failed_drop.wav",
+      format: "wav",
+      durationSec: 4.8,
+      sampleRate: 16000,
+      channels: 1,
+      bitrateKbps: null,
+      byteLength: 153644,
+    });
+
+    renderWorkspace();
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-voice-select")).toHaveValue("winrt::huihui");
+    });
+
+    await user.type(screen.getByTestId("t06-text-input"), "正在合成中的原始稿件。");
+    await user.click(screen.getByTestId("t06-start-btn"));
+    await waitFor(() => expect(screen.getByTestId("t06-cancel-btn")).toBeInTheDocument());
+
+    // Drop unreadable TXT while synthesis is running
+    onDropPaths(["C:\\Docs\\unreadable.txt"]);
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-error-banner")).toBeInTheDocument();
+    });
+    // Original draft & active running task must remain untouched (no cancel sent!)
+    expect(screen.getByTestId("t06-text-input")).toHaveValue("正在合成中的原始稿件。");
+    expect(screen.getByTestId("t06-cancel-btn")).toBeInTheDocument();
+    expect(bridge.cancelBackendTask).not.toHaveBeenCalled();
+
+    // Original synthesis completes cleanly and releases running state
+    resolveFirstSynth(SAMPLE_TTS_RESULT);
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument();
+      expect(screen.getByTestId("t06-start-btn")).toBeEnabled();
+      expect(screen.getByTestId("t06-export-btn")).toBeEnabled();
+    });
+
+    // Subsequent re-synthesis and export both succeed
+    await user.click(screen.getByTestId("t06-start-btn"));
+    await waitFor(() => expect(bridge.synthesizeTtsSpeech).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByTestId("t06-export-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-saved-banner")).toHaveTextContent("after_failed_drop.wav");
+    });
+  });
+
+  it("shows only supported MP3 bitrate tiers for the audio sample rate and reports real probed parameters", async () => {
+    const user = userEvent.setup();
+    vi.mocked(bridge.listTtsVoices).mockResolvedValue(BILINGUAL_VOICES);
+    vi.mocked(bridge.getMediaToolsStatus).mockResolvedValue(READY_FFMPEG);
+    vi.mocked(bridge.synthesizeTtsSpeech).mockResolvedValue({
+      ...SAMPLE_TTS_RESULT,
+      sampleRate: 22050,
+      supportedMp3BitratesKbps: [64, 96, 128, 160],
+    });
+    vi.mocked(bridge.pickSaveFilePath).mockResolvedValue("C:\\Out\\speech_160.mp3");
+    vi.mocked(bridge.exportTtsAudio).mockResolvedValue({
+      outputPath: "C:\\Out\\speech_160.mp3",
+      format: "mp3",
+      durationSec: 4.8,
+      sampleRate: 22050,
+      channels: 1,
+      bitrateKbps: 160,
+      byteLength: 96420,
+    });
+
+    renderWorkspace();
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-voice-select")).toHaveValue("winrt::huihui");
+    });
+    await user.type(screen.getByTestId("t06-text-input"), "MP3 档位与回读参数验证。");
+    await user.click(screen.getByTestId("t06-start-btn"));
+    await waitFor(() => expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument());
+
+    await user.click(screen.getByTestId("t06-fmt-mp3"));
+    expect(screen.getByTestId("t06-bitrate-64")).toBeInTheDocument();
+    expect(screen.getByTestId("t06-bitrate-96")).toBeInTheDocument();
+    expect(screen.getByTestId("t06-bitrate-128")).toBeInTheDocument();
+    expect(screen.getByTestId("t06-bitrate-160")).toBeInTheDocument();
+    expect(screen.queryByTestId("t06-bitrate-192")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("t06-bitrate-256")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("t06-bitrate-160"));
+    await user.click(screen.getByTestId("t06-export-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-saved-banner")).toHaveTextContent("22.05 kHz");
+      expect(screen.getByTestId("t06-saved-banner")).toHaveTextContent("160 kbps");
+    });
+    expect(bridge.exportTtsAudio).toHaveBeenCalledWith(
+      expect.objectContaining({
+        format: "mp3",
+        mp3BitrateKbps: 160,
+      }),
+    );
+  });
+
+  it("blocks exporting old audio onto original A.txt after pasting replacement text without popping overwrite dialog", async () => {
+    const user = userEvent.setup();
+    vi.mocked(bridge.listTtsVoices).mockResolvedValue(BILINGUAL_VOICES);
+    vi.mocked(bridge.pickSingleFile).mockResolvedValue("C:\\Docs\\A.txt");
+    vi.mocked(bridge.readLocalTextFile).mockResolvedValue({
+      path: "C:\\Docs\\A.txt",
+      fileName: "A.txt",
+      byteLength: 24,
+      content: "Original file A content.",
+    });
+    vi.mocked(bridge.synthesizeTtsSpeech).mockResolvedValue({
+      ...SAMPLE_TTS_RESULT,
+      sourcePath: "C:\\Docs\\A.txt",
+    });
+    vi.mocked(bridge.readSystemClipboardText).mockResolvedValue("Pasted replacement text.");
+    vi.mocked(bridge.pickSaveFilePath).mockResolvedValue("C:\\Docs\\A.txt");
+    vi.mocked(bridge.exportTtsAudio).mockRejectedValue({
+      code: "SAME_INPUT_AND_OUTPUT",
+      message: "Output path cannot overwrite the source file.",
+    });
+
+    renderWorkspace();
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-voice-select")).toHaveValue("winrt::huihui");
+    });
+
+    // Import A.txt -> Synthesize
+    await user.click(screen.getByTestId("t06-open-txt-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-source-file-badge")).toHaveTextContent("A.txt");
+    });
+    await user.click(screen.getByTestId("t06-start-btn"));
+    await waitFor(() => expect(screen.getByTestId("t06-audio-player")).toBeInTheDocument());
+    expect(bridge.synthesizeTtsSpeech).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ sourcePath: "C:\\Docs\\A.txt" }),
+    );
+
+    // Click Paste -> replaces text and clears editor sourceFilePath
+    await user.click(screen.getByTestId("t06-paste-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-text-input")).toHaveValue("Pasted replacement text.");
+    });
+    expect(screen.queryByTestId("t06-source-file-badge")).not.toBeInTheDocument();
+
+    // Try saving old audio onto A.txt -> rejected immediately, no overwrite dialog
+    await user.click(screen.getByTestId("t06-export-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("t06-error-banner")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("覆盖已存在的音频文件？")).not.toBeInTheDocument();
   });
 });
