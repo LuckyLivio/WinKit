@@ -9,21 +9,19 @@ import {
   Save,
   Stamp,
   Upload,
+  Wand2,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { MediaToolsSetupPanel } from "../../components/MediaToolsSetupPanel";
 import { useI18n } from "../../i18n/I18nContext";
 import { useMediaSession } from "../../lib/mediaSessionStore";
 import {
   bindDisposableListener,
-  extractMediaPosterDataUrl,
   formatLocalizedError,
   openLocalDirectory,
-  parseSubtitleFile,
   pickSaveFilePath,
   pickSingleFile,
-  previewBurnedSubtitleFrame,
-  probeMediaInfo,
   subscribeFileDrop,
   type MediaToolsStatus,
   type SubtitleBoxStyle,
@@ -44,6 +42,14 @@ import "../media-shared/mediaWorkspace.css";
 
 const SUBTITLE_EXTENSIONS = ["srt", "vtt"];
 
+interface PendingBurnOverwriteConfirm {
+  videoPath: string;
+  subtitlePath: string;
+  outputPath: string;
+  style: SubtitleBurnStyle;
+  sourceGeneration: number;
+}
+
 function buildDefaultSubtitledOutputPath(videoPath: string): string {
   const { ext } = getFileStemAndExt(videoPath);
   const cleanExt = ext.toLowerCase();
@@ -57,24 +63,37 @@ export function VideoSubtitlesWorkspace() {
   const {
     mediaSession,
     updateVideoSubtitlesSession,
+    renderVideoSubtitlesPreview,
+    loadVideoSubtitlesVideo,
+    loadVideoSubtitlesSubtitle,
+    loadVideoSubtitlesPair,
     startVideoSubtitlesTask,
     cancelVideoSubtitlesTask,
     handoffMediaFileToTool,
     pendingHandoff,
     consumePendingHandoff,
+    pendingV02PairHandoff,
+    consumePendingV02PairHandoff,
   } = useMediaSession();
 
   const state = mediaSession.videoSubtitles;
   const running = state.taskStatus === "running";
+  const loadingVideo = state.loadingVideo;
+  const loadingSubtitle = state.loadingSubtitle;
+  const loadingPair = state.loadingPair;
 
   const [toolsStatus, setToolsStatus] = useState<MediaToolsStatus | null>(null);
   const [hovering, setHovering] = useState(false);
-  const [loadingVideo, setLoadingVideo] = useState(false);
-  const [loadingSubtitle, setLoadingSubtitle] = useState(false);
-  const previewSeqRef = useRef(0);
+  const [pendingOverwrite, setPendingOverwrite] = useState<PendingBurnOverwriteConfirm | null>(
+    null,
+  );
 
   const primaryVideo = state.videoProbe?.videoStreams[0] ?? null;
   const durationSec = state.videoProbe?.durationSec ?? 0;
+  const formatError = useCallback((err: unknown) => formatLocalizedError(err, t), [t]);
+  const noVideoMessage = isZh
+    ? "所选文件不包含视频画面流。"
+    : "Selected file does not contain a video stream.";
 
   const currentStyle = useCallback(
     (): SubtitleBurnStyle => ({
@@ -86,149 +105,88 @@ export function VideoSubtitlesWorkspace() {
     [state.fontSize, state.position, state.boxStyle, state.marginV],
   );
 
-  const renderPreviewAt = useCallback(
-    async (
-      videoPath: string,
-      subtitlePath: string,
-      timestampSec: number,
-      style: SubtitleBurnStyle,
-      cueIndex: number | null,
-    ) => {
-      const seq = ++previewSeqRef.current;
-      updateVideoSubtitlesSession((prev) => ({
-        ...prev,
-        selectedCueIndex: cueIndex,
-        previewTimestampSec: timestampSec,
-        previewLoading: true,
-        previewError: null,
-      }));
-      try {
-        const res = await previewBurnedSubtitleFrame({
-          videoPath,
-          subtitlePath,
-          timestampSec,
-          style,
-        });
-        if (previewSeqRef.current !== seq) return;
-        updateVideoSubtitlesSession((prev) => ({
-          ...prev,
-          previewFrame: res,
-          previewLoading: false,
-          previewError: null,
-        }));
-      } catch (err) {
-        if (previewSeqRef.current !== seq) return;
-        updateVideoSubtitlesSession((prev) => ({
-          ...prev,
-          previewLoading: false,
-          previewError: formatLocalizedError(err, t),
-        }));
+  // Invalidate any pending overwrite confirmation if inputs, target path, style, or load/run state change.
+  useEffect(() => {
+    setPendingOverwrite((pending) => {
+      if (!pending) return null;
+      if (
+        running ||
+        loadingVideo ||
+        loadingSubtitle ||
+        loadingPair ||
+        pending.sourceGeneration !== state.sourceGeneration ||
+        pending.videoPath !== state.videoPath ||
+        pending.subtitlePath !== state.subtitlePath ||
+        pending.outputPath !== state.outputPath.trim() ||
+        pending.style.fontSize !== state.fontSize ||
+        pending.style.position !== state.position ||
+        pending.style.boxStyle !== state.boxStyle ||
+        pending.style.marginV !== state.marginV
+      ) {
+        return null;
       }
-    },
-    [t, updateVideoSubtitlesSession],
-  );
+      return pending;
+    });
+  }, [
+    running,
+    loadingVideo,
+    loadingSubtitle,
+    loadingPair,
+    state.sourceGeneration,
+    state.videoPath,
+    state.subtitlePath,
+    state.outputPath,
+    state.fontSize,
+    state.position,
+    state.boxStyle,
+    state.marginV,
+  ]);
 
   const loadVideo = useCallback(
     async (filePath: string) => {
       if (running) return;
-      setLoadingVideo(true);
-      updateVideoSubtitlesSession((prev) => ({
-        ...prev,
-        videoPath: filePath,
-        videoProbe: null,
-        posterUrl: null,
-        previewFrame: null,
-        previewError: null,
-        lastResult: null,
-        errorMessage: null,
-      }));
-      try {
-        const probe = await probeMediaInfo(filePath);
-        if (!probe.hasVideo) {
-          throw new Error(
-            isZh ? "所选文件不包含视频画面流。" : "Selected file does not contain a video stream.",
-          );
-        }
-        const poster = await extractMediaPosterDataUrl(filePath, 0.25).catch(() => null);
-        const outPath = buildDefaultSubtitledOutputPath(filePath);
-        updateVideoSubtitlesSession((prev) => ({
-          ...prev,
-          videoPath: filePath,
-          videoProbe: probe,
-          posterUrl: poster,
-          outputPath: outPath,
-          lastResult: null,
-          errorMessage: null,
-        }));
-        if (state.subtitlePath && state.parsedSubtitle && state.parsedSubtitle.cues.length > 0) {
-          const firstCue = state.parsedSubtitle.cues[0]!;
-          const mid = (firstCue.startSec + firstCue.endSec) / 2;
-          await renderPreviewAt(filePath, state.subtitlePath, mid, currentStyle(), firstCue.index);
-        }
-      } catch (err) {
-        updateVideoSubtitlesSession((prev) => ({
-          ...prev,
-          errorMessage: formatLocalizedError(err, t),
-        }));
-      } finally {
-        setLoadingVideo(false);
-      }
+      await loadVideoSubtitlesVideo(filePath, formatError, noVideoMessage);
     },
-    [
-      currentStyle,
-      isZh,
-      renderPreviewAt,
-      running,
-      state.parsedSubtitle,
-      state.subtitlePath,
-      t,
-      updateVideoSubtitlesSession,
-    ],
+    [formatError, loadVideoSubtitlesVideo, noVideoMessage, running],
   );
 
   const loadSubtitle = useCallback(
     async (filePath: string) => {
       if (running) return;
-      setLoadingSubtitle(true);
-      updateVideoSubtitlesSession((prev) => ({
-        ...prev,
-        subtitlePath: filePath,
-        parsedSubtitle: null,
-        subtitleParseError: null,
-        selectedCueIndex: null,
-        previewFrame: null,
-        previewError: null,
-        lastResult: null,
-      }));
-      try {
-        const parsed = await parseSubtitleFile(filePath);
-        const firstCue = parsed.cues[0] ?? null;
-        const mid = firstCue ? (firstCue.startSec + firstCue.endSec) / 2 : 0;
-        updateVideoSubtitlesSession((prev) => ({
-          ...prev,
-          subtitlePath: filePath,
-          parsedSubtitle: parsed,
-          subtitleParseError: null,
-          selectedCueIndex: firstCue?.index ?? null,
-          previewTimestampSec: mid,
-        }));
-        if (state.videoPath && firstCue) {
-          await renderPreviewAt(state.videoPath, filePath, mid, currentStyle(), firstCue.index);
-        }
-      } catch (err) {
-        updateVideoSubtitlesSession((prev) => ({
-          ...prev,
-          parsedSubtitle: null,
-          subtitleParseError: formatLocalizedError(err, t),
-        }));
-      } finally {
-        setLoadingSubtitle(false);
-      }
+      await loadVideoSubtitlesSubtitle(filePath, formatError);
     },
-    [currentStyle, renderPreviewAt, running, state.videoPath, t, updateVideoSubtitlesSession],
+    [formatError, loadVideoSubtitlesSubtitle, running],
   );
 
+  const loadPair = useCallback(
+    async (
+      videoPath: string,
+      subtitlePath: string,
+      options?: { clearPendingOnSuccess?: boolean },
+    ) => {
+      if (running) {
+        updateVideoSubtitlesSession((prev) => ({
+          ...prev,
+          pendingPairHandoff: { videoPath, subtitlePath },
+        }));
+        return;
+      }
+      await loadVideoSubtitlesPair(videoPath, subtitlePath, formatError, noVideoMessage, options);
+    },
+    [formatError, loadVideoSubtitlesPair, noVideoMessage, running, updateVideoSubtitlesSession],
+  );
+
+  // Atomic {videoPath, subtitlePath} pair handoff from T01 ("Apply to Source Video").
   useEffect(() => {
+    if (!pendingV02PairHandoff) return;
+    const pair = consumePendingV02PairHandoff();
+    if (!pair) return;
+    void loadPair(pair.videoPath, pair.subtitlePath);
+  }, [pendingV02PairHandoff, consumePendingV02PairHandoff, loadPair]);
+
+  // Single-file handoff (audio-only T01 SRT or video from another video tool).
+  useEffect(() => {
+    if (running || !pendingHandoff || pendingHandoff.toolId !== "V02") return;
     const handed = consumePendingHandoff("V02");
     if (handed) {
       const ext = getFileStemAndExt(handed).ext.toLowerCase();
@@ -238,7 +196,7 @@ export function VideoSubtitlesWorkspace() {
         void loadVideo(handed);
       }
     }
-  }, [pendingHandoff, consumePendingHandoff, loadSubtitle, loadVideo]);
+  }, [pendingHandoff, consumePendingHandoff, loadSubtitle, loadVideo, running]);
 
   useEffect(() => {
     return bindDisposableListener(
@@ -247,19 +205,28 @@ export function VideoSubtitlesWorkspace() {
           onHover: setHovering,
           onDropPaths: (paths) => {
             if (running || paths.length === 0) return;
+            let droppedVideo: string | null = null;
+            let droppedSub: string | null = null;
             for (const p of paths) {
               const ext = getFileStemAndExt(p).ext.toLowerCase();
               if (SUBTITLE_EXTENSIONS.includes(ext)) {
-                void loadSubtitle(p);
+                droppedSub = p;
               } else {
-                void loadVideo(p);
+                droppedVideo = p;
               }
+            }
+            if (droppedVideo && droppedSub) {
+              void loadPair(droppedVideo, droppedSub);
+            } else if (droppedSub) {
+              void loadSubtitle(droppedSub);
+            } else if (droppedVideo) {
+              void loadVideo(droppedVideo);
             }
           },
         }),
       "v02-file-drop",
     );
-  }, [loadSubtitle, loadVideo, running]);
+  }, [loadPair, loadSubtitle, loadVideo, running]);
 
   const handlePickVideo = async () => {
     if (running) return;
@@ -282,7 +249,15 @@ export function VideoSubtitlesWorkspace() {
   const handleSelectCue = async (cue: SubtitleCue) => {
     const mid = (cue.startSec + cue.endSec) / 2;
     if (state.videoPath && state.subtitlePath) {
-      await renderPreviewAt(state.videoPath, state.subtitlePath, mid, currentStyle(), cue.index);
+      await renderVideoSubtitlesPreview(
+        state.videoPath,
+        state.subtitlePath,
+        mid,
+        currentStyle(),
+        cue.index,
+        state.sourceGeneration,
+        formatError,
+      );
     } else {
       updateVideoSubtitlesSession((prev) => ({
         ...prev,
@@ -294,12 +269,14 @@ export function VideoSubtitlesWorkspace() {
 
   const handleRefreshPreview = async (overrideStyle?: SubtitleBurnStyle) => {
     if (!state.videoPath || !state.subtitlePath || !state.parsedSubtitle) return;
-    await renderPreviewAt(
+    await renderVideoSubtitlesPreview(
       state.videoPath,
       state.subtitlePath,
       state.previewTimestampSec,
       overrideStyle ?? currentStyle(),
       state.selectedCueIndex,
+      state.sourceGeneration,
+      formatError,
     );
   };
 
@@ -316,10 +293,21 @@ export function VideoSubtitlesWorkspace() {
     }
   };
 
+  const hasAudioTrack = Boolean(state.videoProbe?.hasAudio);
+  const canGenerateSubtitles = Boolean(
+    !running &&
+    !loadingVideo &&
+    !loadingPair &&
+    state.videoPath &&
+    state.videoProbe?.hasVideo &&
+    hasAudioTrack,
+  );
+
   const canExport =
     !running &&
     !loadingVideo &&
     !loadingSubtitle &&
+    !loadingPair &&
     (toolsStatus?.ready ?? true) &&
     !!state.videoPath &&
     !!state.videoProbe?.hasVideo &&
@@ -330,15 +318,57 @@ export function VideoSubtitlesWorkspace() {
 
   const handleExport = async () => {
     if (!canExport || !state.videoPath || !state.subtitlePath) return;
-    await startVideoSubtitlesTask(
+    const trimmedOutput = state.outputPath.trim();
+    const styleSnapshot = currentStyle();
+    const genSnapshot = state.sourceGeneration;
+    setPendingOverwrite(null);
+    const outcome = await startVideoSubtitlesTask(
       {
         videoPath: state.videoPath,
         subtitlePath: state.subtitlePath,
-        outputPath: state.outputPath.trim(),
-        style: currentStyle(),
+        outputPath: trimmedOutput,
+        style: styleSnapshot,
+        allowOverwrite: false,
+      },
+      formatError,
+    );
+    if (outcome.errorCode === "TARGET_ALREADY_EXISTS") {
+      setPendingOverwrite({
+        videoPath: state.videoPath,
+        subtitlePath: state.subtitlePath,
+        outputPath: trimmedOutput,
+        style: styleSnapshot,
+        sourceGeneration: genSnapshot,
+      });
+    }
+  };
+
+  const handleConfirmOverwrite = async () => {
+    const pending = pendingOverwrite;
+    setPendingOverwrite(null);
+    if (
+      !pending ||
+      running ||
+      pending.sourceGeneration !== state.sourceGeneration ||
+      pending.videoPath !== state.videoPath ||
+      pending.subtitlePath !== state.subtitlePath ||
+      pending.outputPath !== state.outputPath.trim() ||
+      pending.style.fontSize !== state.fontSize ||
+      pending.style.position !== state.position ||
+      pending.style.boxStyle !== state.boxStyle ||
+      pending.style.marginV !== state.marginV
+    ) {
+      return;
+    }
+    await startVideoSubtitlesTask(
+      {
+        videoPath: pending.videoPath,
+        subtitlePath: pending.subtitlePath,
+        outputPath: pending.outputPath,
+        style: pending.style,
         allowOverwrite: true,
       },
-      (err) => formatLocalizedError(err, t),
+      formatError,
     );
   };
 
@@ -357,16 +387,18 @@ export function VideoSubtitlesWorkspace() {
             >
               <Captions size={16} aria-hidden="true" />
               <span>
-                {isZh ? "视频烧录硬字幕（SRT / WebVTT）" : "Burn In Subtitles (SRT / WebVTT)"}
+                {isZh
+                  ? "视频自动字幕与硬字幕烧录（SRT / WebVTT）"
+                  : "Auto Subtitles & Burn-In (SRT / WebVTT)"}
               </span>
             </h2>
             <p className="field-hint" style={{ margin: "4px 0 0" }}>
               {isZh
-                ? "离线导入 SRT / WebVTT 字幕文件，点击任意一条字幕即可按实际字体与排版预览对应画面，并将硬字幕永久烧录到视频像素中（离线使用系统微软雅黑渲染中文）。自动语音转字幕保留至阶段 6。"
-                : "Import SRT or WebVTT files offline, click any cue to preview exact burned-in frames with built-in Windows CJK fonts, and permanently burn subtitles into video pixels. Auto transcription is planned for Phase 6."}
+                ? "可从当前含音轨视频一键跳转到「离线音视频转写 (T01)」生成并校对中英文字幕，回填原视频实时预览并烧录硬字幕；同时完整保留手动导入 SRT / WebVTT 字幕流程（离线使用系统微软雅黑渲染中文）。"
+                : "Generate and proofread bilingual subtitles offline via Media Transcription (T01) and apply them back to the source video for burned-in preview and export, or import SRT / WebVTT files manually."}
             </p>
           </div>
-          <div className="media-actions-row">
+          <div className="media-actions-row" style={{ flexWrap: "wrap" }}>
             <button
               type="button"
               className="btn"
@@ -383,6 +415,27 @@ export function VideoSubtitlesWorkspace() {
                     ? "选择视频…"
                     : "Choose Video..."}
               </span>
+            </button>
+            <button
+              type="button"
+              className={`btn ${canGenerateSubtitles && !state.parsedSubtitle ? "btn-primary" : ""}`}
+              disabled={!canGenerateSubtitles}
+              onClick={() => {
+                if (state.videoPath) {
+                  handoffMediaFileToTool("T01", state.videoPath, "V02");
+                }
+              }}
+              data-testid="v02-generate-subtitles-btn"
+              title={
+                state.videoProbe && !state.videoProbe.hasAudio
+                  ? isZh
+                    ? "当前视频不包含音轨，无法语音转字幕"
+                    : "Selected video has no audio stream"
+                  : undefined
+              }
+            >
+              <Wand2 size={14} aria-hidden="true" />
+              <span>{isZh ? "从当前视频生成字幕" : "Generate Subtitles from Video"}</span>
             </button>
             <button
               type="button"
@@ -403,6 +456,73 @@ export function VideoSubtitlesWorkspace() {
             </button>
           </div>
         </div>
+
+        {state.pendingPairHandoff && (
+          <div
+            className="status-banner"
+            role="status"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+              marginTop: "10px",
+            }}
+            data-testid="v02-pending-pair-banner"
+          >
+            <div style={{ fontWeight: 500 }}>
+              {running
+                ? isZh
+                  ? "已暂存来自「离线音视频转写 (T01)」的视频与字幕交接，不会打断当前烧录；任务完成或取消后可选择应用："
+                  : "Video & subtitle handoff from Media Transcription (T01) is queued without interrupting the active burn-in. You can apply it once finished or cancelled:"
+                : isZh
+                  ? "有待应用的视频与字幕交接（已保留当前烧录结果）："
+                  : "Pending video & subtitle handoff ready (current burn-in state preserved):"}
+            </div>
+            <div className="mono" style={{ fontSize: "12px", wordBreak: "break-all" }}>
+              <div>
+                {isZh ? "视频：" : "Video: "}
+                {state.pendingPairHandoff.videoPath}
+              </div>
+              <div>
+                {isZh ? "字幕：" : "Subtitle: "}
+                {state.pendingPairHandoff.subtitlePath}
+              </div>
+            </div>
+            <div className="media-actions-row">
+              {!running && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={loadingPair}
+                  onClick={() =>
+                    void loadPair(
+                      state.pendingPairHandoff!.videoPath,
+                      state.pendingPairHandoff!.subtitlePath,
+                      { clearPendingOnSuccess: true },
+                    )
+                  }
+                  data-testid="v02-load-pending-pair-btn"
+                >
+                  <span>{isZh ? "应用待处理视频与字幕" : "Apply Pending Video & Subtitles"}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={loadingPair}
+                onClick={() =>
+                  updateVideoSubtitlesSession((prev) => ({
+                    ...prev,
+                    pendingPairHandoff: null,
+                  }))
+                }
+                data-testid="v02-dismiss-pending-pair-btn"
+              >
+                <span>{isZh ? "放弃" : "Dismiss"}</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Main 2-column grid */}
         <div
@@ -617,25 +737,55 @@ export function VideoSubtitlesWorkspace() {
               <strong style={{ fontSize: "13px" }}>{isZh ? "输入文件" : "Inputs"}</strong>
               <div style={{ fontSize: "12px" }}>
                 <span className="field-hint">{isZh ? "视频：" : "Video: "}</span>
-                <span className="mono" style={{ wordBreak: "break-all" }}>
-                  {state.videoProbe?.fileName ??
-                    (loadingVideo ? (isZh ? "读取中…" : "Loading...") : isZh ? "未选择" : "None")}
+                <span
+                  className="mono"
+                  style={{ wordBreak: "break-all" }}
+                  data-testid="v02-video-name"
+                >
+                  {loadingPair
+                    ? isZh
+                      ? "正在校验视频与字幕…"
+                      : "Validating video & subtitles..."
+                    : loadingVideo
+                      ? isZh
+                        ? "读取中…"
+                        : "Loading..."
+                      : (state.videoProbe?.fileName ?? (isZh ? "未选择" : "None"))}
                 </span>
               </div>
               <div style={{ fontSize: "12px" }}>
                 <span className="field-hint">{isZh ? "字幕：" : "Subtitle: "}</span>
-                <span className="mono" style={{ wordBreak: "break-all" }}>
-                  {state.parsedSubtitle
-                    ? `${state.parsedSubtitle.fileName} (${state.parsedSubtitle.cueCount} ${isZh ? "条" : "cues"})`
+                <span
+                  className="mono"
+                  style={{ wordBreak: "break-all" }}
+                  data-testid="v02-subtitle-name"
+                >
+                  {loadingPair
+                    ? isZh
+                      ? "正在校验视频与字幕…"
+                      : "Validating video & subtitles..."
                     : loadingSubtitle
                       ? isZh
                         ? "解析中…"
                         : "Parsing..."
-                      : isZh
-                        ? "未导入 (.srt / .vtt)"
-                        : "None (.srt / .vtt)"}
+                      : state.parsedSubtitle
+                        ? `${state.parsedSubtitle.fileName} (${state.parsedSubtitle.cueCount} ${isZh ? "条" : "cues"})`
+                        : isZh
+                          ? "未导入 (.srt / .vtt)"
+                          : "None (.srt / .vtt)"}
                 </span>
               </div>
+              {state.videoProbe && !state.videoProbe.hasAudio && (
+                <div
+                  className="field-hint"
+                  style={{ fontSize: "11.5px" }}
+                  data-testid="v02-no-audio-hint"
+                >
+                  {isZh
+                    ? "当前视频不含音轨，无法离线语音转字幕；仍可手动导入 .srt / .vtt 字幕文件烧录。"
+                    : "This video has no audio stream for offline speech transcription; you can still import an .srt or .vtt subtitle file manually."}
+                </div>
+              )}
               {state.subtitleParseError && (
                 <div
                   className="inline-alert inline-alert-error"
@@ -916,7 +1066,7 @@ export function VideoSubtitlesWorkspace() {
         </div>
 
         {state.lastResult && (
-          <div className="media-result-card" style={{ marginTop: "12px" }}>
+          <div className="media-result-card" style={{ marginTop: "12px" }} data-testid="v02-result">
             <div className="media-section-header" style={{ flexWrap: "wrap", gap: "8px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <CheckCircle2 size={18} aria-hidden="true" />
@@ -969,6 +1119,23 @@ export function VideoSubtitlesWorkspace() {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={Boolean(pendingOverwrite)}
+        title={isZh ? "覆盖已有视频文件确认" : "Confirm Video Overwrite"}
+        body={
+          pendingOverwrite
+            ? isZh
+              ? `目标路径已存在文件：${pendingOverwrite.outputPath}。是否覆盖该文件？（绝不会覆盖源视频或源字幕文件）`
+              : `A file already exists at ${pendingOverwrite.outputPath}. Overwrite it? (Source video and subtitle files are always protected.)`
+            : ""
+        }
+        confirmLabel={isZh ? "确认覆盖" : "Overwrite"}
+        cancelLabel={isZh ? "取消" : "Cancel"}
+        danger
+        onConfirm={() => void handleConfirmOverwrite()}
+        onCancel={() => setPendingOverwrite(null)}
+      />
     </div>
   );
 }

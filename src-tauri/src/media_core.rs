@@ -1476,17 +1476,17 @@ impl AtomicMediaOutput {
             ));
         }
 
-        if !allow_overwrite && self.final_path.exists() {
-            return Err(AppError::target_exists());
-        }
-
-        if allow_overwrite && self.final_path.exists() {
-            fs::remove_file(&self.final_path)
-                .map_err(|e| AppError::from_io(e, "Unable to replace existing target file"))?;
-        }
-
-        fs::rename(&self.tmp_path, &self.final_path)
-            .map_err(|e| AppError::from_io(e, "Unable to finalize media output file"))?;
+        let context = if allow_overwrite {
+            "Unable to replace existing target file"
+        } else {
+            "Unable to finalize media output file"
+        };
+        crate::fs_guard::commit_temp_file(
+            &self.tmp_path,
+            &self.final_path,
+            allow_overwrite,
+            context,
+        )?;
         self.committed = true;
         Ok((self.final_path.clone(), meta.len()))
     }
@@ -1847,6 +1847,94 @@ mod tests {
         };
         assert!(!tmp_copy.exists());
         assert!(!dst.exists());
+    }
+
+    #[test]
+    fn atomic_media_output_no_overwrite_blocks_concurrent_target_and_cleans_tmp() {
+        use sha2::{Digest, Sha256};
+
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src.mp4");
+        fs::write(&src, b"source-video-bytes").unwrap();
+
+        let dst = dir.path().join("concurrent.mp4");
+        let guard = AtomicMediaOutput::prepare(dst.clone(), &src, false).unwrap();
+        let tmp_copy = guard.temp_path().to_path_buf();
+        fs::write(&tmp_copy, b"new-encoded-output").unwrap();
+
+        // Simulate a concurrent writer creating `dst` between `prepare()` and `commit(false)`
+        let concurrent_bytes = b"concurrently-created-target-must-survive";
+        fs::write(&dst, concurrent_bytes).unwrap();
+        let expected_hash = Sha256::digest(concurrent_bytes);
+
+        let err = guard.commit(false).unwrap_err();
+        assert_eq!(err.code, "TARGET_ALREADY_EXISTS");
+        assert_eq!(Sha256::digest(fs::read(&dst).unwrap()), expected_hash);
+        assert!(
+            !tmp_copy.exists(),
+            "temporary output must be removed when no-replace commit fails"
+        );
+    }
+
+    #[test]
+    fn atomic_media_output_overwrite_failure_preserves_target_hash_and_cleans_tmp() {
+        use sha2::{Digest, Sha256};
+
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src.mp4");
+        fs::write(&src, b"source-video-bytes").unwrap();
+
+        let dst = dir.path().join("existing.mp4");
+        let original_bytes = b"original-target-contents-must-remain-intact-on-failed-replace";
+        fs::write(&dst, original_bytes).unwrap();
+        let original_hash = Sha256::digest(original_bytes);
+
+        let guard = AtomicMediaOutput::prepare(dst.clone(), &src, true).unwrap();
+        let tmp_copy = guard.temp_path().to_path_buf();
+        fs::write(&tmp_copy, b"replacement-payload").unwrap();
+
+        // Force atomic replace failure while target exists:
+        // On Windows, hold `dst` open with FILE_SHARE_READ only (no FILE_SHARE_DELETE),
+        // which causes MoveFileExW(..., MOVEFILE_REPLACE_EXISTING) to fail without removing `dst`.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let locked_target = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1) // FILE_SHARE_READ (no FILE_SHARE_DELETE)
+                .open(&dst)
+                .expect("lock existing target");
+
+            let err = guard.commit(true).unwrap_err();
+            assert_ne!(err.code, "TARGET_ALREADY_EXISTS");
+            drop(locked_target);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = guard;
+        }
+
+        // Original target must still exist with the exact same hash, and temp file must be cleaned up!
+        assert!(
+            dst.is_file(),
+            "original target must not be deleted when replace fails"
+        );
+        assert_eq!(Sha256::digest(fs::read(&dst).unwrap()), original_hash);
+        assert!(
+            !tmp_copy.exists(),
+            "temporary output must be cleaned up after failed overwrite commit"
+        );
+
+        // Once unlocked, atomic replace succeeds cleanly and leaves no temp file behind.
+        let guard2 = AtomicMediaOutput::prepare(dst.clone(), &src, true).unwrap();
+        let tmp_copy2 = guard2.temp_path().to_path_buf();
+        let updated_bytes = b"confirmed-atomic-replacement-bytes";
+        fs::write(&tmp_copy2, updated_bytes).unwrap();
+        let (final_path, final_len) = guard2.commit(true).unwrap();
+        assert_eq!(final_path, dst);
+        assert_eq!(final_len, updated_bytes.len() as u64);
+        assert_eq!(fs::read(&dst).unwrap(), updated_bytes);
+        assert!(!tmp_copy2.exists());
     }
 
     #[test]

@@ -1,8 +1,8 @@
 # WinKit 阶段交接说明
 
-## 阶段 6（进行中：T03、T04、P04、T01 已合入，A02 录音转写独立 PR 待审核）
+## 阶段 6（进行中：T03、T04、P04、T01、A02 已合入，V02 自动字幕独立 PR 待审核）
 
-`src/registry/tools.ts` 当前已收录 **70 个**真实可用工具入口（阶段 6 新增 `T03`、`T04`、`P04`、`T01`，并将既有 `A02` 录音机补齐离线转写交接链路升级为 `待验收`，`待验收` 合计 `60` 项、`部分实现` 降至 `10` 项；另含侧栏共用能力 `C08`「PDF 快速预览」）。
+`src/registry/tools.ts` 当前已收录 **70 个**真实可用工具入口（阶段 6 新增 `T03`、`T04`、`P04`、`T01`，并将既有 `A02` 录音机与 `V02` 视频烧录字幕分别接入离线转写与自动字幕全链路升格为 `待验收`，`待验收` 合计 `61` 项、`部分实现` 降至 `9` 项；另含侧栏共用能力 `C08`「PDF 快速预览」）。
 
 - **PR #37（已合入 `main`：`626b1db`）｜`T03` 图片与扫描件文字提取 + 离线 RapidOCR 基础设施**：
   - 经同组中英混排截图与扫描件实测选定 **RapidOCR `PP-OCRv4 mobile`（`Apache-2.0`）+ 微软官方签名 `onnxruntime.dll 1.23.2`（`MIT`，Authenticode `Valid`）**，通过 `scripts/ensure-ocr-runtime.mjs` 校验拉取不入源码库，纯 Rust 动态加载 ONNX Runtime C ABI v17 运行于独立 `--ocr-worker`（Windows Job Object 2 GiB 限额、单进程与取消/退出即时回收）。
@@ -17,9 +17,13 @@
   - 经 Windows x64 CPU 4 线程同语料（中英混排、~15 dB 粉红/棕噪背景、3.5–8.0 s 长停顿及真实人声）对比实测 `whisper.cpp b5907 (ggml-small-q5_1 + Silero VAD)` 与 `SenseVoiceSmall INT8 (2024-07-17) + Silero VAD v5`，选定复用 WinKit 已随包 `onnxruntime.dll 1.23.2`（MIT）的纯 Rust **SenseVoiceSmall INT8 + Silero VAD v5** 方案（零额外安装包 DLL 增量、中文 CER `0.00%`、英文 WER `8.75%`、时间偏差 MAE `110 ms`、纯 Rust 发布版 RTF `0.013–0.016`、`0` 静音幻觉，详见 `docs/VERIFICATION.md`）。
   - **`src-tauri/src/asr_models.rs` + `asr_core.rs` + `asr_worker.rs`**：用户主动触发一次性 HTTPS 下载固定版本并校验全部字节长度与 SHA-256（`157.66 MiB` 下载 / `230.66 MiB` 解压），完整原样保存 `LICENSE-sensevoice.txt`（FunASR Model Open Source License v1.1 英文 7 节 + 中文全文与版权行，附归档原 71 字节 `LICENSE` 引用说明）与 `LICENSE-silero-vad.txt`（MIT，`Copyright (c) 2020-present Silero Team`），并同步更新 `THIRD_PARTY_NOTICES.md`；支持校验指定本地自定义模型目录。WAV 检查与执行共享 `512 MiB` 原生直读判定与按 RIFF `data` 块长度计算的精确时长（忽略尾部元数据块），原生 WAV 以 1 MiB 块流式解码重采样降低峰值内存；其余音视频容器及 `>512 MiB` WAV 复用共享 `media_core` FFmpeg/ffprobe 并以 `-af aresample=async=1:first_pts=0` 统一时间轴（整容器非零起点归零至播放零点，同时精确保留仅音轨延迟与音轨中途 PTS 空洞）；前后端共用多行 SRT 清洗规则（保留正常多行并移除段内连续空行及纯空白/全角空白行）；全部推理隔离运行于 `winkit.exe --asr-worker`（Windows Job Object 2 GiB 限额、单进程与取消/关窗即时回收）。
   - **`src/tools/transcribe-media/` + `src/lib/mediaSessionStore.tsx`**：提供模型与 FFmpeg 状态栏（`>512 MiB` WAV 缺 FFmpeg 时给出明确引导并禁点开始）、音视频内嵌播放联动试听（通过 `resolvePreviewSeekTime` 适配 Chromium Matroska 非零容器起点）、分段时间戳/正文在线校对、手工修改后重转二次确认与转写期间锁定编辑（失败或取消保留原稿）、会话级加载与代数防串写（离开返回 `T01`、快速切档与延迟导出不会将旧媒体 `.srt` 挂至新媒体的 `V02` 移交按钮）、字幕顺序/重叠实时校验与一键修正、绑定完整请求的覆盖确认、源音视频强制防覆盖保护、TXT/SRT 统一规则复制与导出，并预留接收 `A02` 录音（`consumePendingHandoff("T01")`）与向 `V02` 移交导出 `.srt` 的解耦接口。
-- **阶段 6 PR 5（`feat/phase-6-pr5-a02-transcribe-handoff`）｜`A02` 录音机接入 `T01` 离线语音转写**：
-  - 在 `src/tools/audio-recorder/AudioRecorderWorkspace.tsx` 录音保存完成区新增主操作「转写这段录音 / Transcribe Recording」，复用 `handoffMediaFileToTool("T01", lastSaved.outputPath)` 将精确保存的 WAV/M4A 录音送入 `T01`，完整复用 `T01` 的模型状态与缺模型引导（绝不自动下载）、免 FFmpeg 原生 WAV 直读、离线 `--asr-worker`、时间轴对齐、分段校对与 TXT/SRT 导出。
-  - 在 `src/lib/mediaSessionStore.tsx` 与 `src/tools/transcribe-media/TranscribeMediaWorkspace.tsx` 补强交接保护：`T01` 运行中收到新录音交接时存入会话态 `pendingIncomingPath`（切页返回仍保留），待当前转写完成或取消后由用户决定点击「载入待处理录音」或「放弃」而不覆盖刚完成的转写结果；`T01` 已有手工校对时先弹明确确认框，并在切换会话前先检查新文件有效性及是否包含音轨，拒绝替换、文件移动或检查失败时完整保留原有校对稿、时间戳与试听状态。同步更新 `src/registry/tools.ts` 与 `docs/PARITY_MATRIX.md` 将 `A02` 状态由 `部分实现` 升格为 `待验收`（`60` 项 `待验收`、`10` 项 `部分实现`）。
+- **PR #41（已合入 `main`：`1e3139a`）｜`A02` 录音机接入 `T01` 离线语音转写**：
+  - 在 `src/tools/audio-recorder/AudioRecorderWorkspace.tsx` 录音保存完成区新增主操作「转写这段录音 / Transcribe Recording」，复用 `handoffMediaFileToTool("T01", lastSaved.outputPath, "A02")` 将精确保存的 WAV/M4A 录音送入 `T01`，完整复用 `T01` 的模型状态与缺模型引导（绝不自动下载）、免 FFmpeg 原生 WAV 直读、离线 `--asr-worker`、时间轴对齐、分段校对与 TXT/SRT 导出。
+  - 在 `src/lib/mediaSessionStore.tsx` 与 `src/tools/transcribe-media/TranscribeMediaWorkspace.tsx` 补强交接保护：`T01` 运行中收到新录音交接时存入会话态 `pendingIncomingPath`（切页返回仍保留），待当前转写完成或取消后由用户决定点击「载入待处理录音」或「放弃」而不覆盖刚完成的转写结果；`T01` 已有手工校对时先弹明确确认框，并在切换会话前先检查新文件有效性及是否包含音轨，拒绝替换、文件移动或检查失败时完整保留原有校对稿、时间戳与试听状态。已通过 `main` CI（[Actions #45541726627](https://github.com/LuckyLivio/WinKit/actions/runs/45541726627)）含 Windows x64 NSIS 安装包构建校验（`WinKit-windows-x64-1e3139a00b62f8a79069e5954dfeb9c3f2b02db1`，`37,743,043` B）。
+- **阶段 6 PR 6（`feat/phase-6-pr6-v02-auto-subtitles`）｜`V02` 自动字幕（`V02 ↔ T01`）与防覆盖保护**：
+  - **`V02 → T01`**：在 `src/tools/video-subtitles/VideoSubtitlesWorkspace.tsx` 为已选且含音轨的视频提供主入口「从当前视频生成字幕 / Generate Subtitles from Video」，将原视频直接交接至 `T01` 复用模型配置引导（缺模型不自动下载）、离线语音转写、音视频联动试听与人工校对；对无音轨视频禁用该入口并给出明确内联提示，同时完整保留手动导入 `.srt` / `.vtt` 流程。
+  - **`T01 → V02` 原子成对回填与并发保护**：在 `src/tools/transcribe-media/TranscribeMediaWorkspace.tsx` 与 `src/lib/mediaSessionStore.tsx` 为视频导出 `.srt` 后提供「应用到原视频 / Apply to Source Video」，经 `handoffSubtitlePairToV02(videoPath, subtitlePath)` 将原视频与导出 `.srt` 作为单一成对交接发回 `V02`；`V02` 在 `loadVideoSubtitlesPair` 中同时校验视频与字幕有效后才整体替换当前视频与字幕（解决 `V02` 原已打开视频 A 时回填视频 B + `B.srt` 导致的错配，并确保预览与烧录均指向视频 B）；`V02` 正在烧录时不打断当前任务而是暂存至会话态 `pendingPairHandoff`（切页保留，完成后由用户选择「应用待处理视频与字幕」或「放弃」），并通过单调序号与代数防止较早异步交接覆盖后选媒体。
+  - **`V02` 输出防覆盖与源保护补齐**：在 `src-tauri/src/media_subtitles.rs` 将 `burn_in_subtitles_impl` 的默认 `allow_overwrite` 由 `true` 改为 `false`，显式拒绝目标与源视频或源字幕相同（`SAME_INPUT_AND_OUTPUT`），并在原子提交前再次检查 `cancel_flag`；前端 `VideoSubtitlesWorkspace.tsx` 默认以 `allowOverwrite: false` 提交，遇 `TARGET_ALREADY_EXISTS` 弹出绑定当前视频/字幕/目标路径/样式与代数的 `ConfirmDialog`（任意输入、目标路径或样式改动即自动失效），同步在 `src/registry/tools.ts` 与 `docs/PARITY_MATRIX.md` 将 `V02` 升格为 `full` / `待验收`（`61` 项 `待验收`、`9` 项 `部分实现`）。
 
 ## v0.18.0 · 阶段 5B（进阶 PDF 处理与文档水印）
 

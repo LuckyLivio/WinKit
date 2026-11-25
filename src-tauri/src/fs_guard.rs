@@ -1,7 +1,9 @@
 use crate::error::AppError;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Read, Write};
+#[cfg(not(windows))]
+use std::io::ErrorKind;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -119,6 +121,66 @@ fn normalize_lexical(p: &Path) -> PathBuf {
     out
 }
 
+/// Atomically moves/commits a temporary file `from` into `to`:
+/// - When `allow_overwrite == false`, uses a filesystem no-replace move (`MoveFileExW(..., 0)`
+///   on Windows, `hard_link` + unlink on Unix) so a target created concurrently between an
+///   existence check and commit is never overwritten and returns `TARGET_ALREADY_EXISTS`.
+/// - When `allow_overwrite == true`, performs a single atomic OS replacement
+///   (`MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` on Windows, `fs::rename` on Unix) without
+///   deleting `to` beforehand, so if replacement fails, the original target remains intact.
+pub fn commit_temp_file(
+    from: &Path,
+    to: &Path,
+    allow_overwrite: bool,
+    context: &str,
+) -> Result<(), AppError> {
+    if to.is_dir() {
+        return Err(AppError::new(
+            "IS_DIRECTORY",
+            "Output path points to a directory.",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING};
+
+        let from_w: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+        let to_w: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+        let flags = if allow_overwrite {
+            MOVEFILE_REPLACE_EXISTING
+        } else {
+            0
+        };
+        let ok = unsafe { MoveFileExW(from_w.as_ptr(), to_w.as_ptr(), flags) };
+        if ok == 0 {
+            let io_err = std::io::Error::last_os_error();
+            if !allow_overwrite && matches!(io_err.raw_os_error(), Some(80) | Some(183)) {
+                return Err(AppError::target_exists());
+            }
+            return Err(AppError::from_io(io_err, context));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        if !allow_overwrite {
+            match fs::hard_link(from, to) {
+                Ok(()) => {
+                    let _ = fs::remove_file(from);
+                    Ok(())
+                }
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                    Err(AppError::target_exists())
+                }
+                Err(err) => Err(AppError::from_io(err, context)),
+            }
+        } else {
+            fs::rename(from, to).map_err(|e| AppError::from_io(e, context))
+        }
+    }
+}
+
 /// Write bytes safely to `output_path`:
 /// - Rejects writing over `source_path` if provided.
 /// - Rejects existing destination unless `overwrite == true`.
@@ -225,33 +287,14 @@ pub fn write_output_bytes_cancellable(
     }
 
     // Final non-interruptible atomic commit step
-    if !overwrite {
-        match fs::hard_link(&tmp_path, &output_path) {
-            Ok(()) => {
-                let _ = fs::remove_file(&tmp_path);
-            }
-            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                let _ = fs::remove_file(&tmp_path);
-                return Err(AppError::target_exists());
-            }
-            Err(_) => {
-                // Fallback for filesystems without hard_link support (e.g. exFAT/FAT32)
-                if output_path.exists() {
-                    let _ = fs::remove_file(&tmp_path);
-                    return Err(AppError::target_exists());
-                }
-                if let Err(ren_err) = fs::rename(&tmp_path, &output_path) {
-                    let _ = fs::remove_file(&tmp_path);
-                    return Err(AppError::from_io(ren_err, "Unable to finalize output file"));
-                }
-            }
-        }
-    } else if let Err(err) = fs::rename(&tmp_path, &output_path) {
+    let context = if overwrite {
+        "Unable to replace existing target file"
+    } else {
+        "Unable to finalize output file"
+    };
+    if let Err(err) = commit_temp_file(&tmp_path, &output_path, overwrite, context) {
         let _ = fs::remove_file(&tmp_path);
-        return Err(AppError::from_io(
-            err,
-            "Unable to replace existing target file",
-        ));
+        return Err(err);
     }
 
     Ok(SavedFileInfo {
